@@ -42,7 +42,6 @@ func TestNoWorkerMountReachesTheTargetFileOrSSHDir(t *testing.T) {
 			if err := mountHost().checkMounts(m); err != nil {
 				t.Fatalf("%s %s: %v", fixture, cwd, err)
 			}
-			state := home + "/.ensemble/docker-state/" + m.Name + "/" + m.Client
 			flags, _ := mounts(m, goodLabels())
 			for i := 0; i+1 < len(flags); i += 2 {
 				if flags[i] != "--mount" {
@@ -51,7 +50,7 @@ func TestNoWorkerMountReachesTheTargetFileOrSSHDir(t *testing.T) {
 				spec := flags[i+1]
 				switch {
 				case strings.HasPrefix(spec, "type=volume,") && strings.Contains(spec, ",target="+cwd+","):
-				case strings.HasPrefix(spec, "type=bind,source="+state+",") || strings.HasPrefix(spec, "type=bind,source="+state+"/"):
+				case strings.HasPrefix(spec, "type=volume,source=ensemble-state-"+m.Name+","):
 				default:
 					t.Fatalf("%s %s: mount %s", fixture, cwd, spec)
 				}

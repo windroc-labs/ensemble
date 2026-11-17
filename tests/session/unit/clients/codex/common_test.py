@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import sys
 import time
@@ -33,6 +34,7 @@ from ensemble.session.clients.codex.common.types import Snapshot
 from ensemble.session.engine.types import Access, ConfigError, SessionInfo, SessionStatus
 from ensemble.utils import docker_home
 from tests.session.case import Case
+from tests.session.state_volumes import record, serve
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1280,6 +1282,7 @@ class DockerSessionFilesTest(Case):
     """A Docker session's Codex home: its session files read through the client-state interface."""
 
     def setUp(self):
+        self.enterContext(serve())
         self.codex_home = docker_home("w", "codex")
         self.cwd = os.path.realpath(scratch(self))
         self.day = os.path.join(self.codex_home, "sessions", "2026", "11", "17")
@@ -1564,6 +1567,7 @@ class McpOffTest(Base):
 
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         self.system = self.root / "etc" / "codex" / "config.toml"
         here = {SYSTEM: str(self.system)}
         lexists, opened = os.path.lexists, open
@@ -1713,7 +1717,9 @@ class McpOffTest(Base):
     def test_a_docker_home_under_a_linked_state_dir_is_still_one(self):
         state = os.path.join(os.environ["HOME"], ".ensemble")
         os.makedirs(state, exist_ok=True)
+        shutil.rmtree(os.path.join(state, "docker-state"))
         os.symlink(scratch(self), os.path.join(state, "docker-state"))
+        record("w")
         docker = Path(state, "docker-config", "codex")
         self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "g"\n')
         home = docker_home("w", "codex")

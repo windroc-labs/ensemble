@@ -6,7 +6,7 @@ import os
 from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.session.hosts.docker.daemon import SSH_DIR
+from ensemble.session.engine.daemon import SSH_DIR
 from tests.session.case import PLUGIN_BIN, REPO
 
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-broker", "fixtures")

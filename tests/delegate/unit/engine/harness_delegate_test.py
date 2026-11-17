@@ -569,10 +569,9 @@ class VerifierDockerTest(HarnessCase):
         if harnesses.spawned(argv):
             return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
-        if program == "docker" and argv[1] == "--host":  # the packaged Docker Host: no daemon
+        if program == "docker" and argv[1] == "--host":  # the packaged Docker Host: an empty daemon
             self.docker.append(argv[3])
-            down = b"Cannot connect to the Docker daemon. Is the docker daemon running?\n"
-            return support.FakeProc(argv, err=down, code=1)
+            return support.FakeProc(argv)
         self.programs.append(program)
         if program == "claude":  # the start's usage probe: a login with no usage panel
             process = mock.MagicMock()

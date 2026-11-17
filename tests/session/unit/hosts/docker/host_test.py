@@ -10,7 +10,6 @@ import os
 import re
 import runpy
 import shlex
-import shutil
 import signal
 import stat
 import sys
@@ -22,13 +21,16 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session.engine import daemon
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
     ConfigError,
     Container,
+    DockerAccess,
     EnvironmentSpec,
     Launch,
     Liveness,
@@ -41,14 +43,12 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
-from ensemble.session.hosts.docker import daemon
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
     TIMEOUT,
     BrokerError,
     client_keys,
 )
-from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.hosts.docker.host import (
     FILES_STAGE,
     KEPT_RETRY,
@@ -58,6 +58,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
+from tests.session.state_volumes import Volumes, reset
 from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, FakePopen, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
@@ -103,16 +104,22 @@ class FakeDocker:
     def __init__(self, ep, order):
         self.ep, self.order, self.ps, self.replies, self.inputs = ep, order, [], {}, []
         self.volumes, self.down = [], False
+        self.readers, self.volume_rm, self.calls = [], (0, "", ""), []
 
     def __call__(self, argv, env, *, input=None, timeout):
         assert argv[:3] == [DOCKER, "--host", self.ep], argv
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
         self.order.append(argv[3:])
         self.inputs.append(input)
+        self.calls.append((argv[3:], input))
         if self.down:
             return done(
                 1, "", f"Cannot connect to the Docker daemon at {self.ep}. Is it running?\n"
             )
+        if argv[3:5] == ["ps", "--all"] and "label=ensemble.state-reader=w" in argv:
+            return done(0, "".join(f"{reader}\n" for reader in self.readers))
+        if argv[3:5] == ["volume", "rm"]:
+            return done(*self.volume_rm)
         if argv[3] in ("ps", "volume"):
             rows = self.ps if argv[3] == "ps" else self.volumes
             return done(0, "".join(f"{line}\n" for line in rows))
@@ -469,6 +476,8 @@ class StartBase(Base):
         popen = mock.patch("subprocess.Popen", side_effect=self.guard_popen)
         self.popen_mock = popen.start()
         self.addCleanup(popen.stop)
+        self.state_volumes = Volumes()
+        self.addCleanup(reset)
         self.launch = Launch(
             ("agent", "--flag"),
             cwd=self.cwd,
@@ -476,6 +485,8 @@ class StartBase(Base):
         )
 
     def guard_popen(self, argv, **kw):
+        if argv[3:4] in (["volume"], ["image"], ["run"]):
+            return self.state_volumes(argv, **kw)
         if argv[3:4] == ["attach"]:
             self.order.append("guard")
             proc = GuardAttach(argv)
@@ -540,7 +551,20 @@ class StartBase(Base):
             self.start(resume="1")
         self.assertNotIn("version", self.order)
         self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
-        self.popen_mock.assert_not_called()
+        self.assertEqual(self.spawned(), [])
+
+    def spawned(self):
+        """Processes started other than the state reader's docker calls."""
+        return [
+            call.args[0]
+            for call in self.popen_mock.call_args_list
+            if call.args[0][3:4] not in (["volume"], ["image"], ["run"])
+        ]
+
+    def staged(self):
+        """The files the last start staged with FILES_STAGE, by container path."""
+        found = [json.loads(stdin) for call, stdin in self.docker.calls if FILES_STAGE in call]
+        return found[-1] if found else {}
 
 
 class StartTest(StartBase):
@@ -572,13 +596,13 @@ class StartTest(StartBase):
         self.broker.started = replace(self.broker.started, deadline=expiry)
         files = json.dumps({"/run/ensemble/agent-store/" + "a" * 64 + ".json": "{}"})
         self.start(runtime_files=files, home_persistent='["sessions"]')
-        self.assertTrue(os.path.isdir(os.path.join(self.home_dir, "sessions")))
         self.assertIn(files, self.docker.inputs)
         with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
             self.assertEqual(json.load(f), expiry)
         with open(os.path.join(self.state, f"{GEN}.plan.json")) as f:
             self.assertEqual(
-                json.load(f)["mounts"], [{"path": self.home_dir + "/sessions", "rw": True}]
+                json.load(f)["mounts"],
+                [{"path": self.home_dir + "/sessions", "rw": True, "volume": "ensemble-state-w"}],
             )
 
     def test_staged_files_are_written_in_the_container_before_the_guard(self):
@@ -622,7 +646,7 @@ class StartTest(StartBase):
                 ),
                 self.assertRaisesRegex(SessionError, want) as raised,
             ):
-                self.host._stage_staged_files(CONTAINER, metadata)
+                self.host._stage_staged_files(CONTAINER, metadata, {})
             self.assertNotIn("private", str(raised.exception))
 
     def test_a_failed_stage_rolls_the_start_back(self):
@@ -651,14 +675,11 @@ class StartTest(StartBase):
         self.assertEqual(self.broker.plugins, (UPDRAFT, BETA))
 
     def test_start_order(self):
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "old"), "w"):
-            pass
         process = self.start()
         manifest = os.path.join(self.state, f"{GEN}.json")
         ps = ["ps", "-a", "--filter", "label=ensemble.session", "--format"]
         self.assertEqual(
-            [step if isinstance(step, str | tuple) else step[:5] for step in self.order][:8],
+            [step if isinstance(step, str | tuple) else step[:5] for step in self.order][:10],
             [
                 ps,
                 ps,
@@ -666,12 +687,13 @@ class StartTest(StartBase):
                 "version",
                 ("build", REPO),
                 ["volume", "ls", "--filter", "label=ensemble.kind", "--format"],
+                ["ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=w"],
+                ["volume", "rm", "ensemble-state-w"],
                 ("start", manifest, client_keys(REPO)),
                 "guard",
             ],
         )
-        self.assertEqual(os.listdir(self.home_dir), [])
-        self.assertEqual(stat.S_IMODE(os.stat(self.home_dir).st_mode), 0o700)
+        self.assertFalse(os.path.exists(self.home_dir))
         with open(manifest) as f:
             self.assertEqual(
                 json.load(f),
@@ -703,11 +725,12 @@ class StartTest(StartBase):
         )
         self.assertIsInstance(process, worker_module.DockerWorker)
 
-    def test_a_fresh_home_gets_the_clients_files(self):
+    def test_a_fresh_home_gets_the_clients_files_through_the_container(self):
         self.start(home_files=json.dumps({"settings.json": '{"model": "opus"}'}))
-        self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
-        with open(os.path.join(self.home_dir, "settings.json")) as f:
-            self.assertEqual(f.read(), '{"model": "opus"}')
+        self.assertEqual(
+            self.staged(), {os.path.join(self.home_dir, "settings.json"): '{"model": "opus"}'}
+        )
+        self.assertFalse(os.path.exists(self.home_dir))
 
     CODEX = {
         "client": "codex",
@@ -717,40 +740,55 @@ class StartTest(StartBase):
         "home_persistent": '["sessions"]',
     }
 
-    def used(self, home, *kept):
-        """A home a closed session of the name left: an old file and tree in it and each `kept`
-        dir; a check that each of these dirs is still the same one (an open fd pins its inode).
-        """
-        dirs = [home, *(os.path.join(home, d) for d in kept)]
-        fds = []
-        for path in dirs:
-            os.makedirs(os.path.join(path, "old", "deep"), exist_ok=True)
-            with open(os.path.join(path, "old.jsonl"), "w") as f:
-                f.write("{}\n")
-            fds.append(os.open(path, os.O_RDONLY | os.O_DIRECTORY))
-            self.addCleanup(os.close, fds[-1])
-        return lambda: [
-            os.path.samestat(os.fstat(fd), os.lstat(p)) for fd, p in zip(fds, dirs, strict=True)
-        ]
+    def test_a_new_start_drops_its_readers_and_state_volume_before_the_broker(self):
+        self.docker.readers = ["r1", "r2"]
+        self.start()
+        steps = [o for o in self.order if isinstance(o, list) or o[0] == "start"]
+        listed = ["ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=w"]
+        removed, dropped = ["rm", "--force", "r1", "r2"], ["volume", "rm", "ensemble-state-w"]
+        start = next(n for n, o in enumerate(steps) if isinstance(o, tuple))
+        self.assertLess(steps.index(listed), steps.index(removed))
+        self.assertLess(steps.index(removed), steps.index(dropped))
+        self.assertLess(steps.index(dropped), start)
 
-    def test_a_reused_codex_name_starts_with_its_bind_source_emptied_in_place(self):
-        """Docker Desktop can report a bind source recreated at a path it saw before as missing."""
-        home = os.path.join(self.state, "codex")
-        sessions = os.path.join(home, "sessions")
-        for run in range(3):
-            with self.subTest(run=run):
-                same = self.used(home, "sessions")
-                self.order.clear()
-                self.start(**self.CODEX, home_files=json.dumps({"sessions/x": "x"}))
-                self.assertEqual(same(), [True, True])
-                self.assertEqual(sorted(os.listdir(home)), ["sessions"])
-                self.assertEqual(os.listdir(sessions), ["x"])
-                os.unlink(os.path.join(sessions, "x"))
-                self.assertEqual(stat.S_IMODE(os.lstat(sessions).st_mode), 0o700)
-                self.assertIn(
-                    ("start", os.path.join(self.state, f"{GEN}.json")),
-                    [o[:2] for o in self.order if isinstance(o, tuple)],
-                )
+    def test_an_absent_state_volume_is_dropped_already(self):
+        self.docker.volume_rm = (
+            1,
+            "",
+            "Error response from daemon: get ensemble-state-w: no such volume\n",
+        )
+        self.start()
+        self.assertIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+
+    def test_a_state_volume_it_cannot_drop_fails_the_start_before_the_broker(self):
+        self.docker.volume_rm = (1, "", "Error response from daemon: volume is in use\n")
+        with self.assertRaisesRegex(
+            SessionError,
+            "^docker session w: cannot reset its client state: Error response from daemon: volume is in use$",
+        ):
+            self.start()
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+
+    def test_no_daemon_fails_a_new_start_before_the_broker(self):
+        self.docker.down = True
+        with self.assertRaisesRegex(
+            SessionError, "^docker session w: cannot reset its client state: Cannot connect"
+        ):
+            self.start()
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+
+    def test_a_resume_keeps_the_state_volume(self):
+        self.history()
+        self.start(resume="1")
+        self.assertNotIn(["volume", "rm", "ensemble-state-w"], self.order)
+
+    def test_every_start_records_its_docker_access_before_its_checks(self):
+        for resume in ("0", "1"):
+            with self.subTest(resume=resume):
+                if resume == "1":
+                    self.history()
+                self.start(resume=resume)
+                self.assertEqual(daemon.load_access("w"), DockerAccess(DOCKER, self.ep))
 
     def kept(self, resume="0", files=None):
         return self.start(
@@ -766,29 +804,14 @@ class StartTest(StartBase):
             f.write("{}\n")
         self.launch = replace(self.launch, transcript=transcript)
 
-    def test_a_private_homes_copy_is_written_on_a_new_start_and_kept_across_resumes(self):
-        copy = os.path.join(self.state, "codex", "config", "config.toml")
-        self.kept(files={"config/config.toml": "a = 1"})
-        with open(copy) as f:
-            self.assertEqual(f.read(), "a = 1")
-        self.assertEqual(stat.S_IMODE(os.lstat(os.path.dirname(copy)).st_mode), 0o700)
-        with open(copy, "w") as f:
-            f.write('service_tier = "fast"')
-        self.resumable(os.path.join(self.state, "codex"))
-        self.kept(resume="1")
-        with open(copy) as f:
-            self.assertEqual(f.read(), 'service_tier = "fast"')
-        self.kept(files={"config/config.toml": "b = 2"})
-        with open(copy) as f:
-            self.assertEqual(f.read(), "b = 2")
-
-    def test_a_resume_makes_a_missing_kept_dir_and_writes_nothing_in_it(self):
+    def test_a_private_homes_copy_is_staged_on_a_new_start_and_never_on_a_resume(self):
         home = os.path.join(self.state, "codex")
+        self.kept(files={"config/config.toml": "a = 1"})
+        self.assertEqual(self.staged(), {os.path.join(home, "config", "config.toml"): "a = 1"})
         self.resumable(home)
-        self.kept(resume="1")
-        config = os.path.join(home, "config")
-        self.assertEqual(os.listdir(config), [])
-        self.assertEqual(stat.S_IMODE(os.lstat(config).st_mode), 0o700)
+        self.docker.calls.clear()
+        self.kept(resume="1", files={"config/config.toml": "b = 2"})
+        self.assertEqual(self.staged(), {})
 
     def test_a_private_home_file_outside_its_kept_dirs_is_refused(self):
         for key in ("config.toml", "other/config.toml"):
@@ -800,58 +823,6 @@ class StartTest(StartBase):
                 ),
             ):
                 self.kept(files={key: "x"})
-
-    def test_a_reused_name_keeps_a_whole_bound_home_and_empties_it(self):
-        same = self.used(self.home_dir)
-        self.start(home_files=json.dumps({"settings.json": "{}"}))
-        self.assertEqual(same(), [True])
-        self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
-
-    def test_a_fresh_start_replaces_links_and_files_in_the_home_never_following_them(self):
-        home = os.path.join(self.state, "codex")
-        sessions = os.path.join(home, "sessions")
-        outside = os.path.join(self.home, "outside")
-        os.makedirs(outside)
-        with open(os.path.join(outside, "keep"), "w") as f:
-            f.write("x")
-        for case in ("home link", "sessions link", "sessions file", "links in sessions"):
-            with self.subTest(case=case):
-                if case == "home link":
-                    os.makedirs(self.state, exist_ok=True)
-                    os.symlink(outside, home)
-                else:
-                    os.makedirs(home, exist_ok=True)
-                    if case == "sessions link":
-                        os.symlink(outside, sessions)
-                    elif case == "sessions file":
-                        open(sessions, "w").close()
-                    else:
-                        os.makedirs(sessions)
-                        os.symlink(outside, os.path.join(sessions, "dir"))
-                        os.symlink(os.path.join(outside, "keep"), os.path.join(sessions, "file"))
-                self.start(**self.CODEX)
-                self.assertFalse(os.path.islink(home) or os.path.islink(sessions))
-                self.assertEqual(os.listdir(home), ["sessions"])
-                self.assertEqual(os.listdir(sessions), [])
-                self.assertEqual(os.listdir(outside), ["keep"])
-                shutil.rmtree(home)
-
-    def test_a_home_it_cannot_empty_fails_the_start_before_the_broker(self):
-        for target in ("shutil.rmtree", "os.unlink"):
-            with self.subTest(target=target):
-                self.used(self.home_dir)
-                self.order.clear()
-                with (
-                    mock.patch(target, side_effect=PermissionError(13, "Permission denied")),
-                    self.assertRaisesRegex(
-                        SessionError,
-                        f"^docker session w: cannot reset {re.escape(self.home_dir)}: Permission denied$",
-                    ),
-                ):
-                    self.start()
-                self.assertFalse(
-                    [o for o in self.order if isinstance(o, tuple) and o[0] == "start"]
-                )
 
     def test_the_manifest_lists_the_clients_providers(self):
         self.start(home_providers='["lab", "strata"]')
@@ -1002,6 +973,26 @@ class StartTest(StartBase):
                 )
                 if keep:
                     self.assertEqual(os.listdir(self.home_dir), ["keep"])
+
+    def test_a_resume_check_docker_cannot_answer_names_its_reason(self):
+        self.history()
+        self.state_volumes.inspect_error = "error during connect: ssh: connect to host pc: refused"
+        self.refused_untouched(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}: "
+            "docker volume inspect: error during connect: ssh: connect to host pc: refused$",
+        )
+
+    def test_a_transcript_in_another_sessions_home_is_no_history(self):
+        other = os.path.join(os.path.dirname(self.state), "v", "agent", "s1.jsonl")
+        os.makedirs(os.path.dirname(other))
+        with open(other, "w") as f:
+            f.write("{}\n")
+        self.launch = replace(self.launch, transcript=other)
+        self.refused_untouched(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}$",
+        )
 
     def test_resume_through_a_link_fails_before_the_broker(self):
         secret = os.path.join(self.account, "secret.jsonl")
@@ -1168,7 +1159,9 @@ class StartTest(StartBase):
                         "image": IMAGE,
                         "image_digest": DIGEST,
                         "workspace": {"volume": "ensemble-ws-w", "path": self.cwd},
-                        "mounts": [{"path": self.home_dir, "rw": True}],
+                        "mounts": [
+                            {"path": self.home_dir, "rw": True, "volume": "ensemble-state-w"}
+                        ],
                         "credential": "agent-token",
                     },
                 )
@@ -1178,7 +1171,7 @@ class StartTest(StartBase):
                     [
                         f"{head} image {IMAGE} {DIGEST}",
                         f"{head} workspace ensemble-ws-w at {self.cwd} rw",
-                        f"{head} mounts {self.home_dir} rw",
+                        f"{head} mounts {self.home_dir} rw (ensemble-state-w)",
                         f"{head} credential agent-token",
                     ],
                 )

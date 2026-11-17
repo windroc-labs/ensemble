@@ -121,7 +121,7 @@ func TestPrefetchSkippedForExistingWorkspace(t *testing.T) {
 
 // A volume a racing start created carries that start's prefetch-start label: not this start's to prefetch or remove.
 func TestPrefetchRacingCreate(t *testing.T) {
-	w := &world{labels: goodLabels(), otherNonce: true}
+	w := &world{labels: goodLabels(), otherNonce: true, state: "matching"}
 	h, d, tokens := prefetchHost(t, w)
 	h.GitHub.(*fakeTokens).prefetch = errors.New("must not run")
 	if _, err := h.Start(context.Background(), prefetchManifest(t, h, nil)); err != nil {

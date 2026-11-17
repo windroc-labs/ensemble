@@ -42,6 +42,7 @@ from ensemble.utils import LOCAL_ENV_VARS, docker_home
 from tests.session.case import PACKAGE_ROOTS, ROOTS, SRC
 from tests.session.codex_tui import PlanCase
 from tests.session.fakes.terminal import MemoryHost
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1255,6 +1256,7 @@ class DockerHomeObserveTest(Base):
 
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         self.codex_home = Path(docker_home("w", "codex"))
         self.codex_home.mkdir(parents=True)
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
@@ -1271,6 +1273,8 @@ class DockerHomeObserveTest(Base):
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         path = self.rollout()
         _append(path, said("user", "earlier"), said("assistant", "old"))
+        # launch() asserts no process starts; the state reader is this Mac process's, started once
+        self.assertEqual(common.session_size(str(path)), path.stat().st_size)
         run, _, _ = self.launch(resume=True)
         self.assertEqual((run.start, run.offset), (path.stat().st_size,) * 2)
         self.assertEqual(run.observe(), [])

@@ -471,12 +471,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -485,39 +484,6 @@
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
       "claude_dir": "/tmp/claude",
-      "claude_account": "work",
-      "hook_path": "/usr/local/bin/ensemble-session",
-      "labels": {
-        "team": "crew"
-      }
-    }
-  },
-  {
-    "name": "runtime-claude-dir-symlink",
-    "valid": true,
-    "expected": {
-      "stage": "runtime",
-      "exit_code": 4,
-      "error_code": "mount_rejected"
-    },
-    "context": {
-      "home": "/Users/example",
-      "cwd_exists": true,
-      "volume": "absent",
-      "claude_dir_has_symlink": true,
-      "login": "present",
-      "image": "broker_built",
-      "docker": "reachable"
-    },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
-    "data": {
-      "client": "claude",
-      "name": "worker_1",
-      "generation": "0123456789abcdef0123456789abcdef",
-      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "cwd": "/Users/example/src/project",
-      "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -537,12 +503,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -570,12 +535,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -603,12 +567,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "missing",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -636,12 +599,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "denied",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -669,12 +631,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "untrusted",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -702,12 +663,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "missing_version_label",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -735,12 +695,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "unreachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -768,7 +727,6 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable",
@@ -802,7 +760,6 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable",
@@ -836,7 +793,6 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable",
@@ -870,46 +826,12 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable",
       "egress": "not_internal"
     },
     "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container.",
-    "data": {
-      "client": "claude",
-      "name": "worker_1",
-      "generation": "0123456789abcdef0123456789abcdef",
-      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "cwd": "/Users/example/src/project",
-      "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
-      "claude_account": "work",
-      "hook_path": "/usr/local/bin/ensemble-session",
-      "labels": {
-        "team": "crew"
-      }
-    }
-  },
-  {
-    "name": "runtime-docker-sharing-denied",
-    "valid": true,
-    "expected": {
-      "stage": "runtime",
-      "exit_code": 9,
-      "error_code": "start_failed"
-    },
-    "context": {
-      "home": "/Users/example",
-      "cwd_exists": true,
-      "volume": "absent",
-      "claude_dir_has_symlink": false,
-      "login": "present",
-      "image": "broker_built",
-      "docker": "sharing_denied"
-    },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -982,12 +904,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1015,12 +936,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1048,12 +968,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1081,12 +1000,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1114,12 +1032,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1147,12 +1064,11 @@
       "home": "/Users/example",
       "cwd_exists": false,
       "volume": "absent",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1180,12 +1096,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "mismatched",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",
@@ -1213,12 +1128,11 @@
       "home": "/Users/example",
       "cwd_exists": true,
       "volume": "in_use",
-      "claude_dir_has_symlink": false,
       "login": "present",
       "image": "broker_built",
       "docker": "reachable"
     },
-    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation.",
     "data": {
       "client": "claude",
       "name": "worker_1",

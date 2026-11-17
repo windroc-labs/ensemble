@@ -9,7 +9,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from ensemble.session.hosts.docker.daemon import TARGET
+from ensemble.session.engine.daemon import TARGET
 from tests.case import REPO, Case
 
 SCRIPT = os.path.join(REPO, "scripts", "install-target-egress.sh")

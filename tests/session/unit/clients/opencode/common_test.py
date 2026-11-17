@@ -35,6 +35,7 @@ from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.modes.base import BaseMode
 from ensemble.utils import docker_home
 from tests.session.case import Case
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.opencode.support import (
     DOCKER_CONTEXT,
     SES,
@@ -331,6 +332,7 @@ class DockerDatabaseTest(Case):
     """A Docker session's opencode.db is read from a snapshot, never opened where it lies."""
 
     def setUp(self):
+        self.enterContext(serve())
         self.cwd = os.path.realpath(self.home)
         self.state_db = os.path.join(docker_home("w", "opencode"), "opencode", "opencode.db")
         self.client = OpenCodeClient(packaged_table())

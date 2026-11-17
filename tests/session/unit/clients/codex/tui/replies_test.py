@@ -16,6 +16,7 @@ from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.types import HookCall
 from ensemble.utils import STALE_AGE, docker_home, file_lock, read_reply
 from tests.session.case import SPAWNS
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.codex.support import NATIVE, Base, said
 from tests.utils.clock import FakeClock
 
@@ -373,6 +374,10 @@ class ScanTest(RepliesBase):
 
 class DockerRolloutTest(RepliesBase):
     """Steer replies from a Docker session's Codex home, read through client_state."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(serve())
 
     def prepare(self):
         self.codex_home = Path(docker_home("w", "codex"))

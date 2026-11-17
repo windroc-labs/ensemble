@@ -63,6 +63,7 @@ __all__ = [
     "SessionRow",
     "SessionStatus",
     "Spec",
+    "DockerAccess",
     "StateEntry",
     "StateFile",
     "StateKind",
@@ -179,6 +180,13 @@ class HookCallback:
 
 def _no_files() -> Mapping[str, str]:
     return {}
+
+
+class DockerAccess(NamedTuple):
+    """A session's docker CLI and daemon."""
+
+    docker: str
+    host: str
 
 
 class StateFile(NamedTuple):

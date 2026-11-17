@@ -24,7 +24,6 @@ const (
 	// Guard is the container's main process; the harness hands it its client over docker attach.
 	Guard   = "/opt/ensemble/src/ensemble/session/harness/guard.py"
 	checker = "/opt/ensemble/lib/workspace-check"
-	sharing = "Docker Desktop file sharing must include ~/.ensemble/docker-state (Settings > Resources > File sharing)."
 	cache   = ".ensemble-cache"
 )
 
@@ -149,15 +148,29 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
-	lap("checks")
+	// A start that lost the container name to another leaves its volumes to that one.
 	if created && m.Prefetch != nil {
-		// A start that lost the container name to another leaves the workspace to that one.
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
 				h.removeVolume(ctx, m.Workspace, e)
 			}
 		}()
+	}
+	stateCreated, err := h.ensureStateVolume(ctx, m, info)
+	if err != nil {
+		return StartResult{}, err
+	}
+	if stateCreated {
+		defer func() {
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, stateVolume(m.Name), e)
+			}
+		}()
+	}
+	lap("checks")
+	if created && m.Prefetch != nil {
 		if err := h.prefetch(ctx, c, m, info, px); err != nil {
 			return StartResult{}, err
 		}
@@ -202,9 +215,9 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	return result, nil
 }
 
-// codexKept are the dirs of a Codex home's tmpfs that are bind-mounted from its state dir, so they outlive the
-// container: its history and its own config copy, which CODEX_HOME/config.toml links to. The session's Codex
-// ClientHome.persistent names the same dirs.
+// codexKept are the dirs of a Codex home's tmpfs mounted from its state volume, so they outlive the container: its
+// history and its own config copy, which CODEX_HOME/config.toml links to. The session's Codex ClientHome.persistent
+// names the same dirs.
 var codexKept = []string{"sessions", "config"}
 
 // mounts are create's --mount and --tmpfs flags and, for the audit, what each one mounts.
@@ -217,8 +230,9 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	tmpfs := func(target, options string) {
 		add("--tmpfs", target+":"+options, audit.Mount{Type: "tmpfs", Target: target, Mode: "rw"})
 	}
-	bind := func(path string) {
-		add("--mount", bindMount(path, path), audit.Mount{Type: "bind", Source: path, Target: path, Mode: "rw"})
+	state := stateVolume(m.Name)
+	kept := func(subpath, target string) {
+		add("--mount", stateMount(state, subpath, target), audit.Mount{Type: "volume", Source: state, Target: target, Mode: "rw"})
 	}
 	spec, mount := workspaceMount(m.Workspace, m.CWD, false)
 	add("--mount", spec, mount)
@@ -228,11 +242,11 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 		// and no setting disables or caps it.
 		tmpfs(m.CodexDir, "rw,noexec,nosuid,nodev,size=1073741824"+owner)
 		tmpfs(docker.RunDir, "rw,noexec,nosuid,nodev,size=1048576"+owner)
-		for _, kept := range codexKept {
-			bind(filepath.Join(m.CodexDir, kept))
+		for _, dir := range codexKept {
+			kept(m.Client+"/"+dir, filepath.Join(m.CodexDir, dir))
 		}
 	} else {
-		bind(m.StateDir())
+		kept(m.Client, m.StateDir())
 	}
 	size := 65536
 	if n := len(m.Secrets); n > 0 {
@@ -322,11 +336,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		if docker.Conflict(err) {
 			return StartResult{}, held, errTaken
 		}
-		e := diagnosed(err, protocol.StartFailed, "Creating the container failed.")
-		if text := err.Error(); strings.Contains(text, "mounts denied") || strings.Contains(text, "not shared from the host") {
-			e.Message = sharing
-		}
-		return StartResult{}, held, e
+		return StartResult{}, held, diagnosed(err, protocol.StartFailed, "Creating the container failed.")
 	}
 	lap("create")
 	if m.Lock != "" {
