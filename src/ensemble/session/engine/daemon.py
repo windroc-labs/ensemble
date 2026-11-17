@@ -37,10 +37,6 @@ LOCAL_SECRETS_MAX = 16
 
 
 class Target(NamedTuple):
-    """TARGET_FILE: the target's endpoint, and the env secret items whose workers stay on the
-    local Docker Desktop.
-    """
-
     host: str
     local_secrets: tuple[str, ...]
 
@@ -104,12 +100,11 @@ def describe(host: str) -> str:
 
 
 def endpoint() -> str:
-    """TARGET_FILE's ssh:// host, else the local Docker Desktop."""
     return target().host
 
 
 def target() -> Target:
-    """TARGET_FILE, by the broker's rule; no file: the local Docker Desktop, no local secrets."""
+    """TARGET_FILE, by the broker's rule; no file: local, no local secrets."""
     path = os.path.join(account_home(), TARGET_FILE)
     try:
         with open(path, "rb") as f:
@@ -141,22 +136,19 @@ def target() -> Target:
 
 
 def daemons() -> tuple[str, ...]:
-    """The target, then the local Docker Desktop when the target is remote."""
     host = endpoint()
     local = local_endpoint()
     return (host,) if host == local else (host, local)
 
 
 def placement(items: Iterable[str]) -> str:
-    """The daemon a worker given env secret `items` runs on: the local Docker Desktop for any
-    local secret, else the target.
-    """
+    """The local Docker Desktop for a worker given any local secret, else the target."""
     found = target()
     return local_endpoint() if set(items) & set(found.local_secrets) else found.host
 
 
 def daemon_flag(host: str) -> tuple[str, ...]:
-    """The broker's close and workspace-rm arguments naming `host`: none for the target."""
+    """close and workspace-rm's arguments naming `host`."""
     current = daemons()
     if host == current[0]:
         return ()
@@ -168,9 +160,7 @@ def daemon_flag(host: str) -> tuple[str, ...]:
 
 
 def env_items(credentials: Mapping[str, str]) -> tuple[str, ...]:
-    """The env secret items of a worker's credentials texts, merged as the broker does: the
-    caller's `credentials` env replaces `environment_credentials`'. Unreadable text adds none.
-    """
+    """Env secret items, merged as the broker does: `credentials`' env wins."""
     items: tuple[str, ...] = ()
     for key in ("environment_credentials", "credentials"):
         try:
@@ -228,7 +218,7 @@ def container_name(name: str, generation: str) -> str:
 
 
 def docker_call(docker: str, *args: str, host: str) -> tuple[list[str], dict[str, str]]:
-    """argv and env for `docker <args>` against daemon `host`."""
+    """argv and env for `docker <args>` against `host`."""
     env = {k: v for k, v in os.environ.items() if k not in CLEARED}
     if host.startswith("ssh://"):
         env["PATH"] = os.pathsep.join((ssh_dir(host), env.get("PATH", os.defpath)))
