@@ -64,7 +64,7 @@ type networkInfo struct {
 // egressHint ends every egress refusal: how to bring up the proxy on the Docker target this start uses. A remote
 // target's proxy is installed from this Mac, as nothing on the target can fetch its image.
 func egressHint(d Daemon) string {
-	if docker.RemoteEndpoint(d.Endpoint) {
+	if d.Remote {
 		return " Install it on the Docker target " + d.Endpoint +
 			" by running bash <ensemble plugin directory>/scripts/install-target-egress.sh on this Mac, wait until it is healthy, then retry."
 	}
