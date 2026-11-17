@@ -1,3 +1,4 @@
+import errno
 import os
 import re
 
@@ -5,11 +6,13 @@ from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.common import (
     check_selection,
     docker_config,
+    located,
     scan,
     select,
     split_flags,
 )
-from ensemble.session.engine.types import ConfigError
+from ensemble.session.engine.types import ConfigError, StateFile
+from ensemble.utils import docker_home
 from tests.session.case import SID, Case
 from tests.utils.sandbox import scratch
 
@@ -145,3 +148,21 @@ class DockerConfigTest(Case):
         os.symlink(os.path.join(os.path.dirname(self.path), "gone"), self.path)
         with self.assertRaisesRegex(ConfigError, f"^Docker config {re.escape(self.path)}: want"):
             docker_config("x", "c.json", self.default)
+
+
+class LocatedTest(Case):
+    def test_a_path_below_the_clients_docker_home_is_its_state_file(self):
+        path = os.path.join(docker_home("w", "claude"), "projects", "p", "t.jsonl")
+        self.assertEqual(located(path, "claude"), StateFile("w", "claude", "projects/p/t.jsonl"))
+
+    def test_a_path_outside_the_docker_state_is_local(self):
+        self.assertIsNone(located(os.path.join(self.home, ".claude", "t.jsonl"), "claude"))
+
+    def test_another_clients_home_or_no_home_is_refused(self):
+        for path in (
+            os.path.join(docker_home("w", "codex"), "sessions", "r.jsonl"),
+            os.path.join(docker_home("w", os.curdir), "manifest.json"),
+        ):
+            with self.subTest(path=path), self.assertRaises(OSError) as caught:
+                located(path, "claude")
+            self.assertEqual(caught.exception.errno, errno.EXDEV)

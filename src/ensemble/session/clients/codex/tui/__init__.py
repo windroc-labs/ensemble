@@ -27,8 +27,10 @@ from ensemble.session.clients.codex.common import (
     limit_message,
     mcp_off,
     native_id,
+    read_session,
     refuse_mode,
     reset_at,
+    session_size,
     unattended_flags,
 )
 from ensemble.session.clients.codex.common.types import Snapshot
@@ -52,7 +54,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.session.modes.client_adapters.tui import Tui
-from ensemble.utils import json_records, module_roots, read_beneath, source_path
+from ensemble.utils import json_records, module_roots, source_path
 
 PASSED = ("-c", "--enable", "--disable")
 
@@ -193,7 +195,8 @@ class CodexTui(Tui):
             raise ConfigError("codex not found on PATH")
         exe = os.path.abspath(exe)
         self.transcript = common.transcript(self.state) if resume else ""
-        self.start = self.offset = os.path.getsize(self.transcript) if self.transcript else 0
+        size = session_size(self.transcript) if self.transcript else 0
+        self.start = self.offset = os.path.getsize(self.transcript) if size is None else size
         plan = LaunchPlan(
             exe,
             self.common.selector(self.native, resume=resume),
@@ -275,7 +278,7 @@ class CodexTui(Tui):
                 self.transcript = self.common.transcript(replace(self.state, native_id=self.native))
             except (ConfigError, OSError):
                 return []
-        lines = (read_beneath("/", self.transcript, offset=self.offset) or b"").split(b"\n")[:-1]
+        lines = (read_session(self.transcript, offset=self.offset) or b"").split(b"\n")[:-1]
         self.offset += sum(len(line) + 1 for line in lines)  # a line still being written waits
         return [event for record in json_records(lines) for event in self._record(record)]
 

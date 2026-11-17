@@ -16,7 +16,8 @@ from functools import partial
 from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
-from ensemble.session.clients.claude.common import HOME
+from ensemble.session.clients.claude import common as claude_common
+from ensemble.session.clients.claude.common import HOME, WALK_DEPTH
 from ensemble.session.clients.claude.usage import NO_PANEL
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import (
@@ -1095,6 +1096,115 @@ class ResumeTest(Base):
         self.assertEqual(len(execute), 1)
 
 
+class DockerStateReadTest(Base):
+    """Reads of a Docker session's Claude home go through the client-state interface."""
+
+    def setUp(self):
+        super().setUp()
+        self.home_dir = docker_home("w", "claude")
+        self.path = os.path.join(self.home_dir, "projects", "p", f"{SID}.jsonl")
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "wb") as f:
+            f.write(b"0123456789")
+
+    def test_a_transcript_there_is_read_and_sized(self):
+        self.assertEqual(claude_common.read(self.path), b"0123456789")
+        self.assertEqual(claude_common.read(self.path, offset=7), b"789")
+        self.assertEqual(claude_common.size(self.path), 10)
+
+    def test_another_clients_home_or_the_state_dir_reads_nothing(self):
+        for path in (
+            os.path.join(docker_home("w", "codex"), "t.jsonl"),
+            os.path.join(docker_home("w", os.curdir), "x.json"),
+        ):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(b"host")
+            with self.subTest(path=path):
+                self.assertIsNone(claude_common.read(path))
+                self.assertEqual(claude_common.size(path), 0)
+
+    def test_a_linked_transcript_is_neither_read_nor_sized(self):
+        outside = os.path.join(self.tmp, "outside.jsonl")
+        with open(outside, "wb") as f:
+            f.write(b"secret")
+        link = os.path.join(os.path.dirname(self.path), "link.jsonl")
+        os.symlink(outside, link)
+        self.assertIsNone(claude_common.read(link))
+        self.assertEqual(claude_common.size(link), 0)
+
+
+class DockerStateStatusTest(Base):
+    """session_status over a Docker session's Claude home."""
+
+    def setUp(self):
+        super().setUp()
+        self.common = ClaudeCommon({})
+        self.env_vars = {"CLAUDE_CONFIG_DIR": docker_home("w", "claude")}
+        self.path = self.common.transcript(self.work, SID, self.env_vars)
+        self.resume = reference(self.work)
+
+    def write(self, path, mtime):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{}\n")
+        os.utime(path, (mtime, mtime))
+
+    def status(self, transcript="") -> SessionStatus:
+        return self.common.session_status(SID, self.work, transcript=transcript, env=self.env_vars)
+
+    def test_resumable_with_the_newest_subagent_file(self):
+        self.assertEqual(self.status(), SessionStatus("no", None, self.resume))
+        self.write(self.path, 1000)
+        self.assertEqual(self.status(), SessionStatus("yes", 1000.0, self.resume))
+        folder = self.path[: -len(".jsonl")]
+        self.write(os.path.join(folder, "subagents", "a.jsonl"), 3000)
+        self.write(os.path.join(folder, "subagents", "b.jsonl"), 2000)
+        self.assertEqual(self.status(), SessionStatus("yes", 3000.0, self.resume))
+
+    def test_links_under_the_session_folder_count_for_nothing(self):
+        self.write(self.path, 1000)
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, "x.jsonl"), 9000)
+        folder = self.path[: -len(".jsonl")]
+        os.makedirs(folder)
+        os.symlink(outside, os.path.join(folder, "linked"))
+        os.symlink(os.path.join(outside, "x.jsonl"), os.path.join(folder, "x.jsonl"))
+        self.assertEqual(self.status(), SessionStatus("yes", 1000.0, self.resume))
+
+    def test_a_linked_transcript_is_unknown(self):
+        outside = os.path.join(self.tmp, "outside.jsonl")
+        self.write(outside, 9000)
+        os.makedirs(os.path.dirname(self.path))
+        os.symlink(outside, self.path)
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
+
+    def test_a_linked_project_dir_is_unknown(self):
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{SID}.jsonl"), 9000)
+        os.makedirs(os.path.dirname(os.path.dirname(self.path)))
+        os.symlink(outside, os.path.dirname(self.path))
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
+
+    def test_a_recorded_transcript_counts_only_in_the_same_project_folder(self):
+        self.write(self.path, 1000)
+        sibling = os.path.join(os.path.dirname(self.path), "other.jsonl")
+        self.write(sibling, 4000)
+        elsewhere = os.path.join(os.path.dirname(os.path.dirname(self.path)), "q", "o.jsonl")
+        self.write(elsewhere, 5000)
+        self.assertEqual(self.status(sibling), SessionStatus("yes", 4000.0, self.resume))
+        self.assertEqual(self.status(elsewhere), SessionStatus("yes", 1000.0, self.resume))
+
+    def test_files_deeper_than_the_walk_depth_are_skipped(self):
+        self.write(self.path, 1000)
+        folder = self.path[: -len(".jsonl")]
+        deep = os.path.join(folder, *(["d"] * (WALK_DEPTH + 1)), "deep.jsonl")
+        self.write(deep, 9000)
+        shallow = os.path.join(folder, *(["d"] * WALK_DEPTH), "ok.jsonl")
+        self.write(shallow, 2000)
+        self.assertEqual(self.status(), SessionStatus("yes", 2000.0, self.resume))
+
+
 class SessionStatusTest(Base):
     def setUp(self):
         super().setUp()
@@ -1317,3 +1427,30 @@ class ContinuationTest(Base):
                 self.common.session_status(SID, self.work, transcript=recorded),
                 SessionStatus("yes", 1000.0, reference(self.work)),
             )
+
+
+class DockerContinuationTest(ContinuationTest):
+    """ContinuationTest's walks over a Docker session's Claude home, read through client_state."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_dir = docker_home("w", "claude")
+        self.env({"CLAUDE_CONFIG_DIR": self.config_dir})
+        self.path = self.common.transcript(self.work, SID)
+        self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
+
+    def test_only_real_project_dirs_are_searched(self):
+        self.write(self.path, self.marker())
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{NEXT}.jsonl"), {})
+        projects = os.path.join(self.config_dir, "projects")
+        os.symlink(outside, os.path.join(projects, "linked"))
+        self.write(os.path.join(projects, "file"))
+        self.assertEqual(
+            self.common.walk(self.path, SID, self.config_dir),
+            [(SID, self.path, None), (NEXT, None, "2026-10-15T12:00:00Z")],
+        )
+        self.write(self.target)
+        self.assertEqual(
+            self.common.walk(self.path, SID, self.config_dir)[-1][:2], (NEXT, self.target)
+        )

@@ -401,7 +401,7 @@ def _limit_last(path: str) -> bool:
 
 def _chain(path: str, sid: str, config_dir: str) -> list[tuple[str, str | None, str | None]]:
     original = os.path.join(os.path.dirname(path), f"{sid}.jsonl")
-    if not os.path.isfile(original):
+    if read(original, limit=0) is None:
         found = ClaudeCommon.continuation(
             {"type": "continued-in", "sessionId": sid, "continuedInSessionId": sid},
             sid,
