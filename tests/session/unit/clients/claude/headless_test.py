@@ -19,9 +19,8 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.utils import docker_home
 from tests.session.case import Case
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.claude.support import (
     CONFIG,
     INIT,
@@ -595,7 +594,7 @@ class SharedConversationTest(Base):
         self.assertEqual(client.headless()._home(), client.tui()._home())
         for env, home in (
             ({}, LocalHome()),
-            ({"CLAUDE_CONFIG_DIR": docker_home("w", "claude")}, VolumeHome("w", "claude")),
+            ({"CLAUDE_CONFIG_DIR": stored("w", "claude")}, VolumeHome("w", "claude")),
         ):
             with self.subTest(env=env):
                 headless = self.launch(env=env, home=home, resume=True).transcript

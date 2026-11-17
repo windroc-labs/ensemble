@@ -18,18 +18,18 @@ import (
 )
 
 type Manifest struct {
-	Linear                                                                                              *credential.LinearRequest
-	Name, Generation, Daemon, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
-	HasHook                                                                                             bool
-	Labels                                                                                              map[string]string
-	GitHubApp                                                                                           string // "": no github credential
-	GitHubPermissions                                                                                   map[string]string
-	OpencodeProviders                                                                                   []string
-	ClaudeAccount                                                                                       string // "" for other clients
-	Secrets                                                                                             []Secret
-	Lock, LockOwner                                                                                     string
-	Gateway                                                                                             string // the egress proxy's caller network key
-	Prefetch                                                                                            *Prefetch
+	Linear                                                                                                     *credential.LinearRequest
+	Name, Generation, Daemon, Image, CWD, Workspace, State, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
+	HasHook                                                                                                    bool
+	Labels                                                                                                     map[string]string
+	GitHubApp                                                                                                  string // "": no github credential
+	GitHubPermissions                                                                                          map[string]string
+	OpencodeProviders                                                                                          []string
+	ClaudeAccount                                                                                              string // "" for other clients
+	Secrets                                                                                                    []Secret
+	Lock, LockOwner                                                                                            string
+	Gateway                                                                                                    string // the egress proxy's caller network key
+	Prefetch                                                                                                   *Prefetch
 }
 
 // Prefetch's Ref is a branch or tag; "": the default branch.
@@ -118,7 +118,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	}
 	var m Manifest
 	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "daemon": &m.Daemon, "image": &m.Image,
-		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
+		"cwd": &m.CWD, "workspace": &m.Workspace, "state": &m.State, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
 		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
 		if key == "labels" || key == "opencode_providers" || key == "claude_account" || key == "prefetch" || key == "credentials" || key == "environment_credentials" {
@@ -132,7 +132,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 			return reject("field %q must be a string without control characters", key)
 		}
 	}
-	for _, key := range []string{"name", "generation", "daemon", "image", "cwd", "workspace", "client", "labels"} {
+	for _, key := range []string{"name", "generation", "daemon", "image", "cwd", "workspace", "state", "client", "labels"} {
 		if _, ok := fields[key]; !ok {
 			return reject("missing field %q", key)
 		}
@@ -158,8 +158,10 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("invalid daemon")
 	case !imagePattern.MatchString(m.Image):
 		return reject("image must be ensemble-worker:<64 hex>")
-	case m.Workspace != "ensemble-ws-"+m.Name:
+	case m.Workspace != volumesOf(m.Name).Workspace:
 		return reject("workspace must be ensemble-ws-<name>")
+	case m.State != stateNew && m.State != stateKeep:
+		return reject("state must be new or keep")
 	case !strings.HasPrefix(m.CWD, "/") || !strings.HasPrefix(m.StateDir(), "/") || m.HasHook && !strings.HasPrefix(m.HookPath, "/"):
 		return reject("paths must be absolute")
 	}

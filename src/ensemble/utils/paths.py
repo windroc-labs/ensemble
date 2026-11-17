@@ -1,4 +1,4 @@
-"""STATE, Docker session homes, path normalization, containment and temp roots."""
+"""STATE, path normalization, containment and temp roots."""
 
 import contextlib
 import os
@@ -11,13 +11,6 @@ from types import ModuleType
 
 STATE = "~/.ensemble"
 DOCKER_STATE = f"{STATE}/docker-state"
-
-
-def docker_home(name: str, dir: str) -> str:
-    """A Docker session's client home path: its container mount point and client_state locator;
-    the Mac stores nothing there.
-    """
-    return os.path.expanduser(f"{DOCKER_STATE}/{name}/{dir}")
 
 
 def module_roots(*packages: ModuleType) -> tuple[str, ...]:

@@ -35,9 +35,8 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.modes.base import BaseMode
-from ensemble.utils import docker_home
 from tests.session.case import Case
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.opencode.support import (
     DOCKER_CONTEXT,
     SES,
@@ -374,7 +373,7 @@ class DockerDatabaseTest(Case):
     def setUp(self):
         self.enterContext(serve())
         self.cwd = os.path.realpath(self.home)
-        self.root = docker_home("w", "opencode")
+        self.root = stored("w", "opencode")
         self.state_db = os.path.join(self.root, "opencode", "opencode.db")
         self.db = HomePath(self.root, DB)
         self.store = VolumeHome("w", "opencode")
@@ -407,7 +406,7 @@ class DockerDatabaseTest(Case):
         self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
         self.assertIsNone(native)
         self.assertTrue(spy.call_args_list)
-        state = os.path.dirname(docker_home("w", "opencode"))
+        state = os.path.dirname(stored("w", "opencode"))
         for call in spy.call_args_list:
             self.assertNotIn(state, str(call))
 
@@ -576,7 +575,7 @@ class SelectionTest(Case):
             ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
         )
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker", "isolated": True})
-        data = os.path.join(self.home, ".ensemble", "docker-state", "w", "opencode")
+        data = "/home/agent/.ensemble-state/opencode"
         self.assertEqual(
             host._client_env("w", "opencode", self.common.home(), resume=False),
             {"XDG_DATA_HOME": data},

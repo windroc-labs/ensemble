@@ -19,7 +19,8 @@ from tests.session.unit.hosts.docker.support import FakeProc
 DOCKER = "/usr/local/bin/docker"
 HOST = "unix:///var/run/docker.sock"
 LOCAL = Daemon("local", HOST, remote=False, path="/usr/bin:/bin:/usr/sbin:/sbin", id="daemon-a")
-IMAGE = "ensemble-worker:" + "a" * 64
+IMAGE = "sha256:" + "a" * 64
+GENERATION = "0123456789abcdef0123456789abcdef"
 OWNER = "1001:1002"
 
 
@@ -98,7 +99,6 @@ class Volumes:
     def __init__(self):
         self.calls, self.readers = [], []
         self.volumes: set[str] | None = None
-        self.images = IMAGE + "\n"
         self.reply: bytes | None = None
         self.hang, self.error, self.owner = False, "", OWNER
 
@@ -125,8 +125,6 @@ class Volumes:
                 return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
             labels = {"ensemble.state": session, "ensemble.state-owner": self.owner}
             return FakeProc(argv, json.dumps(labels).encode() + b"\n")
-        if args[:2] == ["image", "ls"]:
-            return FakeProc(argv, self.images.encode())
         if args[:1] == ["run"]:
             mount = args[args.index("--mount") + 1]
             session = mount.split("source=ensemble-state-", 1)[1].split(",", 1)[0]
@@ -136,13 +134,27 @@ class Volumes:
         raise AssertionError(f"unexpected docker call {argv}")
 
 
+def stored(session, client):
+    """`client`'s dir in `session`'s fake volume; also a test's client home path."""
+    return os.path.join(os.path.expanduser(DOCKER_STATE), session, client)
+
+
 def record(session, found=LOCAL):
     daemon.save_record(session, DaemonRecord(found, DOCKER))
+    started(session)
+
+
+def started(session):
+    folder = os.path.join(os.path.expanduser(DOCKER_STATE), session)
+    with open(os.path.join(folder, daemon.SESSION_RECORD), "w") as f:
+        json.dump({"generation": GENERATION}, f)
+    with open(os.path.join(folder, daemon.result_file(GENERATION)), "w") as f:
+        json.dump({"image_digest": IMAGE}, f)
 
 
 @contextlib.contextmanager
 def serve(sessions=("s1", "v", "w")):
-    """Volumes as docker; each of `sessions` gets a daemon record."""
+    """Volumes as docker; each of `sessions` gets a daemon record and a start on IMAGE."""
     volumes = Volumes()
     for session in sessions:
         record(session)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -155,10 +154,9 @@ func TestLinearCloseIncludesStartupDelivery(t *testing.T) {
 }
 
 func TestLinearStartRecordsExpiry(t *testing.T) {
-	h, _, parent, _, _, _ := tokenStartHost(t)
+	h, _, _, _, _, _ := tokenStartHost(t)
 	h.Linear = &fakeLinear{}
 	path := codexManifest(t, func(f map[string]any) {
-		f["codex_dir"] = filepath.Join(parent, "codex")
 		f["environment_credentials"] = githubSpec(t, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear"))
 	})

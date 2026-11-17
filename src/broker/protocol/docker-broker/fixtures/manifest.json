@@ -15,7 +15,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -39,7 +40,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "labels": {
         "team": "crew"
@@ -62,7 +64,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {}
@@ -84,7 +87,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -107,7 +111,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -129,7 +134,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -153,7 +159,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -177,7 +184,57 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
+      "claude_account": "work",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-state",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
+      "claude_account": "work",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-bad-state",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "state": "reset",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -200,7 +257,8 @@
       "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -222,13 +280,14 @@
       "generation": "0123456789abcdef0123456789abcdef",
       "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "workspace": "ensemble-ws-worker_1"
+      "workspace": "ensemble-ws-worker_1",
+      "state": "new"
     }
   },
   {
@@ -247,6 +306,7 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -270,7 +330,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session"
     }
@@ -291,7 +352,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -316,7 +378,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": null,
       "labels": {
@@ -340,7 +403,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -364,7 +428,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -388,7 +453,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -412,7 +478,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/\u0000x",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -436,7 +503,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -460,7 +528,8 @@
       "image": "ubuntu:latest",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -484,7 +553,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -508,7 +578,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -551,6 +622,7 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "claude_dir": "/tmp/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
@@ -584,7 +656,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/Users/example/src/project/hook",
       "labels": {
@@ -617,9 +690,10 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
-      "hook_path": "/Users/example/.ensemble/docker-state/worker_1/claude/hook",
+      "hook_path": "/home/agent/.ensemble-state/claude/hook",
       "labels": {
         "team": "crew"
       }
@@ -650,7 +724,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -683,7 +758,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -716,7 +792,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -749,7 +826,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -782,7 +860,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -816,7 +895,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -850,7 +930,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -884,7 +965,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -918,7 +1000,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -941,12 +1024,13 @@
       "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
-      }
+      },
+      "state": "new"
     }
   },
   {
@@ -965,7 +1049,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "my-volume",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -998,7 +1083,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1031,7 +1117,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/usr",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1064,7 +1151,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/opt/ensemble/lib",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1073,7 +1161,7 @@
     }
   },
   {
-    "name": "runtime-mount-home",
+    "name": "runtime-claude-dir-mac-path",
     "valid": true,
     "expected": {
       "stage": "runtime",
@@ -1095,8 +1183,9 @@
       "generation": "0123456789abcdef0123456789abcdef",
       "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "cwd": "/Users/example",
+      "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
@@ -1128,9 +1217,10 @@
       "generation": "0123456789abcdef0123456789abcdef",
       "daemon": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "cwd": "/Users/example/.ensemble/docker-state/worker_1",
+      "cwd": "/home/agent/.ensemble-state/claude",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1163,7 +1253,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/gone",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1196,7 +1287,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1229,7 +1321,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1253,7 +1346,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1278,7 +1372,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1303,7 +1398,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1328,7 +1424,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1353,7 +1450,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1378,7 +1476,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1403,7 +1502,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1428,7 +1528,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1453,7 +1554,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1478,7 +1580,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1503,11 +1606,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+      "codex_dir": "/home/agent/.ensemble-state/codex"
     }
   },
   {
@@ -1525,11 +1629,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+      "codex_dir": "/home/agent/.ensemble-state/codex"
     }
   },
   {
@@ -1548,11 +1653,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+      "codex_dir": "/home/agent/.ensemble-state/codex"
     }
   },
   {
@@ -1571,11 +1677,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex",
+      "codex_dir": "/home/agent/.ensemble-state/codex",
       "claude_dir": "/untrusted"
     }
   },
@@ -1595,6 +1702,7 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1617,11 +1725,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode"
+      "opencode_dir": "/home/agent/.ensemble-state/opencode"
     }
   },
   {
@@ -1640,6 +1749,7 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1662,11 +1772,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_dir": "/home/agent/.ensemble-state/opencode",
       "claude_dir": "/untrusted"
     }
   },
@@ -1686,11 +1797,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_dir": "/home/agent/.ensemble-state/opencode",
       "opencode_providers": [
         "strata",
         "lab.local"
@@ -1713,11 +1825,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_dir": "/home/agent/.ensemble-state/opencode",
       "opencode_providers": [
         "ollama"
       ]
@@ -1739,11 +1852,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_dir": "/home/agent/.ensemble-state/opencode",
       "opencode_providers": [
         "strata",
         "strata"
@@ -1766,11 +1880,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_dir": "/home/agent/.ensemble-state/opencode",
       "opencode_providers": [
         "../strata"
       ]
@@ -1792,7 +1907,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -1817,7 +1933,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1841,7 +1958,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1865,7 +1983,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1888,7 +2007,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1912,7 +2032,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
@@ -1936,11 +2057,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex",
+      "codex_dir": "/home/agent/.ensemble-state/codex",
       "claude_account": "work"
     }
   },
@@ -1960,11 +2082,12 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "opencode_providers": [
         "strata"
@@ -1987,13 +2110,14 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
+      "state": "new",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
         "team": "crew"
       },
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
-      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode"
+      "opencode_dir": "/home/agent/.ensemble-state/opencode"
     }
   },
   {
@@ -2012,7 +2136,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2038,7 +2163,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2064,7 +2190,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2090,7 +2217,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2116,7 +2244,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2142,7 +2271,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2168,7 +2298,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2194,7 +2325,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2220,7 +2352,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2246,7 +2379,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2271,7 +2405,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2296,7 +2431,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2320,7 +2456,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2345,7 +2482,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2370,7 +2508,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2398,7 +2537,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2425,7 +2565,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2453,7 +2594,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2481,7 +2623,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2509,7 +2652,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2537,7 +2681,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2565,7 +2710,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2593,7 +2739,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2620,7 +2767,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2648,7 +2796,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2674,7 +2823,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {
@@ -2699,7 +2849,8 @@
       "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cwd": "/Users/example/src/project",
       "workspace": "ensemble-ws-worker_1",
-      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "state": "new",
+      "claude_dir": "/home/agent/.ensemble-state/claude",
       "claude_account": "work",
       "hook_path": "/usr/local/bin/ensemble-session",
       "labels": {

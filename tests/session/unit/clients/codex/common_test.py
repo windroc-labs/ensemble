@@ -39,9 +39,8 @@ from ensemble.session.engine.types import (
     SessionInfo,
     SessionStatus,
 )
-from ensemble.utils import docker_home
 from tests.session.case import Case
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1340,7 +1339,7 @@ class DockerSessionFilesTest(Case):
     def setUp(self):
         self.enterContext(serve())
         self.store = VolumeHome("w", "codex")
-        self.codex_home = docker_home("w", "codex")
+        self.codex_home = stored("w", "codex")
         self.cwd = os.path.realpath(scratch(self))
         self.day = os.path.join(self.codex_home, "sessions", "2026", "11", "17")
         os.makedirs(self.day)
@@ -1386,7 +1385,7 @@ class DockerSessionFilesTest(Case):
         self.assertEqual(session_size(self.store, link), 0)
 
     def test_a_missing_sessions_dir_or_file(self):
-        empty = replace(self.snapshot, codex_home=docker_home("v", "codex"))
+        empty = replace(self.snapshot, codex_home=stored("v", "codex"))
         self.assertEqual(session_paths(VolumeHome("v", "codex"), empty), [])
         gone = self.at(f"rollout-gone-{CHILD}.jsonl")
         with self.assertRaises(FileNotFoundError):
@@ -1408,7 +1407,7 @@ class DockerSessionFilesTest(Case):
         self.assertEqual(read_session(self.store, self.path, offset=0, limit=1), b"{")
 
     def test_a_recorded_transcript_outside_the_codex_home_is_refused(self):
-        path = os.path.join(docker_home("w", "claude"), "sessions", f"rollout-{NATIVE}.jsonl")
+        path = os.path.join(stored("w", "claude"), "sessions", f"rollout-{NATIVE}.jsonl")
         with self.assertRaises(OSError) as caught:
             session_file(self.store, self.snapshot, NATIVE, recorded=path)
         self.assertEqual(caught.exception.errno, errno.EXDEV)
@@ -1701,7 +1700,7 @@ class McpOffTest(Base):
         )
 
     def docker_snapshot(self):
-        home = docker_home("w", "codex")
+        home = stored("w", "codex")
         spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
         snapshot = self.common.prepare(spec, LocalHome()).snapshot
         docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex", "config.toml")
@@ -1777,7 +1776,7 @@ class McpOffTest(Base):
         self.write(self.codex_home / "config.toml", '[mcp_servers.host]\ncommand = "h"\n')
         docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex")
         self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "github-mcp"\n')
-        home = docker_home("w", "codex")
+        home = stored("w", "codex")
         spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
         snapshot = self.common.prepare(spec, LocalHome()).snapshot
         self.assertEqual(snapshot.codex_home, os.path.realpath(home))

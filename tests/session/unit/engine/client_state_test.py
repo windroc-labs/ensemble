@@ -26,7 +26,7 @@ from ensemble.session.engine.types import (
     StateStat,
 )
 from tests.session.case import Case
-from tests.session.state_volumes import DOCKER, HOST, IMAGE, LOCAL, serve
+from tests.session.state_volumes import DOCKER, HOST, IMAGE, LOCAL, serve, started
 from tests.session.unit.hosts.docker.support import ssh_dir
 
 HOME_DIR = "app"
@@ -394,6 +394,16 @@ class ReaderTest(StateCase):
         with open(client_state.READER, encoding="utf-8") as f:
             self.assertEqual(run[run.index(IMAGE) + 3], f.read())
 
+    def test_a_store_with_an_image_runs_its_reader_on_that_image(self):
+        self.put("a/t", b"abc")
+        image = "sha256:" + "e" * 64
+        store = client_state.VolumeHome(STORE.session, STORE.client, image=image)
+        self.assertEqual(store.read(at("a/t")), b"abc")
+        (run,) = [c for c in self.volumes.calls if c[3] == "run"]
+        self.assertIn(image, run)
+        self.assertFalse([c for c in self.volumes.calls if c[3] == "image"])
+        self.assertNotIn("image", store.persisted())
+
     def test_two_threads_each_get_their_own_reply(self):
         self.put("a/x", b"x" * 300000)
         self.put("a/y", b"y" * 300000)
@@ -429,10 +439,35 @@ class ReaderTest(StateCase):
             self.assertIsNone(path)
         self.assertFalse([c for c in self.volumes.calls if c[3] == "run"])
 
-    def test_no_worker_image_is_refused(self):
-        self.volumes.images = "ensemble-worker:latest\n"
+    def test_the_reader_runs_the_sessions_recorded_image(self):
+        self.put("a/t", b"abc")
+        self.assertEqual(STORE.read(at("a/t")), b"abc")
+        (run,) = [c for c in self.volumes.calls if c[3] == "run"]
+        self.assertIn(IMAGE, run)
+        self.assertFalse([c for c in self.volumes.calls if c[3] == "image"])
+
+    def test_no_recorded_image_is_a_read_error(self):
         self.put("a/t")
+        os.unlink(os.path.join(self.volumes.root("s1"), daemon.SESSION_RECORD))
+        error = self.refused("read", at("a/t"))
+        self.assertEqual((error.errno, error.strerror), (errno.EIO, "no recorded worker image"))
+        self.assertFalse(self.volumes.readers)
+
+    def test_an_empty_filtered_list_is_absence(self):
+        self.volumes.volumes = set()
+        self.put("a/t")
+        self.assertIsNone(STORE.read(at("a/t")))
+        listed = [c[3:] for c in self.volumes.calls]
+        self.assertEqual(
+            listed,
+            [["volume", "ls", "--filter", "name=ensemble-state-s1", "--format", "{{.Name}}"]],
+        )
+
+    def test_a_failed_volume_list_is_a_read_error_whatever_its_stderr(self):
+        self.put("a/t")
+        self.volumes.error = "Error: no such volume: ensemble-state-s1"
         self.assertEqual(self.refused("read", at("a/t")).errno, errno.EIO)
+        self.assertFalse(self.volumes.readers)
 
     def test_any_failing_docker_call_is_refused_whatever_it_says(self):
         self.put("a/t")
@@ -494,13 +529,14 @@ class DaemonRecordTest(Case):
     def remote(self, path):
         found = Daemon("remote", "ssh://pc", remote=True, path=path, id="daemon-a")
         daemon.save_record("s1", DaemonRecord(found, "/opt/docker"))
+        started("s1")
 
     def test_calls_use_the_sessions_recorded_docker_and_daemon(self):
         self.remote(f"{ssh_dir(self.home)}{os.pathsep}/usr/bin")
         self.assertEqual(STORE.read(at("t")), b"ok")
         self.assertEqual(
             [call[3:5] for call in self.volumes.calls],
-            [["volume", "ls"], ["volume", "inspect"], ["image", "ls"], ["run", "--rm"]],
+            [["volume", "ls"], ["volume", "inspect"], ["run", "--rm"]],
         )
         for call in self.volumes.calls:
             self.assertEqual(call[:3], ["/opt/docker", "--host", "ssh://pc"])

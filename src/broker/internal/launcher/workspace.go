@@ -16,15 +16,15 @@ import (
 const checkTimeout = 120 * time.Second
 
 // WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work, or at once with force;
-// an absent volume is success. A session's workspace (ensemble-ws-<name>) takes its state volume with it, first, so a
-// failed state removal keeps the workspace that reclaim finds the session by.
+// an absent volume is success. A session's workspace takes its state volume with it, first, so a failed state removal
+// keeps the workspace that reclaim finds the session by.
 func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string, force bool) (WorkspaceResult, error) {
-	session, isSession := strings.CutPrefix(volume, "ensemble-ws-")
+	session, isSession := sessionOf(volume)
 	removeState := func() error {
 		if !isSession {
 			return nil
 		}
-		return h.removeStateVolume(ctx, d, session)
+		return h.removeStateVolume(ctx, d, session, protocol.WorkspaceFailed)
 	}
 	labels, err := h.volumeLabels(ctx, d, volume)
 	if docker.Absent(err) {

@@ -27,15 +27,17 @@ from ensemble.session.engine import client_state
 from ensemble.session.engine.daemon import (
     CLEARED,
     RUN_TIMEOUT,
-    STATE_READER_LABEL,
+    SESSION_RECORD,
     attach_env,
     capped,
+    client_home,
     container_name,
     daemon_named,
     daemon_with_id,
     describe,
     docker_call,
     load_record,
+    result_file,
     save_record,
     ssh_agent,
     state_volume,
@@ -104,7 +106,6 @@ from ensemble.utils import (
     DOCKER_STATE,
     Display,
     command_path,
-    docker_home,
     inode_lock,
     kill_group,
     module_roots,
@@ -114,7 +115,6 @@ from ensemble.utils import (
     timestamp,
 )
 
-RECORD = "host.json"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
@@ -161,7 +161,7 @@ PS_FIELDS = 4
 
 def _record(name: str) -> dict:
     try:
-        with open(os.path.join(state_dir(name), RECORD), encoding="utf-8") as f:
+        with open(os.path.join(state_dir(name), SESSION_RECORD), encoding="utf-8") as f:
             found = json.load(f)
     except (OSError, ValueError, RecursionError):
         return {}
@@ -174,7 +174,7 @@ class Kind(StrEnum):
 
 
 def _damaged_record(name: str) -> bool:
-    if not os.path.lexists(os.path.join(state_dir(name), RECORD)):
+    if not os.path.lexists(os.path.join(state_dir(name), SESSION_RECORD)):
         return False
     found = _record(name)
     recorded = found.get("generation")
@@ -213,7 +213,7 @@ def _take_owner(name: str) -> int | None:
 
 
 def _save_record(name: str, data: Mapping) -> None:
-    save(os.path.join(state_dir(name), RECORD), json.dumps(dict(data)), durable=True)
+    save(os.path.join(state_dir(name), SESSION_RECORD), json.dumps(dict(data)), durable=True)
 
 
 def _lock_free(path: str) -> bool:
@@ -234,15 +234,16 @@ def _state_file(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
 
 
-def _check_history(name: str, home: str, client: str, transcript: str) -> None:
-    """A resume's native history, read from the state volume with no container running."""
+def _check_history(name: str, home: str, client: str, transcript: str, image: str) -> None:
+    """A resume's history, read with the image it built."""
     missing = f"docker session {name}: no native history to resume in {home}"
     try:
         path = client_state.home_path(home, os.path.join(home, transcript))
     except OSError:
         raise ConfigError(missing) from None
     try:
-        present = client_state.VolumeHome(name, client).read(path, limit=0) is not None
+        store = client_state.VolumeHome(name, client, image=image)
+        present = store.read(path, limit=0) is not None
     except OSError as error:
         raise ConfigError(f"{missing}: {error.strerror or error}") from None
     if not present:
@@ -337,7 +338,7 @@ def _save_result(
         **({} if launched is None else {"launched_at": launched}),
     }
     save(
-        os.path.join(state_dir(name), f"{created.generation}.result.json"),
+        os.path.join(state_dir(name), result_file(created.generation)),
         json.dumps(result),
         durable=True,
     )
@@ -752,7 +753,7 @@ class DockerHost(Host):
             raise ConfigError(
                 f"client {client or '(unnamed)'}: not supported on the Docker Host yet"
             )
-        return {home.env: docker_home(name, home.dir)}
+        return {home.env: client_home(home.dir)}
 
     def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
         if home is None:
@@ -928,47 +929,6 @@ class DockerHost(Host):
             return self._resumed(name)
         return None
 
-    def _drop_state(self, name: str, daemon: Daemon) -> None:
-        """A new start's empty client home: its readers and state volume go."""
-        why = f"docker session {name}: cannot reset its client state"
-        listed = self._state_call(
-            why,
-            "ps",
-            "--all",
-            "--quiet",
-            "--filter",
-            f"label={STATE_READER_LABEL}={name}",
-            daemon=daemon,
-        )
-        if readers := listed.split():
-            self._state_call(why, "rm", "--force", *readers, daemon=daemon)
-        volume = state_volume(name)
-        found = self._state_call(
-            why,
-            "volume",
-            "ls",
-            "--filter",
-            f"name={volume}",
-            "--format",
-            "{{.Name}}",
-            daemon=daemon,
-        )
-        if volume in found.split():
-            self._state_call(why, "volume", "rm", volume, daemon=daemon)
-
-    def _state_call(self, why: str, *args: str, daemon: Daemon) -> str:
-        argv, env = docker_call(self.docker, *args, daemon=daemon)
-        try:
-            result = self.run(argv, env, timeout=RUN_TIMEOUT)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise SessionError(f"{why}: {error}") from None
-        if result.returncode:
-            lines = (result.stderr or "").strip().splitlines()
-            raise SessionError(
-                f"{why}: {lines[-1] if lines else f'exit status {result.returncode}'}"
-            )
-        return result.stdout
-
     def _move_workspace(self, name: str, volume: str, cwd: str, daemon: Daemon) -> None:
         """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
         anchor = next((a for v, a in self._workspaces(daemon) or () if v == volume), cwd)
@@ -1022,7 +982,7 @@ class DockerHost(Host):
                     f"docker session {name}: container {row[0]} is labelled for it but not named"
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
-        home = docker_home(name, home_dir)
+        home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
         daemon = self._resumed(name) if resume == "1" else self._choose(environment)
         if recorded is None:
@@ -1030,10 +990,10 @@ class DockerHost(Host):
                 save_record(name, DaemonRecord(daemon, self.docker))
             except OSError as error:
                 raise SessionError(f"docker session {name}: daemon record: {error}") from None
-        if resume == "1":
-            _check_history(name, home, home_dir, launch.transcript)
         laps("checks")
         hook, root, (image, digest) = self._image(name, environment, daemon=daemon)
+        if resume == "1":
+            _check_history(name, home, home_dir, launch.transcript, digest)
         volume = workspace_volume(name)
         cwd = os.path.realpath(launch.cwd)
         persistent = json.loads(metadata.get("home_persistent") or "null")
@@ -1045,7 +1005,6 @@ class DockerHost(Host):
                 )
         if resume == "0":
             self._move_workspace(name, volume, cwd, daemon)
-            self._drop_state(name, daemon)
         seeds = {os.path.join(home, f): text for f, text in files.items()} if resume == "0" else {}
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
@@ -1057,6 +1016,7 @@ class DockerHost(Host):
             image=image,
             cwd=cwd,
             workspace=volume,
+            state="new" if resume == "0" else "keep",
             home=(field, home),
             hook_path=hook,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),
@@ -1187,7 +1147,9 @@ class DockerHost(Host):
         made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
             if _damaged_record(name):
-                raise SessionBusy(name, f"damaged record: {os.path.join(state_dir(name), RECORD)}")
+                raise SessionBusy(
+                    name, f"damaged record: {os.path.join(state_dir(name), SESSION_RECORD)}"
+                )
             for row in self._rows():
                 if row.name == name and _guarded(name, row.generation):
                     if self._row_liveness(name, row.generation) != Liveness.ABSENT:

@@ -15,9 +15,9 @@ from ensemble.session.clients.codex.common import SessionStore, session_size
 from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.client_state import LocalHome, VolumeHome
 from ensemble.session.engine.types import HomePath, HomeStore, HookCall
-from ensemble.utils import STALE_AGE, docker_home, file_lock, read_reply
+from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import SPAWNS
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.codex.support import NATIVE, Base, said
 from tests.utils.clock import FakeClock
 
@@ -385,13 +385,13 @@ class DockerRolloutTest(RepliesBase):
         self.enterContext(serve())
 
     def prepare(self):
-        self.codex_home = Path(docker_home("w", "codex"))
+        self.codex_home = Path(stored("w", "codex"))
         self.codex_home.mkdir(parents=True)
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
         return super().prepare()
 
     def test_a_steer_is_answered_from_the_rollout(self):
-        self.assertTrue(str(self.path).startswith(docker_home("w", "codex") + os.sep))
+        self.assertTrue(str(self.path).startswith(stored("w", "codex") + os.sep))
         self.open_turn()
         self.steer("status?")
         self.append(said("user", "status?"), said("assistant", "answer"))

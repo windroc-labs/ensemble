@@ -114,8 +114,8 @@ func TestCodexStartIsolation(t *testing.T) {
 		}
 	}
 	joined := strings.Join(run, " ")
-	for _, want := range []string{"CODEX_HOME=", "--label ensemble.client=codex", "/codex:rw,noexec,nosuid,nodev,size=1073741824,mode=0700,uid=1001,gid=1002 ", "--mount type=volume,source=ensemble-state-worker_1,target=" + home + "/.ensemble/docker-state/worker_1/codex/sessions,volume-subpath=codex/sessions,volume-nocopy",
-		"--mount type=volume,source=ensemble-state-worker_1,target=" + home + "/.ensemble/docker-state/worker_1/codex/config,volume-subpath=codex/config,volume-nocopy",
+	for _, want := range []string{"CODEX_HOME=", "--label ensemble.client=codex", "/codex:rw,noexec,nosuid,nodev,size=1073741824,mode=0700,uid=1001,gid=1002 ", "--mount type=volume,source=ensemble-state-worker_1,target=" + ClientHomes + "/codex/sessions,volume-subpath=codex/sessions,volume-nocopy",
+		"--mount type=volume,source=ensemble-state-worker_1,target=" + ClientHomes + "/codex/config,volume-subpath=codex/config,volume-nocopy",
 		"--tmpfs /run/ensemble:"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %s", want)

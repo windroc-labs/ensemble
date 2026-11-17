@@ -66,7 +66,6 @@ from ensemble.utils.markdown import OUTCOME, fenced, outcome_block, unfenced
 from ensemble.utils.paths import (
     DOCKER_STATE,
     STATE,
-    docker_home,
     import_env,
     module_roots,
     overlaps,
@@ -166,7 +165,6 @@ __all__ = [
     "checkout",
     "command_path",
     "common_dir",
-    "docker_home",
     "drop_stale",
     "environment_ok",
     "err_text",
