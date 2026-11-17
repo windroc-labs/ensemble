@@ -93,6 +93,14 @@ class HostGhChild(Case):
         self.assertEqual(notes[-1]["signals"], [signal.SIGTERM])
         self.assertEqual((notes[0]["int_ignored"], notes[0]["quit_ignored"]), (False, False))
 
+    def test_a_signal_another_thread_gets_is_still_forwarded_once(self):
+        proc = self.start(
+            "run", "watch", FAKE_GH_MODE="wait:2", DRIVE_OFF_MAIN_SIGNAL=str(int(signal.SIGTERM))
+        )
+        _, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 5, err)
+        self.assertEqual(self.notes(self.gh_log)[-1]["signals"], [signal.SIGTERM])
+
     def test_the_token_is_refreshed_beside_a_running_child_never_restarting_it(self):
         proc = self.start(
             "pr",

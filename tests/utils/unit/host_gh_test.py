@@ -272,11 +272,12 @@ class Main(Base):
             "PATH": os.pathsep.join([os.path.dirname(self.wrapper), self.bin]),
             "HOME": self.home,
         }
-        self.popen = mock.Mock(return_value=mock.Mock(wait=mock.Mock(return_value=0)))
+        self.popen = mock.Mock(return_value=mock.Mock(poll=mock.Mock(return_value=0)))
         with (
             mock.patch.dict(os.environ, environ or env, clear=True),
             mock.patch.object(host_gh.subprocess, "Popen", self.popen),
             mock.patch.object(host_gh.signal, "signal"),
+            mock.patch.object(host_gh.signal, "set_wakeup_fd"),
             self.assertRaises(SystemExit) as raised,
         ):
             host_gh.main(
