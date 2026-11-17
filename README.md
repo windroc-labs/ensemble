@@ -175,5 +175,6 @@ explains how to choose stages.
 |---|---|
 | The system's layers, execution and trust boundaries | [Architecture](docs/architecture.md) |
 | Models, providers, role settings, your own tasks or workflow | [Customizing roles and tasks](docs/customizing-roles-and-tasks.md) |
+| A Linux or Windows machine as the Docker target | [Remote Docker target](docs/remote-docker-target.md) |
 | Changes needed by an existing installation | [Upgrading](docs/upgrading.md) |
 | Contributor conventions and check entry points | [AGENTS.md](AGENTS.md) |
