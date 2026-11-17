@@ -6,8 +6,9 @@ Upgrade the plugin and broker together with `scripts/install.sh --docker`. A Doc
 daemon's ID (`docker info`), not its address: a LAN address and a Tailscale address of one machine are one target.
 
 - Each session records the daemon its state is on in `~/.ensemble/docker-state/<name>/state-access.json`. Resuming
-  or reclaiming it while the target is another daemon fails before any volume is made, naming the session's target;
-  set the target back to it first. A session with no record belongs to the local Docker Desktop. A record from
+  it while the target is another daemon fails before any volume is made, naming the session's target; set the target
+  back to it first. Reclaiming its workdir fails the same way while the workdir exists and the current target holds
+  none of its workspaces; once the workdir is gone, the session's own daemon reclaims its volumes after a close there. A session with no record belongs to the local Docker Desktop. A record from
   protocol 40 has no daemon and fails as malformed: if that session was made on the local Docker Desktop, delete the
   file; otherwise give it a new start.
 - The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`, so the first build after

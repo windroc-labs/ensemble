@@ -71,24 +71,25 @@ name=<name> client=<client>
 (
   set -eu
   docker() { command docker --host "unix://$HOME/.docker/run/docker.sock" "$@"; }  # never DOCKER_HOST or a context
-  docker info --format '{{.ID}}'  # the local Docker Desktop answers, or nothing below runs
+  stop() { echo "stopped: $*" >&2; exit 1; }
+  docker info --format '{{.ID}}' || stop "the local Docker Desktop does not answer"
   from="$HOME/.ensemble/docker-state/$name/$client"
-  [ -d "$from" ]
-  [ ! -L "$from" ]
-  if docker volume inspect "ensemble-state-$name" >/dev/null 2>&1; then
-    echo "ensemble-state-$name exists: a start since the upgrade made it; copy nothing over it" >&2
-    exit 1
-  fi
-  image=$(docker image ls --filter reference=ensemble-worker --format '{{.Repository}}:{{.Tag}}' | head -n 1)
+  [ -d "$from" ] && [ ! -L "$from" ] || stop "$from is not a directory"
+  ! docker volume inspect "ensemble-state-$name" >/dev/null 2>&1 ||
+    stop "ensemble-state-$name exists: a start since the upgrade made it; copy nothing over it"
+  image=$(docker image ls --quiet --filter reference=ensemble-worker | head -n 1)
+  [ -n "$image" ] || stop "no worker image: start any Docker worker once"
   owner=$(docker image inspect --format \
-    '{{index .Config.Labels "ensemble.agent-uid"}}:{{index .Config.Labels "ensemble.agent-gid"}}' "$image")
+    '{{index .Config.Labels "ensemble.agent-uid"}}:{{index .Config.Labels "ensemble.agent-gid"}}' \
+    $(docker image ls --quiet --filter reference=ensemble-worker) | sort -u)
+  [ "$(printf '%s\n' "$owner" | wc -l)" -eq 1 ] || stop "worker images differ in their agent's uid:gid"
   docker volume create --label "ensemble.state=$name" --label "ensemble.state-owner=$owner" "ensemble-state-$name"
   docker run --rm --pull never --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE \
     --cap-add FOWNER --security-opt no-new-privileges --user 0:0 \
     --mount "type=bind,source=$from,target=/from,readonly" \
     --mount "type=volume,source=ensemble-state-$name,target=/state" \
     --entrypoint /bin/sh "$image" -c 'mkdir -p "/state/$1" && cp -a /from/. "/state/$1/" && chown -hR "$2" /state' \
-    sh "$client" "$owner"
+    sh "$client" "$owner" || { docker volume rm "ensemble-state-$name"; stop "the copy failed; its volume is removed"; }
 )
 ```
 

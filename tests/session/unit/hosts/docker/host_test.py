@@ -2303,6 +2303,27 @@ class RemoveWorkspacesTest(Base):
             self.host.remove_workspaces(self.agent)
         self.assertEqual(self.removals(), [])
 
+    def test_reclaim_of_a_local_session_on_a_remote_target_is_refused(self):
+        local = self.ep
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, local, LOCAL_DAEMON))
+        self.remote()
+        self.nothing_here()
+        with self.assertRaisesRegex(
+            SessionError,
+            "^docker session pm-TASK-1-1a2b3c4d: cannot reclaim it here: its Docker target is the"
+            rf" local Docker Desktop \({re.escape(local)}\) \(daemon {LOCAL_DAEMON}\), the current"
+            " target is ssh://u@pc",
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_reclaim_of_a_gone_cwd_leaves_another_daemons_session_to_it(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))
+        self.nothing_here()
+        os.rmdir(self.agent)
+        self.assertEqual(self.host.remove_workspaces(self.agent), [])
+        self.assertEqual((self.removals(), self.docker.infos), ([], []))
+
     def test_reclaim_with_sessions_of_both_daemons_at_the_cwd_removes_the_current_ones(self):
         self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
         self.session("reviewer-aaaa", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))

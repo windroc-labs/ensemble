@@ -566,14 +566,15 @@ class DockerHost(Host):
 
     def remove_workspaces(self, cwd: str) -> list[str]:
         """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
-        With none here, a session at cwd whose state is on another daemon refuses.
+        With none here and cwd still there, a session at cwd whose state is on another daemon
+        refuses: once cwd is gone, that daemon's own reclaim takes its volumes.
         """
         rows = self._workspaces()
         if rows is None:
             raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
         anchor, removed = os.path.realpath(cwd), []
         volumes = sorted(v for v, a in rows if a == anchor)
-        if not volumes and (sessions := _sessions_at(anchor)):
+        if not volumes and os.path.lexists(anchor) and (sessions := _sessions_at(anchor)):
             current = self._current(f"host {self.name}")
             for name in sessions:
                 if why := self._refusal(name, "reclaim", current):
