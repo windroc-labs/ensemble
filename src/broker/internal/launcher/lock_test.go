@@ -63,7 +63,7 @@ func TestLockHolderEmptyAndFailures(t *testing.T) {
 		"empty":               {},
 		"disappeared":         {list: []byte(lockID), err: &docker.CommandError{Exit: 1, Stderr: "No such container"}},
 		"inspect failed":      {list: []byte(lockID), err: errors.New("bad inspect"), want: protocol.StartFailed},
-		"inspect unreachable": {list: []byte(lockID), err: docker.ErrUnreachable, want: protocol.DockerUnreachable},
+		"inspect unreachable": {list: []byte(lockID), err: unreachableErr, want: protocol.DockerUnreachable},
 		"malformed":           {list: []byte(lockID), inspect: []byte(`[]`), want: protocol.StartFailed},
 		"invalid ID":          {list: []byte("--help"), want: protocol.StartFailed},
 		"different lock":      {list: []byte(lockID), inspect: lockInspect(lockID, container, "running", map[string]string{"windroc.lock": "other"})},
@@ -81,7 +81,7 @@ func TestLockHolderEmptyAndFailures(t *testing.T) {
 			}
 		})
 	}
-	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }}
+	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
 	if _, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", ""); code(t, err) != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}

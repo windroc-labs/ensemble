@@ -41,6 +41,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
+from ensemble.session.hosts.docker import daemon
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
     TIMEOUT,
@@ -57,7 +58,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
-from tests.session.unit.hosts.docker.support import BETA, UPDRAFT
+from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, FakePopen, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
@@ -101,13 +102,17 @@ class FakeDocker:
 
     def __init__(self, ep, order):
         self.ep, self.order, self.ps, self.replies, self.inputs = ep, order, [], {}, []
-        self.volumes = []
+        self.volumes, self.down = [], False
 
     def __call__(self, argv, env, *, input=None, timeout):
         assert argv[:3] == [DOCKER, "--host", self.ep], argv
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
         self.order.append(argv[3:])
         self.inputs.append(input)
+        if self.down:
+            return done(
+                1, "", f"Cannot connect to the Docker daemon at {self.ep}. Is it running?\n"
+            )
         if argv[3] in ("ps", "volume"):
             rows = self.ps if argv[3] == "ps" else self.volumes
             return done(0, "".join(f"{line}\n" for line in rows))
@@ -186,8 +191,6 @@ class Base(Case):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.ep = f"unix://{self.account}/.docker/run/docker.sock"
-        os.makedirs(os.path.dirname(self.ep.removeprefix("unix://")))
-        open(self.ep.removeprefix("unix://"), "w").close()
         self.cwd = os.path.join(self.account, "src", "repo")
         os.makedirs(self.cwd)
         self.order = []
@@ -1937,6 +1940,17 @@ class ReclaimTest(Base):
         thread.assert_called_once()
         self.assertEqual(self.order, [])
 
+    def test_background_reclaim_passes_a_set_ssh_agent_socket(self):
+        self.spawn_mock.side_effect = None
+        with (
+            mock.patch("threading.Thread"),
+            mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/private/agent.sock"}),
+        ):
+            self.host._spawn_reclaim()
+        env = self.spawn_mock.call_args.kwargs["env"]
+        self.assertEqual(set(env), {"PATH", "HOME", "PYTHONPATH", "SSH_AUTH_SOCK"})
+        self.assertEqual(env["SSH_AUTH_SOCK"], "/private/agent.sock")
+
     def test_a_background_spawn_failure_warns_and_returns(self):
         self.spawn_mock.side_effect = OSError("cannot spawn")
         with self.assertLogs("session", "WARNING") as logs:
@@ -1945,11 +1959,12 @@ class ReclaimTest(Base):
 
     def test_the_background_entrypoint_skips_without_a_daemon(self):
         module = sys.modules[DockerHost.__module__]
-        os.unlink(self.ep.removeprefix("unix://"))
+        popen = FakePopen((b"", b"Cannot connect to the Docker daemon at x. Is it running?\n", 1))
+        self.spawn_mock.side_effect = popen
         with mock.patch("sys.argv", [module.__file__, DOCKER]):
             runpy.run_path(module.__file__, run_name="__main__")
+        self.assertEqual([argv[3:5] for argv, _, _ in popen.calls], [["volume", "ls"]])
         self.assertEqual(self.order, [])
-        self.spawn_mock.assert_not_called()
 
     def test_a_workers_removal_schedules_reclaim_after_closing_the_container(self):
         def spawn():
@@ -2019,16 +2034,16 @@ class ReclaimTest(Base):
         self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [])
         fcntl.flock(busy, fcntl.LOCK_UN)
-        os.remove(self.ep.removeprefix("unix://"))
+        self.docker.down = True
         self.order.clear()
         self.host.reclaim_volumes()
-        self.assertEqual(self.order, [])
+        self.assertEqual([step[:2] for step in self.order], [["volume", "ls"]])
 
     def test_without_the_daemon_or_the_cli_a_kept_marker_stays(self):
         marker = self.marker(self.GONE)
-        os.remove(self.ep.removeprefix("unix://"))
+        self.docker.down = True
         self.host.reclaim_volumes()
-        open(self.ep.removeprefix("unix://"), "w").close()
+        self.docker.down = False
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "No such file", DOCKER))
         self.host.reclaim_volumes()
         self.assertTrue(os.path.exists(marker))
@@ -2088,8 +2103,10 @@ class RemoveWorkspacesTest(Base):
         )
 
     def test_remove_workspaces_without_docker_refuses(self):
-        os.remove(self.ep.removeprefix("unix://"))
-        with self.assertRaisesRegex(SessionError, "workspaces unknown"):
+        self.docker.down = True
+        with self.assertRaisesRegex(
+            SessionError, f"workspaces unknown .*Docker target {re.escape(self.ep)} unreachable"
+        ):
             self.host.remove_workspaces(self.agent)
         self.assertEqual(self.removals(), [])
 
@@ -2143,9 +2160,11 @@ class ListTest(Base):
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         with self.assertRaisesRegex(SessionError, "inventory unavailable"):
             self.host._capacity_rows()
-        os.unlink(self.ep.removeprefix("unix://"))
+        self.docker.down = True
         self.host.run = self.docker
-        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+        with self.assertRaisesRegex(
+            SessionError, f"inventory unavailable .*Docker target {re.escape(self.ep)} unreachable"
+        ):
             self.host._capacity_rows()
 
     def test_admission_inventory_reads_successful_empty_and_populated_results(self):
@@ -2232,13 +2251,13 @@ class ListTest(Base):
         with self.assertRaisesRegex(SessionError, "docker ps"):
             self.host.list()
 
-    def test_no_daemon_socket_or_cli_lists_nothing(self):
+    def test_an_unreachable_daemon_or_no_cli_lists_nothing(self):
         self.listed("w")
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         self.assertEqual(self.host.list(), [])
-        os.unlink(self.ep.removeprefix("unix://"))
+        self.docker.down = True
         self.host.run = self.docker
-        self.assertEqual((self.host.list(), self.host.rows(), self.order), ([], [], []))
+        self.assertEqual((self.host.list(), self.host.rows()), ([], []))
 
     def test_attach_target_of_an_unknown_or_unguarded_row_is_no_session(self):
         for found in ({}, {"mode": "guard"}, {"kind": "headless"}, {"kind": "tui"}):
@@ -2271,6 +2290,37 @@ class AttachTargetTest(Base):
         )
         with self.assertRaisesRegex(SessionError, "^no docker session x$"):
             self.host.attach_target("x")
+
+
+class RemoteAttachTargetTest(Base):
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": "ssh://u@pc"}, f)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.docker.ep = "ssh://u@pc"
+
+    def test_attach_target_on_a_remote_target_carries_the_wrapper_path(self):
+        self.listed("w")
+        self.guarded_record()
+        argv = [
+            *(DOCKER, "--host", "ssh://u@pc", "exec", "-it", CONTAINER, PYTHON, "-I"),
+            *(worker_module.GUARD, "--attach", f"/run/ensemble/guard/{GEN}/display"),
+        ]
+        cleared = tuple(arg for key in CLEARED for arg in ("-u", key))
+        path = f"PATH={daemon.SSH_DIR}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
+        for sock, entries in (
+            ("/private/agent.sock", (path, "SSH_AUTH_SOCK=/private/agent.sock")),
+            ("", (path,)),
+        ):
+            with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": sock, "PATH": "/tmux/server"}):
+                view = self.host.attach_target("w")
+            self.assertEqual(view.argv, ("/usr/bin/env", *cleared, *entries, *argv))
+            self.assertEqual(view.printed, shlex.join(argv))
 
 
 class GuardedStartTest(StartBase):

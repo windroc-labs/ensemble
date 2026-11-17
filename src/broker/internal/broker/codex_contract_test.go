@@ -42,7 +42,7 @@ func TestCodexErrorMapping(t *testing.T) {
 	if err := codexError(errors.Join(failed, errRevision)); err != failed {
 		t.Fatalf("protocol error mapped to %#v", err)
 	}
-	if err := codexError(docker.ErrUnreachable); !errors.Is(err, docker.ErrUnreachable) || err.Error() != "Codex credential injection: "+docker.ErrUnreachable.Error() {
+	if err := codexError(unreachableErr); !errors.Is(err, docker.ErrUnreachable) || err.Error() != "Codex credential injection: "+unreachableErr.Error() {
 		t.Fatalf("unreachable daemon mapped to %v", err)
 	}
 	if err := codexError(opaque); err != opaque {

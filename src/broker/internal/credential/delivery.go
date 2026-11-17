@@ -23,7 +23,7 @@ func (c Command) Erase() { clear(c.Stdin) }
 // Deliver writes value to f through exec's stdin, never its argv: 0400 in a 0700 directory. A create-only file
 // refuses one already there (set -C); Replace writes a dot file, which no reader matches, then renames it over.
 // Name must be one path component; a Replace one must not start with a dot, the temporary names'. Errors wrap
-// docker.ErrUnreachable or are ErrDelivery.
+// a *docker.Unreachable or are ErrDelivery.
 func Deliver(exec func(argv []string, stdin []byte) error, f File, value []byte) error {
 	command, err := Prepare(f, value)
 	if err != nil {
@@ -31,9 +31,10 @@ func Deliver(exec func(argv []string, stdin []byte) error, f File, value []byte)
 	}
 	defer command.Erase()
 	err = exec(command.Argv, command.Stdin)
+	var u *docker.Unreachable
 	switch {
-	case errors.Is(err, docker.ErrUnreachable):
-		return fmt.Errorf("credential delivery: %w", docker.ErrUnreachable)
+	case errors.As(err, &u):
+		return fmt.Errorf("credential delivery: %w", u)
 	case err != nil:
 		return ErrDelivery
 	}

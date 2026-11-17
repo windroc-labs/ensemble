@@ -117,7 +117,7 @@ func TestEgressDockerFailures(t *testing.T) {
 		want protocol.Code
 	}{
 		{"unreachable", world{unreachable: true}, protocol.DockerUnreachable},
-		{"listing unreachable", world{egressErr: docker.ErrUnreachable}, protocol.DockerUnreachable},
+		{"listing unreachable", world{egressErr: unreachableErr}, protocol.DockerUnreachable},
 		{"listing fails", world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}}, protocol.EgressUnavailable},
 		{"inspect not json", world{proxy: func(g map[string]any) { g["State"] = "running" }}, protocol.EgressUnavailable},
 	} {

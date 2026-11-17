@@ -70,10 +70,13 @@ from ensemble.session.hosts.docker.broker import (
 from ensemble.session.hosts.docker.daemon import (
     CLEARED,
     RUN_TIMEOUT,
+    attach_env,
     capped,
     container_name,
     docker_call,
     endpoint,
+    ssh_agent,
+    unreachable,
 )
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.mounts import (
@@ -372,6 +375,10 @@ def _accept_started(name: str, generation: str, started: Started, container: str
     )
 
 
+def _no_daemon() -> str:
+    return f"no Docker CLI, or Docker target {endpoint()} unreachable"
+
+
 def _held(marker: str) -> bool:
     """A failed check holds its volume for KEPT_RETRY, any other marker for good."""
     try:
@@ -427,13 +434,11 @@ class DockerHost(Host):
         """Admission requires an answer; others list none without a daemon/CLI."""
         rows = self._listed("ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT)
         if rows is None and required:
-            raise SessionError(f"host {self.name}: inventory unavailable (no Docker CLI or socket)")
+            raise SessionError(f"host {self.name}: inventory unavailable ({_no_daemon()})")
         return rows or []
 
     def _listed(self, *args: str) -> list[list[str]] | None:
-        """Tab-separated rows; None without a daemon socket or CLI; Unanswered on failure."""
-        if not os.path.exists(endpoint().removeprefix("unix://")):
-            return None
+        """Tab-separated rows; None without a reachable daemon or a CLI; Unanswered on failure."""
         argv, env = docker_call(self.docker, *args)
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -442,6 +447,8 @@ class DockerHost(Host):
         except (OSError, subprocess.TimeoutExpired) as error:
             raise Unanswered(f"docker {args[0]}: {error}") from None
         if res.returncode:
+            if unreachable(res.stderr):
+                return None
             raise Unanswered(f"docker {args[0]}: {res.stderr.strip()}")
         return [line.split("\t") for line in res.stdout.splitlines()]
 
@@ -503,7 +510,12 @@ class DockerHost(Host):
                 roots = module_roots(sys.modules[__name__], ensemble.utils)
                 proc = subprocess.Popen(
                     [os.path.realpath(sys.executable), "-P", "-s", "-m", __name__, self.docker],
-                    env={"PATH": os.defpath, "HOME": os.path.expanduser("~"), **source_path(roots)},
+                    env={
+                        "PATH": os.defpath,
+                        "HOME": os.path.expanduser("~"),
+                        **source_path(roots),
+                        **ssh_agent(),
+                    },
                     cwd="/",
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
@@ -524,7 +536,7 @@ class DockerHost(Host):
             LOG.warning("docker reclaim: %s", error)
 
     def _workspaces(self) -> list[tuple[str, str]] | None:
-        """Run workspace volumes with their cwd label; None without a daemon socket or CLI."""
+        """Run workspace volumes with their cwd label; None without a reachable daemon or a CLI."""
         rows = self._listed(
             "volume", "ls", "--filter", f"label={KIND_LABEL}", "--format", VOLUME_FORMAT
         )
@@ -534,7 +546,7 @@ class DockerHost(Host):
         """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept."""
         rows = self._workspaces()
         if rows is None:
-            raise SessionError(f"host {self.name}: workspaces unknown (no Docker CLI or socket)")
+            raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
         anchor, removed = os.path.realpath(cwd), []
         for volume in sorted(v for v, a in rows if a == anchor):
             try:
@@ -1253,7 +1265,12 @@ class DockerHost(Host):
         )[0]
         return CommandView(
             printed=shlex.join(argv),
-            argv=("/usr/bin/env", *(arg for key in CLEARED for arg in ("-u", key)), *argv),
+            argv=(
+                "/usr/bin/env",
+                *(arg for key in CLEARED for arg in ("-u", key)),
+                *attach_env(argv[2]),
+                *argv,
+            ),
             run=display,
         )
 

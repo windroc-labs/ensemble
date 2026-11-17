@@ -182,7 +182,7 @@ func TestWorkspaceRmFailed(t *testing.T) {
 		})
 	}
 	k := clean()
-	k.inspect = docker.ErrUnreachable
+	k.inspect = unreachableErr
 	if _, _, err := workspaceRm(k, false); protoErr(t, err).Code != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}

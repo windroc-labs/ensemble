@@ -77,7 +77,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"39"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"40"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -1097,5 +1097,21 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		if code, _, errOut := invoke(a, tc.args...); code != 0 || !slices.Equal(asked, tc.interactive) {
 			t.Errorf("%q: exit %d %q, keychain asked %v, want %v", tc.args, code, errOut, asked, tc.interactive)
 		}
+	}
+}
+
+func TestSSHModeExecsSystemSSH(t *testing.T) {
+	var path string
+	var argv, env []string
+	var stderr bytes.Buffer
+	t.Setenv("SSH_AUTH_SOCK", "/private/agent.sock")
+	code := execSSH([]string{"-o", "ForwardAgent=yes", "-T", "--", "pc", "docker", "system", "dial-stdio"},
+		func(p string, a, e []string) error { path, argv, env = p, a, e; return errors.New("exec failed") }, &stderr)
+	want := append([]string{"ssh"}, docker.SSHArgs([]string{"-o", "ForwardAgent=yes", "-T", "--", "pc", "docker", "system", "dial-stdio"})...)
+	if path != "/usr/bin/ssh" || !reflect.DeepEqual(argv, want) || argv[1] != "-F" || !slices.Contains(env, "SSH_AUTH_SOCK=/private/agent.sock") {
+		t.Fatalf("%s %q", path, argv)
+	}
+	if code != 255 || stderr.String() != "ensemble-broker ssh: exec failed\n" {
+		t.Fatalf("%d %q", code, stderr.String())
 	}
 }

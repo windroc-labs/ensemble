@@ -84,7 +84,7 @@ func (w *world) docker() *fakeDocker {
 	d := &fakeDocker{}
 	d.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if w.unreachable {
-			return nil, docker.ErrUnreachable
+			return nil, unreachableErr
 		}
 		switch strings.Join(args[:2], " ") {
 		case "ps --all":
@@ -544,7 +544,7 @@ func TestStartUnreadableImage(t *testing.T) {
 				w := &world{labels: goodLabels(), execErr: func(args []string) error {
 					if slices.Contains(args, "/usr/bin/python3") {
 						if unreachable {
-							return docker.ErrUnreachable
+							return unreachableErr
 						}
 						return &docker.CommandError{Exit: contentFailed, Stderr: "synthetic permission denied"}
 					}
@@ -641,7 +641,7 @@ func TestRollback(t *testing.T) {
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
-		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
+		"inject unreachable":  {&world{}, &fakeCreds{injectErr: unreachableErr}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},
 		"rm fails":            {&world{execErr: failOn("claude", cmdErr), rmErr: &docker.CommandError{Exit: 1, Stderr: "delete failed"}}, &fakeCreds{}, protocol.StartFailed, protocol.Failed},
 		"run fails absent":    {&world{runErr: cmdErr, rmErr: &docker.CommandError{Exit: 1, Stderr: "No such container: x"}}, &fakeCreds{}, protocol.StartFailed, protocol.NotNeeded},

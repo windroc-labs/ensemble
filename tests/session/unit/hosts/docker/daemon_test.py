@@ -1,13 +1,16 @@
-"""hosts/docker/daemon.py: the capped run, over fake processes."""
+"""hosts/docker/daemon.py: the capped run, over fake processes; the Docker target and its docker command line."""
 
 import contextlib
 import os
+import re
 import threading
 from unittest import mock
 
+from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.hosts.docker import daemon
 from ensemble.session.hosts.docker.daemon import OUT_MAX, Overflow, capped
 from tests.session.case import Case
-from tests.session.unit.hosts.docker.support import FakePopen, FakeProc
+from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 
@@ -49,3 +52,96 @@ class CappedTest(Case):
             capped(["x"], {}, timeout=30)
         thread.join()
         self.assertTrue(proc.killed)
+
+
+class TargetTest(Case):
+    def setUp(self):
+        self.account = os.path.realpath(self.home)
+        patcher = mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_dir=self.account))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+
+    def target(self, content):
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def test_no_target_file_is_the_local_docker_desktop(self):
+        local = f"unix://{self.account}/.docker/run/docker.sock"
+        self.assertEqual(daemon.endpoint(), local)
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}):
+            argv, env = daemon.docker_call("/bin/docker", "ps")
+        self.assertEqual((argv, env["PATH"]), (["/bin/docker", "--host", local, "ps"], "/usr/bin"))
+
+    def test_remote_target_ignores_hostile_docker_environment(self):
+        self.target('{"host": "ssh://u@pc:2222"}')
+        hostile = {
+            "DOCKER_HOST": "tcp://hostile:1234",
+            "DOCKER_CONTEXT": "hostile",
+            "DOCKER_CONFIG": self.home,
+            "PATH": "/usr/bin",
+        }
+        with mock.patch.dict(os.environ, hostile):
+            argv, env = daemon.docker_call("/bin/docker", "ps")
+        self.assertEqual(argv, ["/bin/docker", "--host", "ssh://u@pc:2222", "ps"])
+        self.assertFalse(set(daemon.CLEARED) & set(env))
+        self.assertEqual(env["PATH"], f"{daemon.SSH_DIR}{os.pathsep}/usr/bin")
+        self.assertEqual(daemon.endpoint(), "ssh://u@pc:2222")
+
+    def test_invalid_target_file_is_a_config_error(self):
+        for content in (
+            "",
+            "[]",
+            "null",
+            "{}",
+            '{"host": 1}',
+            '{"HOST": "ssh://pc"}',
+            '{"host": "ssh://pc", "user": "u"}',
+            '{"host": "ssh://pc"} {}',
+            '{"host": "ssh://pc\\n"}',
+            '{"host": "ssh://-oProxyCommand=x"}',
+            '{"host": "tcp://pc:2375"}',
+            '{"host": "ssh://pc/var/run/x"}',
+            '{"host": "ssh://pc:0"}',
+            '{"host": "ssh://pc:65536"}',
+            "{" + " " * (64 << 10) + '"host": "ssh://pc"}',
+        ):
+            with self.subTest(content=content[:40]):
+                path = self.target(content)
+                with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
+                    daemon.docker_call("/bin/docker", "ps")
+
+    def test_remote_target_without_the_wrapper_is_refused(self):
+        self.target('{"host": "ssh://pc"}')
+        with (
+            ssh_wrapper(present=False) as wrapper,
+            self.assertRaisesRegex(
+                SessionError, f"ssh wrapper unavailable: {re.escape(wrapper)}; reinstall the broker"
+            ),
+        ):
+            daemon.docker_call("/bin/docker", "ps")
+
+    def test_ssh_agent_passes_only_a_set_socket(self):
+        with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/private/agent.sock"}):
+            self.assertEqual(daemon.ssh_agent(), {"SSH_AUTH_SOCK": "/private/agent.sock"})
+        with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": ""}):
+            self.assertEqual(daemon.ssh_agent(), {})
+
+    def test_unreachable_daemon_words(self):
+        for stderr, want in (
+            (
+                "Cannot connect to the Docker daemon at unix:///x. Is the docker daemon running?",
+                True,
+            ),
+            (
+                "error during connect: stderr=ssh: connect to host pc port 22: Connection refused",
+                True,
+            ),
+            ("Error: No such container: c", False),
+        ):
+            self.assertEqual(daemon.unreachable(stderr), want, stderr)
