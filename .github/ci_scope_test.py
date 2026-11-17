@@ -578,6 +578,13 @@ class Aggregate(unittest.TestCase):
         needs["changes"]["result"] = "failure"
         self.assertTrue(scope.gate(needs, "pull_request"))
 
+    def test_a_needed_job_without_an_expectation_fails(self):
+        for event in ("pull_request", "push", "merge_group"):
+            needs = self.needs(event=event)
+            needs["python"] = {"result": "failure"}
+            with self.subTest(event=event):
+                self.assertEqual(scope.gate(needs, event), ["python: not gated"])
+
     def test_missing_or_malformed_needs_and_non_full_push_fail(self):
         for needs in ({}, [], {"changes": None}, {**self.needs(), "unit": "success"}):
             with self.subTest(needs=needs):
