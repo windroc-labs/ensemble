@@ -245,6 +245,7 @@ def gate(needs: dict, event: str) -> list[str]:
         "broker": SUCCESS if broker == "true" else SKIPPED,
         # Its one job runs on pull requests only.
         "github-dir-pr": SUCCESS if event == "pull_request" else SUCCESS | SKIPPED,
+        "go": SUCCESS,
     }
     for job, wanted in expected.items():
         data = needs.get(job)

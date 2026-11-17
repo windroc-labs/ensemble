@@ -26,7 +26,7 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
-REPO_GUARDS = ("github-dir-pr",)
+REPO_GUARDS = ("github-dir-pr", "go")
 
 
 def bumped(text, version="0.4.0"):
@@ -762,7 +762,7 @@ class Workflow(unittest.TestCase):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
 
     def test_repo_guards_jobs_call_main_with_no_secrets_or_permissions(self):
-        calls = {"github-dir-pr": "github-dir-pr.yml"}
+        calls = {"github-dir-pr": "github-dir-pr.yml", "go": "go.yml"}
         self.assertEqual(set(calls), set(REPO_GUARDS))
         for name, workflow in calls.items():
             body = job(name)
@@ -780,6 +780,7 @@ class Workflow(unittest.TestCase):
             + ["mini-op", *REPO_GUARDS],
         )
         self.assertNotIn(".github changes in their own PR", job("lint"))
+        self.assertIn("      working-directory: src/broker\n", job("go"))
 
     def test_root_tests_run_in_every_code_scope(self):
         condition = "if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}"
