@@ -1,5 +1,27 @@
 # Upgrading
 
+## Broker protocol 42: mini-op workers stay on the Mac
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`. A `~/.ensemble/docker/target.json` now
+also lists the environment secrets whose workers run on the local Docker Desktop, whatever the target is. Add the
+key to an existing file; a file without it fails every start `docker_unreachable` ("invalid target setting"):
+
+```json
+{"host": "ssh://user@host", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
+```
+
+- The list holds up to 16 distinct `ensemble-broker-env/<name>` items; `[]` sends every worker to the target. Only
+  this file sets it: a manifest or a session argument cannot change the list or where a worker runs.
+- A worker given any listed secret (today the verifier, and any role whose manifest asks for the mini-op
+  credentials) is built and started on the local Docker Desktop, with the Mac's egress proxy. Its start never falls
+  back to the target: with the local Docker Desktop down, it fails `docker_unreachable`.
+- With a remote target, `ensemble-session ls` and sweep cover both daemons. A daemon that does not answer is named on
+  stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
+  `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
+  cannot be asked.
+- `close` and `workspace-rm` take `--daemon local` for the local Docker Desktop beside a remote target, and `build`
+  takes the worker's `--secret` items.
+
 ## Broker protocol 41: a Docker target is its daemon
 
 Upgrade the plugin and broker together with `scripts/install.sh --docker`. A Docker target is identified by its
@@ -24,8 +46,9 @@ Docker target and the reason, for example `Cannot reach Docker target unix:///Us
 Docker daemon not running; start Docker Desktop and retry.`
 
 With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
-machine the target, write `{"host": "ssh://user@host"}` there, with `:port` when it is not 22. Nothing else may be in
-the file. The broker and the session then send every docker call there, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or
+machine the target, write `{"host": "ssh://user@host"}` there, with `:port` when it is not 22. Protocol 42 adds a
+required `local_secrets` key ([Broker protocol 42](#broker-protocol-42-mini-op-workers-stay-on-the-mac)); nothing else
+may be in the file. The broker and the session then send every docker call there, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or
 `DOCKER_CONFIG` say:
 
 - SSH ignores `~/.ssh/config`, so the address carries the user and port. Authentication is key-only: the default key

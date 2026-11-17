@@ -58,8 +58,15 @@ On the Mac:
 3. Check that passwords are refused:
    `ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive <user>@<host> true`
    fails with `Permission denied` and asks for no password.
-4. Write `{"host": "ssh://<user>@<host>"}` to `~/.ensemble/docker/target.json`, then install the egress proxy
-   ([Egress proxy on the target](#egress-proxy-on-the-target)).
+4. Write the target to `~/.ensemble/docker/target.json`, then install the egress proxy
+   ([Egress proxy on the target](#egress-proxy-on-the-target)):
+
+   ```json
+   {"host": "ssh://<user>@<host>", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
+   ```
+
+   `local_secrets` lists the secrets whose workers stay on the Mac ([Workers that stay on the
+   Mac](#workers-that-stay-on-the-mac)).
 
 ## Windows target
 
@@ -131,6 +138,21 @@ PATH=/usr/local/libexec/ensemble/ssh:$PATH docker --host ssh://<user>@<host> log
 Until egress-proxy publishes a release with remote install, the script has no pinned version: pass one with
 `--version X.Y.Z --digest sha256:<digest>`. `scripts/install.sh --docker` still installs the Mac's own proxy, which
 mini-op workers use.
+
+## Workers that stay on the Mac
+
+A worker given any secret in `local_secrets` runs on the Mac's Docker Desktop, never on the target: the test Mac
+mini's password and SSH key never leave the Mac. Today that is the verifier, and any role whose manifest asks for the
+mini-op credentials. Its image, egress proxy, prefetch and credential refresh are the Mac's, and its session belongs
+to the local Docker Desktop.
+
+The Mac's worker and the target's workers share one view:
+
+- `ensemble-session ls` lists both daemons' workers, and sweep closes ended ones on either.
+- A lock held on one daemon makes a start on the other `busy`, naming the holder and its daemon.
+- While one daemon cannot be reached, `ls` names it on stderr and lists the other's workers. Sweep and reclaim leave
+  its containers and volumes alone, so they are there when it comes back. A start with a lock fails
+  `docker_unreachable`, naming that daemon, rather than taking the lock as free.
 
 ## Network rules
 
