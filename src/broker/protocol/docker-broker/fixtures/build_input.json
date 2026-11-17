@@ -156,5 +156,29 @@
         "604800"
       ]
     }
+  },
+  {
+    "name": "build-input-secret",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--image-plugin",
+        "mini-op",
+        "--secret",
+        "ensemble-broker-env/mini-op-password",
+        "--secret",
+        "ensemble-broker-env/mini-op-ssh-key",
+        "--max-age",
+        "604800"
+      ]
+    }
   }
 ]

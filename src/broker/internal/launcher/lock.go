@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,7 +51,33 @@ func (h Host) inspectLock(ctx context.Context, ref string) (lockContainer, error
 	return found[0], nil
 }
 
-// lockHolder observes active run containers only.
+// lockBusy is busy when an active container on h's daemon, or else on its peer, holds lock: a lock spans every
+// configured daemon, so a daemon that cannot be asked fails the check rather than counting as free.
+func (h Host) lockBusy(ctx context.Context, lock, exclude string) error {
+	holder, err := h.lockHolder(ctx, lock, exclude)
+	if err != nil {
+		return err
+	}
+	if holder != nil {
+		return busy(holder)
+	}
+	if h.peer == nil {
+		return nil
+	}
+	peer := h
+	peer.Docker = h.peer.Docker
+	if holder, err = peer.lockHolder(ctx, lock, exclude); err != nil {
+		return err
+	}
+	if holder != nil {
+		e := busy(holder)
+		e.Message = fmt.Sprintf("Lock held by %s (%s) on %s.", holder.Container, holder.Owner, h.peer.Endpoint)
+		return e
+	}
+	return nil
+}
+
+// lockHolder observes active run containers only, on h's daemon.
 func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.Holder, error) {
 	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--quiet", "--no-trunc", "--filter", "label=" + lockLabel + "=" + lock}, nil)
 	if err != nil {

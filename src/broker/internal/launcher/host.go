@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -71,6 +72,12 @@ type LinearTokens interface {
 	Revoke(context.Context, string) error
 }
 
+// Daemon is one Docker daemon a command can work on.
+type Daemon struct {
+	Docker   docker.Runner
+	Endpoint string
+}
+
 type Host struct {
 	Home     string
 	Endpoint string
@@ -91,8 +98,48 @@ type Host struct {
 	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
 	Now      func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
+	// Local is the local Docker Desktop beside a remote target (Docker, Endpoint); nil: the target is the local Docker
+	// Desktop. A worker given any of LocalSecrets, environment secret items, runs on Local.
+	Local        *Daemon
+	LocalSecrets []string
 
-	daemon, images string // the target daemon's ID and its image records' dir, set by onDaemon
+	daemon, images string  // the target daemon's ID and its image records' dir, set by onDaemon
+	peer           *Daemon // the configured daemon a placed command does not work on; nil: none
+}
+
+// place is h working on the daemon a worker given environment secret items secrets runs on: Local for any of
+// LocalSecrets, else the target; the other one becomes its peer. Without Local there is one daemon: h.
+func (h Host) place(secrets []string) Host {
+	if h.Local == nil {
+		return h
+	}
+	target := &Daemon{Docker: h.Docker, Endpoint: h.Endpoint}
+	if slices.ContainsFunc(secrets, func(item string) bool { return slices.Contains(h.LocalSecrets, item) }) {
+		h.Docker, h.Endpoint, h.peer = h.Local.Docker, h.Local.Endpoint, target
+	} else {
+		h.peer = h.Local
+	}
+	h.Local, h.daemon, h.images = nil, "", ""
+	return h
+}
+
+// OnLocal is h working on the local Docker Desktop: Local, or the target when that is the local Docker Desktop.
+func (h Host) OnLocal() Host {
+	if h.Local == nil {
+		return h
+	}
+	h.Docker, h.Endpoint = h.Local.Docker, h.Local.Endpoint
+	h.Local, h.daemon, h.images = nil, "", ""
+	return h
+}
+
+// secretItems are secrets' keychain items.
+func secretItems(secrets []Secret) []string {
+	items := make([]string, len(secrets))
+	for i, s := range secrets {
+		items[i] = s.Item
+	}
+	return items
 }
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,9 @@ const (
 	TargetPattern = `ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?`
 	maxTarget     = 64 << 10
 	minEngine     = 26
+	// EnvItemPrefix starts every environment secret's keychain service.
+	EnvItemPrefix   = "ensemble-broker-env/"
+	maxLocalSecrets = 16
 )
 
 var (
@@ -35,7 +39,19 @@ var (
 	engineMajor = regexp.MustCompile(`^([0-9]+)\.`)
 	// shown is a version safe to repeat in a message.
 	shown = regexp.MustCompile(`^[0-9A-Za-z.+~_-]{1,32}$`)
+	// An environment secret's name: lowercase, so the keychain's case handling cannot merge two.
+	envNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
+
+// ValidEnvName is whether name can be an environment secret, item ensemble-broker-env/<name>.
+func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
+
+// ValidEnvItem is whether item is an environment secret's reference, ensemble-broker-env/<name>; no other keychain
+// service is.
+func ValidEnvItem(item string) bool {
+	name, ok := strings.CutPrefix(item, EnvItemPrefix)
+	return ok && ValidEnvName(name)
+}
 
 // sshOptions come before docker's own ssh arguments: ssh keeps an option's first value. Without the user's ssh
 // config, a connection uses keys only, never forwards, and needs a known, matching host key.
@@ -58,9 +74,11 @@ var sshOptions = []string{
 	"-o", "ControlPath=none",
 }
 
-// Target is the Docker target: Host is a remote ssh:// endpoint, "" the local Docker Desktop.
+// Target is the Docker target: Host is a remote ssh:// endpoint, "" the local Docker Desktop. A worker given any of
+// LocalSecrets, environment secret items, runs on the local Docker Desktop whatever Host is.
 type Target struct {
-	Host string
+	Host         string
+	LocalSecrets []string
 }
 
 func (t Target) Remote() bool { return t.Host != "" }
@@ -69,7 +87,8 @@ func (t Target) Remote() bool { return t.Host != "" }
 // Desktop.
 func RemoteEndpoint(endpoint string) bool { return targetHost.MatchString(endpoint) }
 
-// LoadTarget reads home's TargetFile: {"host": "ssh://[user@]host[:port]"}, nothing else; no file is the local target.
+// LoadTarget reads home's TargetFile: {"host": "ssh://[user@]host[:port]", "local_secrets": [item, ...]}, nothing
+// else; no file is the local target.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, TargetFile)
 	invalid := func(format string, args ...any) (Target, error) {
@@ -93,7 +112,8 @@ func LoadTarget(home string) (Target, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var v struct {
-		Host *string `json:"host"`
+		Host         *string   `json:"host"`
+		LocalSecrets *[]string `json:"local_secrets"`
 	}
 	if err := dec.Decode(&v); err != nil {
 		return invalid("%v", err)
@@ -104,6 +124,14 @@ func LoadTarget(home string) (Target, error) {
 	if v.Host == nil {
 		return invalid("no host")
 	}
+	// The decoder matches keys case-insensitively, so a case variant could override a key.
+	var keys map[string]json.RawMessage
+	_ = json.Unmarshal(data, &keys)
+	for key := range keys {
+		if key != "host" && key != "local_secrets" {
+			return invalid("unknown key %q", key)
+		}
+	}
 	host := *v.Host
 	if !targetHost.MatchString(host) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)
@@ -113,7 +141,22 @@ func LoadTarget(home string) (Target, error) {
 			return invalid("host %q is not ssh://[user@]host[:port]", host)
 		}
 	}
-	return Target{Host: host}, nil
+	if v.LocalSecrets == nil {
+		return invalid("no local_secrets")
+	}
+	secrets := *v.LocalSecrets
+	if len(secrets) > maxLocalSecrets {
+		return invalid("more than %d local_secrets", maxLocalSecrets)
+	}
+	for i, item := range secrets {
+		if !ValidEnvItem(item) {
+			return invalid("local_secrets item %q is not %s<name>", item, EnvItemPrefix)
+		}
+		if slices.Contains(secrets[:i], item) {
+			return invalid("local_secrets item %q repeated", item)
+		}
+	}
+	return Target{Host: host, LocalSecrets: secrets}, nil
 }
 
 // SSHArgs is the system ssh's argument list for args, the docker CLI's.

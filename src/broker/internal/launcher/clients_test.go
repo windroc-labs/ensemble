@@ -381,3 +381,21 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckClientsCoversBothDaemons(t *testing.T) {
+	for _, localUp := range []bool{true, false} {
+		e := newBuildEnv(t)
+		first := e.builtImage(t, e.pkg, BuildSpec{})
+		e.releases.latest["@openai/codex"] = "0.171.0"
+		down := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
+		h := e.lookupHost()
+		h.Local = &Daemon{Docker: down}
+		if localUp {
+			h.Docker, h.Local.Docker = down, e.fake
+		}
+		got, err := h.CheckClients(context.Background())
+		if protoErr(t, err).Code != "docker_unreachable" || !slices.Equal(got.Rebuilt, []string{first.Image}) || len(down.calls) == 0 {
+			t.Fatalf("local up %v: %+v %v; unreachable daemon calls %q", localUp, got, err, down.calls)
+		}
+	}
+}

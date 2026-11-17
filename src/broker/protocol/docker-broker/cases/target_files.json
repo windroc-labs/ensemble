@@ -1,0 +1,33 @@
+{
+  "valid": [
+    {
+      "content": "{\"host\": \"ssh://u@pc\", \"local_secrets\": [\"ensemble-broker-env/mini-op-password\", \"ensemble-broker-env/mini-op-ssh-key\"]}",
+      "host": "ssh://u@pc",
+      "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
+    },
+    {
+      "content": "{\"local_secrets\": [], \"host\": \"ssh://pc:2222\"}",
+      "host": "ssh://pc:2222",
+      "local_secrets": []
+    },
+    {
+      "content": "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\", \"ensemble-broker-env/b\", \"ensemble-broker-env/c\", \"ensemble-broker-env/d\", \"ensemble-broker-env/e\", \"ensemble-broker-env/f\", \"ensemble-broker-env/g\", \"ensemble-broker-env/h\", \"ensemble-broker-env/i\", \"ensemble-broker-env/j\", \"ensemble-broker-env/k\", \"ensemble-broker-env/l\", \"ensemble-broker-env/m\", \"ensemble-broker-env/n\", \"ensemble-broker-env/o\", \"ensemble-broker-env/p\"]}",
+      "host": "ssh://pc",
+      "local_secrets": ["ensemble-broker-env/a", "ensemble-broker-env/b", "ensemble-broker-env/c", "ensemble-broker-env/d", "ensemble-broker-env/e", "ensemble-broker-env/f", "ensemble-broker-env/g", "ensemble-broker-env/h", "ensemble-broker-env/i", "ensemble-broker-env/j", "ensemble-broker-env/k", "ensemble-broker-env/l", "ensemble-broker-env/m", "ensemble-broker-env/n", "ensemble-broker-env/o", "ensemble-broker-env/p"]
+    }
+  ],
+  "invalid": [
+    "{\"host\": \"ssh://pc\"}",
+    "{\"local_secrets\": []}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": null}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": \"ensemble-broker-env/mini-op-password\"}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [1]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"mini-op-password\"]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-claude/x\"]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/Mini\"]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\", \"ensemble-broker-env/a\"]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\", \"ensemble-broker-env/b\", \"ensemble-broker-env/c\", \"ensemble-broker-env/d\", \"ensemble-broker-env/e\", \"ensemble-broker-env/f\", \"ensemble-broker-env/g\", \"ensemble-broker-env/h\", \"ensemble-broker-env/i\", \"ensemble-broker-env/j\", \"ensemble-broker-env/k\", \"ensemble-broker-env/l\", \"ensemble-broker-env/m\", \"ensemble-broker-env/n\", \"ensemble-broker-env/o\", \"ensemble-broker-env/p\", \"ensemble-broker-env/q\"]}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [], \"extra\": 1}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\"], \"LOCAL_SECRETS\": []}"
+  ]
+}

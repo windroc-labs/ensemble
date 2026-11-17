@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"ensemble/broker/internal/credential"
+	"ensemble/broker/internal/docker"
 	githubapi "ensemble/broker/internal/github"
 	"ensemble/broker/internal/protocol"
 )
@@ -67,21 +68,13 @@ var (
 	// A Claude account's name: its setup-token item's keychain account. Lowercase only, so the keychain's case
 	// handling cannot merge two names.
 	claudeAccountPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	// An environment secret's name, as Claude accounts: lowercase so the keychain's case handling cannot merge two.
-	envNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
-// envItemPrefix starts every environment secret's keychain service; the broker package's envServicePrefix is the same.
-const envItemPrefix = "ensemble-broker-env/"
-
 // ValidEnvName is whether name can be an environment secret, item ensemble-broker-env/<name>.
-func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
+func ValidEnvName(name string) bool { return docker.ValidEnvName(name) }
 
 // ValidEnvItem is whether item is an environment secret's reference, ensemble-broker-env/<name>; no other keychain service is.
-func ValidEnvItem(item string) bool {
-	name, ok := strings.CutPrefix(item, envItemPrefix)
-	return ok && ValidEnvName(name)
-}
+func ValidEnvItem(item string) bool { return docker.ValidEnvItem(item) }
 
 // validSecretFile is whether file can name a secret in the container: one path component of at most maxSecretFile
 // bytes, with no C0 or C1 control character, not . or ..

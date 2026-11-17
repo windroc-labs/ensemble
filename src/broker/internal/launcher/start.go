@@ -65,6 +65,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
+	h = h.place(secretItems(m.Secrets))
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
@@ -117,11 +118,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	if len(m.Secrets) > 0 {
-		items := make([]string, len(m.Secrets))
-		for i, s := range m.Secrets {
-			items[i] = s.Item
-		}
-		if err := h.Env.Ready(items); err != nil {
+		if err := h.Env.Ready(secretItems(m.Secrets)); err != nil {
 			return StartResult{}, err
 		}
 	}
@@ -187,12 +184,8 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 		defer lock.Close()
-		holder, err := h.lockHolder(ctx, m.Lock, "")
-		if err != nil {
+		if err := h.lockBusy(ctx, m.Lock, ""); err != nil {
 			return StartResult{}, err
-		}
-		if holder != nil {
-			return StartResult{}, busy(holder)
 		}
 	}
 	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
@@ -344,12 +337,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	lap("create")
 	if m.Lock != "" {
-		holder, err := h.lockHolder(ctx, m.Lock, c)
-		if err != nil {
+		if err := h.lockBusy(ctx, m.Lock, c); err != nil {
 			return StartResult{}, held, err
-		}
-		if holder != nil {
-			return StartResult{}, held, busy(holder)
 		}
 	}
 	if err := h.bootstrap(ctx, c, m); err != nil {

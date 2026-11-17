@@ -46,7 +46,10 @@ func recording(calls *[]call) app {
 	return app{build: func(ctx context.Context, k keys, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
 		return build(ctx, k, arg, p)
 	},
-		start: result("start"), close: result("close"),
+		start: result("start"),
+		close: func(ctx context.Context, k keys, container string, _ bool) (any, error) {
+			return result("close")(ctx, k, container, nil)
+		},
 		maintain: func(ctx context.Context, k keys, container, _ string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
@@ -54,7 +57,7 @@ func recording(calls *[]call) app {
 		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, k, provider+" "+base, nil)
 		},
-		workspaceRm: func(ctx context.Context, k keys, volume string, _ bool) (any, error) {
+		workspaceRm: func(ctx context.Context, k keys, volume string, _, _ bool) (any, error) {
 			return workspaceRm(ctx, k, volume, nil)
 		},
 		checkClients: func(ctx context.Context, k keys, p io.Writer) (any, error) {
@@ -77,7 +80,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"41"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"42"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -508,6 +511,7 @@ func TestBuildOptions(t *testing.T) {
 		{[]string{"--plugin", b, "--image-plugin", "z", "--image-plugin", "a.b_c-d", "--max-age", "0"}, launcher.BuildSpec{Plugins: []string{b}, ImagePlugins: []string{"z", "a.b_c-d"}}, 0},
 		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
 		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
+		{[]string{"--image-plugin", "z", "--secret", "ensemble-broker-env/a", "--secret", "ensemble-broker-env/b", "--max-age", "0"}, launcher.BuildSpec{ImagePlugins: []string{"z"}, Secrets: []string{"ensemble-broker-env/a", "ensemble-broker-env/b"}}, 0},
 	} {
 		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
@@ -516,8 +520,27 @@ func TestBuildOptions(t *testing.T) {
 			return map[string]string{}, nil
 		}}
 		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
-			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
+			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge ||
+			!slices.Equal(spec.Secrets, c.spec.Secrets) {
 			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
+		}
+	}
+	seventeen := []string{}
+	for i := range 17 {
+		seventeen = append(seventeen, "--secret", fmt.Sprintf("ensemble-broker-env/s%d", i))
+	}
+	for _, args := range [][]string{
+		{"--secret", "ensemble-broker-claude/work"},
+		{"--secret"},
+		{"--secret", "ensemble-broker-env/a", "--image-plugin", "z"},
+		seventeen,
+	} {
+		app := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
+			t.Fatalf("%q reached build", args)
+			return nil, nil
+		}}
+		if code, _, _ := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, args...)...); code != protocol.Exit(protocol.Usage) {
+			t.Fatalf("%q: exit %d, want usage", args, code)
 		}
 	}
 }
@@ -525,7 +548,7 @@ func TestBuildOptions(t *testing.T) {
 func TestWorkspaceRmForce(t *testing.T) {
 	for want, args := range map[bool][]string{false: {"workspace-rm", "--volume", "v"}, true: {"workspace-rm", "--volume", "v", "--force"}} {
 		got := !want
-		a := app{workspaceRm: func(_ context.Context, _ keys, volume string, force bool) (any, error) {
+		a := app{workspaceRm: func(_ context.Context, _ keys, volume string, force, _ bool) (any, error) {
 			got = force
 			return map[string]any{"volume": volume, "removed": true}, nil
 		}}
@@ -538,7 +561,7 @@ func TestWorkspaceRmForce(t *testing.T) {
 func TestChannels(t *testing.T) {
 	failing := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "stage failed")
-	}, close: func(context.Context, keys, string, io.Writer) (any, error) {
+	}, close: func(context.Context, keys, string, bool) (any, error) {
 		return nil, errors.New("surprise")
 	}}
 	code, out, errOut := invoke(failing, "build", "--ensemble", "/pkg")
@@ -1117,5 +1140,41 @@ func TestSSHModeExecsSystemSSH(t *testing.T) {
 	}
 	if code != 255 || stderr.String() != "ensemble-broker ssh: exec failed\n" {
 		t.Fatalf("%d %q", code, stderr.String())
+	}
+}
+
+func TestCloseAndWorkspaceRmOnTheLocalDaemon(t *testing.T) {
+	c := "ensemble-w-0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		args  []string
+		local bool
+	}{
+		{[]string{"close", "--container", c}, false},
+		{[]string{"close", "--container", c, "--daemon", "local"}, true},
+		{[]string{"workspace-rm", "--volume", "v"}, false},
+		{[]string{"workspace-rm", "--volume", "v", "--daemon", "local"}, true},
+		{[]string{"workspace-rm", "--volume", "v", "--force", "--daemon", "local"}, true},
+	} {
+		got := !tc.local
+		a := app{close: func(_ context.Context, _ keys, container string, local bool) (any, error) {
+			got = local
+			return map[string]any{"container": container, "removed": true}, nil
+		}, workspaceRm: func(_ context.Context, _ keys, volume string, _, local bool) (any, error) {
+			got = local
+			return map[string]any{"volume": volume, "removed": true}, nil
+		}}
+		if code, _, errOut := invoke(a, tc.args...); code != 0 || got != tc.local {
+			t.Fatalf("%q: exit %d local %v: %s", tc.args, code, got, errOut)
+		}
+	}
+	for _, args := range [][]string{
+		{"close", "--container", c, "--daemon", "target"},
+		{"close", "--container", c, "--daemon"},
+		{"workspace-rm", "--volume", "v", "--daemon", "local", "--force"},
+		{"workspace-rm", "--volume", "v", "--daemon", "remote"},
+	} {
+		if code, _, _ := invoke(app{}, args...); code != protocol.Exit(protocol.Usage) {
+			t.Fatalf("%q: exit %d, want usage", args, code)
+		}
 	}
 }

@@ -13,6 +13,8 @@ import select
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable, Mapping
+from typing import NamedTuple
 
 from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
 from ensemble.utils import DOCKER_STATE, read_regular, save
@@ -30,6 +32,13 @@ STATE_READER_LABEL = "ensemble.state-reader"
 ACCESS_FILE = "state-access.json"
 ACCESS_MAX = 4096
 DAEMON = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
+ENV_ITEM = re.compile(r"ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}")
+LOCAL_SECRETS_MAX = 16
+
+
+class Target(NamedTuple):
+    host: str
+    local_secrets: tuple[str, ...]
 
 
 class Overflow(OSError):
@@ -91,23 +100,79 @@ def describe(host: str) -> str:
 
 
 def endpoint() -> str:
-    """TARGET_FILE's ssh:// host, else the local Docker Desktop."""
+    return target().host
+
+
+def target() -> Target:
+    """TARGET_FILE, by the broker's rule; no file: local, no local secrets."""
     path = os.path.join(account_home(), TARGET_FILE)
     try:
         with open(path, "rb") as f:
             data = f.read(TARGET_MAX + 1)
     except FileNotFoundError:
-        return local_endpoint()
+        return Target(local_endpoint(), ())
     except OSError as error:
         raise ConfigError(f"Docker target {path}: {error.strerror}") from None
     try:
         found = json.loads(data) if len(data) <= TARGET_MAX else None
     except ValueError:
         found = None
-    host = found.get("host") if isinstance(found, dict) and set(found) == {"host"} else None
-    if not isinstance(host, str) or not _remote(host):
-        raise ConfigError(f'Docker target {path}: want {{"host": "ssh://[user@]host[:port]"}}')
-    return host
+    host = items = None
+    if isinstance(found, dict) and set(found) == {"host", "local_secrets"}:
+        host, items = found["host"], found["local_secrets"]
+    if (
+        not isinstance(host, str)
+        or not _remote(host)
+        or not isinstance(items, list)
+        or len(items) > LOCAL_SECRETS_MAX
+        or not all(isinstance(item, str) and ENV_ITEM.fullmatch(item) for item in items)
+        or len(set(items)) != len(items)
+    ):
+        raise ConfigError(
+            f'Docker target {path}: want {{"host": "ssh://[user@]host[:port]", "local_secrets":'
+            f' [up to {LOCAL_SECRETS_MAX} distinct "ensemble-broker-env/<name>" items]}}'
+        )
+    return Target(host, tuple(items))
+
+
+def daemons() -> tuple[str, ...]:
+    host = endpoint()
+    local = local_endpoint()
+    return (host,) if host == local else (host, local)
+
+
+def placement(items: Iterable[str]) -> str:
+    """The local Docker Desktop for a worker given any local secret, else the target."""
+    found = target()
+    return local_endpoint() if set(items) & set(found.local_secrets) else found.host
+
+
+def daemon_flag(host: str) -> tuple[str, ...]:
+    """close and workspace-rm's arguments naming `host`."""
+    current = daemons()
+    if host == current[0]:
+        return ()
+    if host in current:
+        return ("--daemon", "local")
+    raise SessionError(
+        f"Docker daemon {host} is not the local Docker Desktop or the target {current[0]}"
+    )
+
+
+def env_items(credentials: Mapping[str, str]) -> tuple[str, ...]:
+    """Env secret items, merged as the broker does: `credentials`' env wins."""
+    items: tuple[str, ...] = ()
+    for key in ("environment_credentials", "credentials"):
+        try:
+            spec = json.loads(credentials.get(key) or "{}")
+        except ValueError:
+            continue
+        env = spec.get("env") if isinstance(spec, dict) else None
+        if isinstance(env, list):
+            items = tuple(
+                e["item"] for e in env if isinstance(e, dict) and isinstance(e.get("item"), str)
+            )
+    return items
 
 
 def _remote(host: str) -> bool:
@@ -152,11 +217,8 @@ def container_name(name: str, generation: str) -> str:
     return f"ensemble-{name}-{generation}"
 
 
-def docker_call(
-    docker: str, *args: str, host: str | None = None
-) -> tuple[list[str], dict[str, str]]:
-    """argv and env for `docker <args>` against `host`, else endpoint()."""
-    host = endpoint() if host is None else host
+def docker_call(docker: str, *args: str, host: str) -> tuple[list[str], dict[str, str]]:
+    """argv and env for `docker <args>` against `host`."""
     env = {k: v for k, v in os.environ.items() if k not in CLEARED}
     if host.startswith("ssh://"):
         env["PATH"] = os.pathsep.join((ssh_dir(host), env.get("PATH", os.defpath)))

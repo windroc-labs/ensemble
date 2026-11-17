@@ -31,5 +31,41 @@
         "--extra"
       ]
     }
+  },
+  {
+    "name": "close-input-local",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--daemon",
+        "local"
+      ]
+    }
+  },
+  {
+    "name": "close-input-daemon-target",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--daemon",
+        "target"
+      ]
+    }
   }
 ]

@@ -13,7 +13,7 @@ from ensemble.session.engine import daemon
 from ensemble.session.engine.daemon import OUT_MAX, Overflow, capped
 from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
 from ensemble.utils import DOCKER_STATE
-from tests.session.case import Case
+from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
@@ -83,11 +83,11 @@ class TargetTest(Case):
         local = f"unix://{self.account}/.docker/run/docker.sock"
         self.assertEqual(daemon.endpoint(), local)
         with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}):
-            argv, env = daemon.docker_call("/bin/docker", "ps")
+            argv, env = daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
         self.assertEqual((argv, env["PATH"]), (["/bin/docker", "--host", local, "ps"], "/usr/bin"))
 
     def test_remote_target_ignores_hostile_docker_environment(self):
-        self.target('{"host": "ssh://u@pc:2222"}')
+        self.target('{"host": "ssh://u@pc:2222", "local_secrets": []}')
         hostile = {
             "DOCKER_HOST": "tcp://hostile:1234",
             "DOCKER_CONTEXT": "hostile",
@@ -95,7 +95,7 @@ class TargetTest(Case):
             "PATH": "/usr/bin",
         }
         with mock.patch.dict(os.environ, hostile):
-            argv, env = daemon.docker_call("/bin/docker", "ps")
+            argv, env = daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
         self.assertEqual(argv, ["/bin/docker", "--host", "ssh://u@pc:2222", "ps"])
         self.assertFalse(set(daemon.CLEARED) & set(env))
         self.assertEqual(env["PATH"], f"{daemon.SSH_DIR}{os.pathsep}/usr/bin")
@@ -122,17 +122,79 @@ class TargetTest(Case):
             with self.subTest(content=content[:40]):
                 path = self.target(content)
                 with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
-                    daemon.docker_call("/bin/docker", "ps")
+                    daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
+
+    def test_target_files_shared_with_the_broker(self):
+        with open(
+            os.path.join(REPO, "src/broker/protocol/docker-broker/cases/target_files.json")
+        ) as f:
+            cases = json.load(f)
+        for case in cases["valid"]:
+            with self.subTest(content=case["content"][:60]):
+                self.target(case["content"])
+                self.assertEqual(
+                    daemon.target(), daemon.Target(case["host"], tuple(case["local_secrets"]))
+                )
+        for content in cases["invalid"]:
+            with self.subTest(content=content[:60]):
+                path = self.target(content)
+                with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
+                    daemon.target()
+
+    def test_no_target_file_has_no_local_secrets(self):
+        self.assertEqual(daemon.target(), daemon.Target(daemon.local_endpoint(), ()))
+
+    def test_placement_between_the_local_docker_desktop_and_the_target(self):
+        local = daemon.local_endpoint()
+        mini = ("ensemble-broker-env/mini-op-password",)
+        self.assertEqual(daemon.daemons(), (local,))
+        self.assertEqual(daemon.placement(mini), local)
+        self.assertEqual(daemon.placement(()), local)
+        self.target(
+            '{"host": "ssh://u@pc", "local_secrets": ["ensemble-broker-env/mini-op-password"]}'
+        )
+        self.assertEqual(daemon.daemons(), ("ssh://u@pc", local))
+        self.assertEqual(daemon.placement(mini), local)
+        self.assertEqual(daemon.placement(("ensemble-broker-env/other", *mini)), local)
+        self.assertEqual(daemon.placement(("ensemble-broker-env/other",)), "ssh://u@pc")
+        self.assertEqual(daemon.placement(()), "ssh://u@pc")
+
+    def test_daemon_flag_names_the_local_docker_desktop_beside_a_remote_target(self):
+        local = daemon.local_endpoint()
+        self.assertEqual(daemon.daemon_flag(local), ())
+        self.target('{"host": "ssh://u@pc", "local_secrets": []}')
+        self.assertEqual(daemon.daemon_flag(local), ("--daemon", "local"))
+        self.assertEqual(daemon.daemon_flag("ssh://u@pc"), ())
+        for host in ("ssh://u@other", "unix:///elsewhere/docker.sock"):
+            with (
+                self.subTest(host=host),
+                self.assertRaisesRegex(SessionError, "is not the local Docker Desktop"),
+            ):
+                daemon.daemon_flag(host)
+
+    def test_env_items_cases_shared_with_the_broker(self):
+        with open(
+            os.path.join(REPO, "src/broker/protocol/docker-broker/cases/env_items.json")
+        ) as f:
+            cases = json.load(f)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                self.assertEqual(daemon.env_items(case["fields"]), tuple(case["items"]))
+
+    def test_unparsable_credentials_have_no_env_items(self):
+        for text in ("", "[]", "{", '{"env": 1}', '{"env": [1]}', '{"env": [{"item": 2}]}'):
+            with self.subTest(text=text):
+                self.assertEqual(daemon.env_items({"credentials": text}), ())
 
     def test_remote_target_without_the_wrapper_is_refused(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         with (
             ssh_wrapper(present=False) as wrapper,
             self.assertRaisesRegex(
                 SessionError, f"ssh wrapper unavailable: {re.escape(wrapper)}; reinstall the broker"
             ),
         ):
-            daemon.docker_call("/bin/docker", "ps")
+            daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
 
     def test_ssh_agent_passes_only_a_set_socket(self):
         with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/private/agent.sock"}):

@@ -15,13 +15,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
 
-from ensemble.session.engine.daemon import DAEMON, TARGET, ssh_agent
+from ensemble.session.engine.daemon import DAEMON, TARGET, daemon_flag, ssh_agent
 from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "41"
+PROTOCOL = "42"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -334,6 +334,7 @@ class Broker:
         plugins: Sequence[str] = (),
         base_image: str | None = None,
         image_plugins: Sequence[str] = (),
+        secrets: Sequence[str] = (),
     ) -> tuple[str, str]:
         """`package`'s image tag and digest on `base_image` (None: ~/.ensemble/docker/worker), with
         `plugins` installed from repository sources and `image_plugins` from the base image.
@@ -342,6 +343,7 @@ class Broker:
             *(("--base-image", base_image) if base_image else ()),
             *(arg for name in plugins for arg in ("--plugin", name)),
             *(arg for name in image_plugins for arg in ("--image-plugin", name)),
+            *(arg for item in secrets for arg in ("--secret", item)),
         ]
         found = self._parsed(
             "build",
@@ -408,8 +410,8 @@ class Broker:
         )
         return Maintained(found["results"], found["next_check"], found["deadline"])
 
-    def close(self, container: str) -> bool:
-        """Whether it removed `container`; False: it was already gone."""
+    def close(self, container: str, *, host: str) -> bool:
+        """Whether it removed `container` from daemon `host`; False: it was already gone."""
         found = self._parsed(
             "close",
             lambda d: (
@@ -419,12 +421,13 @@ class Broker:
             ),
             "--container",
             container,
+            *daemon_flag(host),
         )
         return found["removed"]
 
-    def workspace_rm(self, volume: str, *, force: bool = False) -> bool:
-        """Whether it removed workspace `volume` after its check found no unsaved work (force: with
-        no check); False: none.
+    def workspace_rm(self, volume: str, *, force: bool = False, host: str) -> bool:
+        """Whether it removed workspace `volume` from daemon `host` after its check found no unsaved
+        work (force: with no check); False: none.
         """
         found = self._parsed(
             "workspace-rm",
@@ -436,6 +439,7 @@ class Broker:
             "--volume",
             volume,
             *(["--force"] if force else []),
+            *daemon_flag(host),
         )
         return found["removed"]
 

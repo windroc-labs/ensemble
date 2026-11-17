@@ -30,6 +30,10 @@ const usage = "usage: ensemble-broker version | install-codex VERSION | update-c
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
+
+// maxBuildSecrets is the most environment secret items a build names, as a manifest's env request.
+const maxBuildSecrets = 16
+
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
@@ -44,11 +48,12 @@ type app struct {
 	legacy        func() ([]string, error)                                    // old-name items the one-time rename left (legacy.go)
 	linear        func(ctx context.Context, k keys, enroll bool) (any, error) // bounded identity JSON on stdin
 	build         func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
-	start, close  step
+	start         step
+	close         func(ctx context.Context, k keys, container string, local bool) (any, error) // local: --daemon local
 	maintain      func(ctx context.Context, k keys, container, manifest string, renew bool) (any, error)
 	status        func(ctx context.Context, k keys) (any, error)
 	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
-	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
+	workspaceRm   func(ctx context.Context, k keys, volume string, force, local bool) (any, error)
 	login         func(k keys, account string, out io.Writer) error                                // login claude NAME
 	loginGitHub   func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
 	loginCodex    func(ctx context.Context, k keys, out io.Writer) error
@@ -310,13 +315,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, k, args[2], args[4])
 		}
-	case command == "close" && len(args) == 3 && args[1] == "--container" && containerPattern.MatchString(args[2]):
-		s, arg = a.close, args[2]
-	case command == "workspace-rm" && (len(args) == 3 || len(args) == 4 && args[3] == "--force") && args[1] == "--volume" &&
-		volumePattern.MatchString(args[2]):
-		force := len(args) == 4
+	case command == "close" && len(args) >= 3 && args[1] == "--container" && containerPattern.MatchString(args[2]) && onLocal(args[3:]) != nil:
+		local := *onLocal(args[3:])
+		s, arg = func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
+			return a.close(ctx, k, container, local)
+		}, args[2]
+	case command == "workspace-rm" && len(args) >= 3 && args[1] == "--volume" && volumePattern.MatchString(args[2]) &&
+		workspaceOptions(args[3:]) != nil:
+		o := workspaceOptions(args[3:])
 		s, arg = func(ctx context.Context, k keys, volume string, _ io.Writer) (any, error) {
-			return a.workspaceRm(ctx, k, volume, force)
+			return a.workspaceRm(ctx, k, volume, o.force, o.local)
 		}, args[2]
 	case command == "check-clients" && len(args) == 1:
 		s = func(ctx context.Context, k keys, _ string, progress io.Writer) (any, error) {
@@ -361,6 +369,9 @@ func buildOptions(args []string) *buildArgs {
 	for len(args) >= 2 && args[0] == "--image-plugin" && launcher.PluginNamePattern.MatchString(args[1]) {
 		o.spec.ImagePlugins, args = append(o.spec.ImagePlugins, args[1]), args[2:]
 	}
+	for len(args) >= 2 && args[0] == "--secret" && launcher.ValidEnvItem(args[1]) && len(o.spec.Secrets) < maxBuildSecrets {
+		o.spec.Secrets, args = append(o.spec.Secrets, args[1]), args[2:]
+	}
 	if len(args) == 2 && args[0] == "--max-age" && secondsPattern.MatchString(args[1]) {
 		n, _ := strconv.Atoi(args[1])
 		o.maxAge, args = time.Duration(n)*time.Second, nil
@@ -369,6 +380,39 @@ func buildOptions(args []string) *buildArgs {
 		return nil
 	}
 	return o
+}
+
+// onLocal reads a close or workspace-rm command's daemon from its trailing args: none (the target) or --daemon local;
+// nil: any other args.
+func onLocal(args []string) *bool {
+	local := len(args) == 2 && args[0] == "--daemon" && args[1] == "local"
+	if len(args) != 0 && !local {
+		return nil
+	}
+	return &local
+}
+
+type workspaceArgs struct{ force, local bool }
+
+// workspaceOptions reads workspace-rm's trailing args: an optional --force, then an optional --daemon local; nil:
+// any other args.
+func workspaceOptions(args []string) *workspaceArgs {
+	force := len(args) > 0 && args[0] == "--force"
+	if force {
+		args = args[1:]
+	}
+	if local := onLocal(args); local != nil {
+		return &workspaceArgs{force: force, local: *local}
+	}
+	return nil
+}
+
+// on is h on the local Docker Desktop when local, else on the target.
+func on(h launcher.Host, local bool) launcher.Host {
+	if local {
+		return h.OnLocal()
+	}
+	return h
 }
 
 func emit(stdout io.Writer, v any) int {
@@ -405,6 +449,10 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 		defer clean()
 		d.Progress = progress
 		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		if local := d.Local(); local != nil {
+			h.Local = &launcher.Daemon{Docker: local, Endpoint: local.Endpoint()}
+		}
+		h.LocalSecrets = d.Target().LocalSecrets
 		h.Codex = broker.NewCodex(home, k, nil)
 		h.Opencode = broker.OpencodeKeys{Keychain: k}
 		h.Env = broker.EnvKeys{Keychain: k}
@@ -466,11 +514,13 @@ func system() app {
 				return h.Maintain(ctx, container, manifest, renew)
 			})
 		},
-		close: func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
-			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })
+		close: func(ctx context.Context, k keys, container string, local bool) (any, error) {
+			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return on(h, local).Close(ctx, container) })
 		},
-		workspaceRm: func(ctx context.Context, k keys, volume string, force bool) (any, error) {
-			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
+		workspaceRm: func(ctx context.Context, k keys, volume string, force, local bool) (any, error) {
+			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) {
+				return on(h, local).WorkspaceRm(ctx, volume, force)
+			})
 		},
 		login: func(k keys, account string, out io.Writer) error {
 			return loginClaude(k, account, out)

@@ -450,7 +450,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "41"
+          "const": "42"
         }
       },
       "required": [
@@ -462,7 +462,7 @@
       "type": "object",
       "properties": {
         "argv": {
-          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
+          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then at most 16 --secret ITEM pairs (environment secret items: they choose the daemon), then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
           "type": "array",
           "prefixItems": [
             {
@@ -482,8 +482,13 @@
                   "--base-image",
                   "--plugin",
                   "--image-plugin",
+                  "--secret",
                   "--max-age"
                 ]
+              },
+              {
+                "type": "string",
+                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
               },
               {
                 "$ref": "#/$defs/plugin"
@@ -641,10 +646,24 @@
             },
             {
               "$ref": "#/$defs/container"
+            },
+            {
+              "const": "--daemon"
+            },
+            {
+              "const": "local"
             }
           ],
           "items": false,
-          "minItems": 3
+          "minItems": 3,
+          "anyOf": [
+            {
+              "maxItems": 3
+            },
+            {
+              "minItems": 5
+            }
+          ]
         }
       },
       "required": [
@@ -687,9 +706,22 @@
               "$ref": "#/$defs/volume"
             },
             {
-              "const": "--force"
+              "enum": [
+                "--force",
+                "--daemon"
+              ]
+            },
+            {
+              "enum": [
+                "--daemon",
+                "local"
+              ]
+            },
+            {
+              "const": "local"
             }
           ],
+          "$comment": "Then an optional --force, then an optional --daemon local; the broker checks the order (usage).",
           "items": false,
           "minItems": 3
         }
