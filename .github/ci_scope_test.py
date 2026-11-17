@@ -26,6 +26,7 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
+REPO_GUARDS = ("github-dir-pr",)
 
 
 def bumped(text, version="0.4.0"):
@@ -484,6 +485,7 @@ class Aggregate(unittest.TestCase):
                 "integration",
                 "mini-op",
                 "broker",
+                *REPO_GUARDS,
             )
         }
         result["changes"]["outputs"] = {
@@ -498,6 +500,29 @@ class Aggregate(unittest.TestCase):
         result["integration"]["result"] = "skipped" if docs or version else "success"
         result["broker"]["result"] = "success" if full else "skipped"
         return result
+
+    def test_repo_guards_jobs_must_succeed_and_only_pull_requests_run_github_dir_pr(self):
+        for event in ("pull_request", "push", "merge_group"):
+            for job in REPO_GUARDS:
+                for outcome in ("success", "failure", "cancelled", "skipped", None):
+                    needs = self.needs(event=event)
+                    needs[job]["result"] = outcome
+                    passes = outcome == "success" or (
+                        outcome == "skipped" and job == "github-dir-pr" and event != "pull_request"
+                    )
+                    with self.subTest(event=event, job=job, outcome=outcome):
+                        self.assertEqual(scope.gate(needs, event) == [], passes)
+        needs = self.needs()
+        needs["github-dir-pr"]["result"] = "skipped"
+        self.assertEqual(
+            scope.gate(needs, "pull_request"), ["github-dir-pr: expected success, got 'skipped'"]
+        )
+        needs = self.needs(event="push")
+        needs["github-dir-pr"]["result"] = "failure"
+        self.assertEqual(
+            scope.gate(needs, "push"),
+            ["github-dir-pr: expected skipped or success, got 'failure'"],
+        )
 
     def test_expected_full_upper_and_push_results_pass(self):
         for full, event in ((True, "pull_request"), (False, "pull_request"), (True, "push")):
@@ -732,9 +757,29 @@ class Workflow(unittest.TestCase):
         self.assertIn("    name: CI\n", ci)
         jobs = set(re.findall(r"(?m)^  ([\w-]+):$", text.split("\njobs:\n", 1)[1]))
         self.assertLessEqual({"changes", "lint", "unit", "mini-op", "ci"}, jobs)
-        for name in jobs - {"changes", "mini-op", "ci"}:
+        for name in jobs - {"changes", "mini-op", "ci", *REPO_GUARDS}:
             with self.subTest(job=name):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
+
+    def test_repo_guards_jobs_call_main_with_no_secrets_or_permissions(self):
+        calls = {"github-dir-pr": "github-dir-pr.yml"}
+        self.assertEqual(set(calls), set(REPO_GUARDS))
+        for name, workflow in calls.items():
+            body = job(name)
+            with self.subTest(job=name):
+                self.assertIn(
+                    f"    uses: windroc-labs/repo-guards/.github/workflows/{workflow}@main\n", body
+                )
+                self.assertIn("      runs-on: '\"ubuntu-24.04\"'\n", body)
+                for key in ("secrets", "permissions", "needs", "if"):
+                    self.assertNotRegex(body, rf"(?m)^    {key}:")
+        needs = re.search(r"(?m)^    needs: \[(.*)\]$", job("ci"))[1].split(", ")
+        self.assertEqual(
+            needs,
+            ["changes", "lint", "repository", "unit", "coverage", "integration", "broker"]
+            + ["mini-op", *REPO_GUARDS],
+        )
+        self.assertNotIn(".github changes in their own PR", job("lint"))
 
     def test_root_tests_run_in_every_code_scope(self):
         condition = "if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}"
