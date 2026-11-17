@@ -7,8 +7,8 @@ daemon's ID (`docker info`), not its address: a LAN address and a Tailscale addr
 
 - Each session records the daemon its state is on in `~/.ensemble/docker-state/<name>/state-access.json`. Resuming
   it while the target is another daemon fails before any volume is made, naming the session's target; set the target
-  back to it first. Reclaiming its workdir fails the same way while the workdir exists and the current target holds
-  none of its workspaces; once the workdir is gone, the session's own daemon reclaims its volumes after a close there. A session with no record belongs to the local Docker Desktop. A record from
+  back to it first. Reclaiming its workdir removes the current target's workspaces of it, then fails the same way
+  while the session's own daemon still holds its workspace, or cannot be asked. A session with no record belongs to the local Docker Desktop. A record from
   protocol 40 has no daemon and fails as malformed: if that session was made on the local Docker Desktop, delete the
   file; otherwise give it a new start.
 - The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`, so the first build after

@@ -375,6 +375,14 @@ def _accept_started(
     )
 
 
+def _refusal(name: str, action: str, host: str, owner: str, current: DockerAccess) -> str:
+    return (
+        f"docker session {name}: cannot {action} it here: its Docker target is {describe(host)}"
+        f" (daemon {owner}), the current target is {describe(current.host)} (daemon"
+        f" {current.daemon}); set the Docker target back to {host} to {action} it"
+    )
+
+
 def _sessions_at(anchor: str) -> list[str]:
     """The sessions whose latest generation's manifest has cwd `anchor`."""
     root = os.path.expanduser(DOCKER_STATE)
@@ -566,25 +574,25 @@ class DockerHost(Host):
 
     def remove_workspaces(self, cwd: str) -> list[str]:
         """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
-        With none here and cwd still there, a session at cwd whose state is on another daemon
-        refuses: once cwd is gone, that daemon's own reclaim takes its volumes.
+        Then a session at cwd whose workspace another daemon still holds, or may hold, refuses.
         """
         rows = self._workspaces()
         if rows is None:
             raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
         anchor, removed = os.path.realpath(cwd), []
-        volumes = sorted(v for v, a in rows if a == anchor)
-        if not volumes and os.path.lexists(anchor) and (sessions := _sessions_at(anchor)):
-            current = self._current(f"host {self.name}")
-            for name in sessions:
-                if why := self._refusal(name, "reclaim", current):
-                    raise SessionError(why)
-        for volume in volumes:
+        for volume in sorted(v for v, a in rows if a == anchor):
             try:
                 if self.broker.workspace_rm(volume, force=True):
                     removed.append(volume)
             except SessionError as error:
                 raise SessionError(f"docker workspace {volume} kept: {error}") from None
+        if sessions := _sessions_at(anchor):
+            current = self._current(f"host {self.name}")
+            for name in sessions:
+                if (owner := self._owner(name, current)) and (
+                    held := self._held(name, *owner)
+                ) is not None:
+                    raise SessionError(_refusal(name, "reclaim", *owner, current) + held)
         return removed
 
     def _reclaim(self) -> None:
@@ -766,9 +774,9 @@ class DockerHost(Host):
         except SessionError as error:
             raise SessionError(f"{subject}: {error}") from None
 
-    def _refusal(self, name: str, action: str, current: DockerAccess) -> str | None:
-        """Why session `name` cannot `action` here: its state is on another daemon than the current
-        target's; with no access record, on the local Docker Desktop's.
+    def _owner(self, name: str, current: DockerAccess) -> tuple[str, str] | None:
+        """Session `name`'s target and daemon when not the current one: its access record's; with
+        none, the local Docker Desktop's.
         """
         try:
             recorded = load_access(name)
@@ -782,21 +790,37 @@ class DockerHost(Host):
                 owner = daemon_id(self.docker, host, run=self.run)
             except SessionError as error:
                 owner = f"unknown: {error}"
-        if owner == current.daemon:
+        return None if owner == current.daemon else (host, owner)
+
+    def _held(self, name: str, host: str, owner: str) -> str | None:
+        """None once daemon `owner` at `host` no longer has session `name`'s workspace, the volume
+        every reclaim removes last; else "", or why that could not be checked.
+        """
+        volume = workspace_volume(name)
+        try:
+            if daemon_id(self.docker, host, run=self.run) != owner:
+                return f" ({volume} unchecked: daemon {owner} is not at {host})"
+        except SessionError as error:
+            return f" ({volume} unchecked: {error})"
+        argv, env = docker_call(self.docker, "volume", "inspect", volume, host=host)
+        try:
+            result = self.run(argv, env, timeout=RUN_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return f" ({volume} unchecked: {error})"
+        if result.returncode == 0:
+            return ""
+        if "no such volume" in result.stderr.lower():
             return None
-        return (
-            f"docker session {name}: cannot {action} it here: its Docker target is {describe(host)}"
-            f" (daemon {owner}), the current target is {describe(current.host)} (daemon"
-            f" {current.daemon}); set the Docker target back to {host} to {action} it"
-        )
+        lines = result.stderr.strip().splitlines()
+        return f" ({volume} unchecked: {lines[-1] if lines else result.returncode!r:.80})"
 
     def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
         if (metadata or {}).get("resume") == "1":
             self._check_target(name, self._current(f"docker session {name}"))
 
     def _check_target(self, name: str, current: DockerAccess) -> None:
-        if why := self._refusal(name, "resume", current):
-            raise ConfigError(why)
+        if owner := self._owner(name, current):
+            raise ConfigError(_refusal(name, "resume", *owner, current))
 
     def _drop_state(self, name: str) -> None:
         """A new start's empty client home: its readers and state volume go; the broker makes it."""
