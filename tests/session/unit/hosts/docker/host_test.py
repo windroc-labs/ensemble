@@ -1643,6 +1643,132 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.closed, [])
 
 
+class TargetIdentityTest(StartBase):
+    """A session belongs to the daemon that made it, by ID; one without a record to the local one."""
+
+    PC = "ABCD:EFGH:IJKL:MNOP:QRST:UVWX:YZ23:4567:ABCD:EFGH:IJKL:MNOP"
+
+    def setUp(self):
+        super().setUp()
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.access = os.path.join(self.state, daemon.ACCESS_FILE)
+        self.history()
+
+    def target(self, host, daemon_id):
+        """Docker target `host` (None: the local Docker Desktop), whose daemon is `daemon_id`."""
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        if host is None:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
+            host = self.local
+        else:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump({"host": host}, f)
+        self.docker.ep, self.docker.daemons[host] = host, daemon_id
+        self.broker.started = Started(
+            **{**vars(self.broker.started), "endpoint": host, "daemon": daemon_id}
+        )
+
+    @property
+    def local(self):
+        return f"unix://{self.account}/.docker/run/docker.sock"
+
+    def closed(self):
+        """A started, then closed session w on the current target."""
+        self.start()
+        self.close_quietly(self.handle)
+        self.handle = None
+
+    def refused(self, pattern):
+        """A resume fails with `pattern` before any build, broker start or volume call."""
+        before = None
+        if os.path.exists(self.access):
+            with open(self.access, "rb") as f:
+                before = f.read()
+        self.order.clear()
+        with self.assertRaisesRegex(ConfigError, pattern):
+            self.start(resume="1")
+        brokered = [o for o in self.order if isinstance(o, tuple) or o == "version"]
+        self.assertEqual(brokered, [])
+        self.assertEqual([c for c in self.order if c[:1] == ["volume"]], [])
+        if before is not None:
+            with open(self.access, "rb") as f:
+                self.assertEqual(f.read(), before)
+
+    def test_resume_on_another_daemon_is_refused_before_any_volume(self):
+        self.closed()
+        self.target("ssh://u@pc", self.PC)
+        self.refused(
+            "^docker session w: cannot resume it here: its Docker target is the local Docker"
+            rf" Desktop \({re.escape(self.local)}\) \(daemon {LOCAL_DAEMON}\), the current target"
+            rf" is ssh://u@pc \(daemon {self.PC}\); set the Docker target back to"
+            rf" {re.escape(self.local)} to resume it$"
+        )
+
+    def test_resume_of_a_remote_session_on_the_local_target_is_refused(self):
+        self.target("ssh://u@pc", self.PC)
+        self.closed()
+        self.target(None, LOCAL_DAEMON)
+        self.refused(
+            "^docker session w: cannot resume it here: its Docker target is ssh://u@pc"
+            rf" \(daemon {self.PC}\), the current target is the local Docker Desktop"
+        )
+
+    def test_resume_at_another_address_of_the_same_daemon_starts(self):
+        self.target("ssh://u@pc", self.PC)
+        self.closed()
+        self.target("ssh://u@pc.tail1234.ts.net", self.PC)
+        self.start(resume="1")
+        self.assertIn("guard", self.order)
+        self.assertEqual(
+            daemon.load_access("w"), DockerAccess(DOCKER, "ssh://u@pc.tail1234.ts.net", self.PC)
+        )
+
+    def test_pre_upgrade_session_resumes_on_the_local_target(self):
+        self.closed()
+        os.unlink(self.access)
+        self.order.clear()
+        self.start(resume="1")
+        self.assertIn("guard", self.order)
+        self.assertEqual(daemon.load_access("w"), DockerAccess(DOCKER, self.local, LOCAL_DAEMON))
+
+    def test_pre_upgrade_session_is_refused_on_a_remote_target(self):
+        self.closed()
+        os.unlink(self.access)
+        self.target("ssh://u@pc", self.PC)
+        self.refused(
+            "^docker session w: cannot resume it here: its Docker target is the local Docker"
+            rf" Desktop \({re.escape(self.local)}\) \(daemon {LOCAL_DAEMON}\), the current target"
+            rf" is ssh://u@pc \(daemon {self.PC}\)"
+        )
+        self.assertFalse(os.path.exists(self.access))
+
+    def test_pre_upgrade_session_with_the_local_daemon_down_is_refused_on_a_remote_target(self):
+        self.closed()
+        os.unlink(self.access)
+        self.target("ssh://u@pc", self.PC)
+        del self.docker.daemons[self.local]
+        self.refused(
+            "^docker session w: cannot resume it here: its Docker target is the local Docker"
+            rf" Desktop \({re.escape(self.local)}\) \(daemon unknown: Docker target"
+        )
+
+    def test_preflight_of_a_refused_resume_builds_nothing(self):
+        self.closed()
+        self.target("ssh://u@pc", self.PC)
+        self.order.clear()
+        metadata = {**self.METADATA, "resume": "1"}
+        for check in (self.host._preflight, self.host._validate):
+            with self.subTest(check=check.__name__):
+                with self.assertRaisesRegex(ConfigError, "cannot resume it here"):
+                    check("w", self.launch, metadata)
+                self.assertNotIn(("build", mock.ANY), self.order)
+                self.assertNotIn("version", self.order)
+
+
 class PreflightTest(Base):
     def validate(self):
         self.host.validate("w", Launch(("agent",), cwd=self.cwd, env={}))

@@ -32,8 +32,11 @@ from ensemble.session.engine.daemon import (
     capped,
     container_name,
     daemon_id,
+    describe,
     docker_call,
     endpoint,
+    load_access,
+    local_endpoint,
     save_access,
     ssh_agent,
     state_volume,
@@ -621,6 +624,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; start does lock and credential checks."""
+        self._check_resume(name, metadata)
         self._credentials(name, metadata or {})
         environment = self._environment(name, metadata)
         if environment is None:
@@ -636,6 +640,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; the start builds and locks."""
+        self._check_resume(name, metadata)
         self._credentials(name, metadata or {})
         if self._environment(name, metadata) is None:
             self.validate(name, launch)
@@ -720,10 +725,41 @@ class DockerHost(Host):
             )
         return hook, root, built
 
-    def _current(self) -> DockerAccess:
+    def _current(self, name: str) -> DockerAccess:
         """The current target and its daemon's ID, looked up now: an address may reach another daemon later."""
         host = endpoint()
-        return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
+        try:
+            return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
+        except SessionError as error:
+            raise SessionError(f"docker session {name}: {error}") from None
+
+    def _check_target(self, name: str, action: str, current: DockerAccess) -> None:
+        """ConfigError unless session `name`'s state is on the current target's daemon; with no access
+        record, it is the local Docker Desktop's.
+        """
+        try:
+            recorded = load_access(name)
+        except OSError as error:
+            raise SessionError(f"docker session {name}: state access: {error}") from None
+        host, owner = (recorded.host, recorded.daemon) if recorded else (local_endpoint(), None)
+        if owner is None:
+            if host == current.host:
+                return
+            try:
+                owner = daemon_id(self.docker, host, run=self.run)
+            except SessionError as error:
+                owner = f"unknown: {error}"
+        if owner == current.daemon:
+            return
+        raise ConfigError(
+            f"docker session {name}: cannot {action} it here: its Docker target is {describe(host)}"
+            f" (daemon {owner}), the current target is {describe(current.host)} (daemon"
+            f" {current.daemon}); set the Docker target back to {host} to {action} it"
+        )
+
+    def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
+        if (metadata or {}).get("resume") == "1":
+            self._check_target(name, "resume", self._current(name))
 
     def _drop_state(self, name: str) -> None:
         """A new start's empty client home: its readers and state volume go; the broker makes it."""
@@ -802,10 +838,9 @@ class DockerHost(Host):
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
-        try:
-            current = self._current()
-        except SessionError as error:
-            raise SessionError(f"docker session {name}: {error}") from None
+        current = self._current(name)
+        if resume == "1":
+            self._check_target(name, "resume", current)
         try:
             save_access(name, current)
         except OSError as error:
