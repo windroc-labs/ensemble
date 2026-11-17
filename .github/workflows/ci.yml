@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Classify changed paths
@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Install pinned tools
@@ -154,7 +154,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Install pinned test dependencies
@@ -210,7 +210,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Protect shipped source
@@ -263,7 +263,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Install pinned coverage
@@ -330,7 +330,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Install tmux
@@ -423,7 +423,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Scan .mini-op/
@@ -465,7 +465,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python 3.11
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.11"
       - name: Require every applicable job
