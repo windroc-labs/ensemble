@@ -187,33 +187,27 @@ def _no_files() -> Mapping[str, str]:
 
 
 class DaemonName(StrEnum):
-    LOCAL = "local"  # the Mac's Docker Desktop
-    REMOTE = "remote"  # the Docker target
+    LOCAL = "local"
+    REMOTE = "remote"
 
 
 class Daemon(NamedTuple):
-    """A Docker daemon the broker's target command lists: its ID once reached, else why not."""
+    """One of the broker's target daemons: its ID once reached, else why not."""
 
-    name: str  # "local", the Mac's Docker Desktop, or "remote", the Docker target
+    name: str
     endpoint: str
     remote: bool
-    path: str  # the PATH docker runs with to reach it
+    path: str
     id: str | None = None
     unreachable: str | None = None
 
 
 class Target(NamedTuple):
-    """The configured daemons, `default` naming the one a new session takes unless its
-    environment names another.
-    """
-
     default: str
     daemons: tuple[Daemon, ...]
 
 
 class DaemonRecord(NamedTuple):
-    """The daemon a session's first start chose, and the docker CLI that reaches it."""
-
     daemon: Daemon
     docker: str
 
@@ -413,7 +407,7 @@ class EnvironmentSpec:
     plugins: tuple[str, ...] = ()
     lock: str | None = None
     prefetch: Mapping[str, str] | None = None
-    daemon: str | None = None  # "local": the Docker Desktop on the Mac; None: the default
+    daemon: str | None = None
 
     def __post_init__(self):
         plugins = self.plugins

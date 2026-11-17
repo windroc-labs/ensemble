@@ -110,9 +110,6 @@ class FakePopen:
 
 
 def ssh_dir(root):
-    """A directory under `root` holding an executable `ssh`, as the broker's target lists first in
-    a remote daemon's PATH.
-    """
     directory = os.path.join(root, "broker-ssh")
     os.makedirs(directory, exist_ok=True)
     wrapper = os.path.join(directory, "ssh")

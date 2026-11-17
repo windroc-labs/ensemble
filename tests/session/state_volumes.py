@@ -93,9 +93,7 @@ class _Stdin:
 
 
 class Volumes:
-    """`volumes`: sessions with a volume (default: each dir); `images`: image ls output; `error`:
-    every docker call's stderr as it fails, as from an unreachable daemon.
-    """
+    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr."""
 
     def __init__(self):
         self.calls, self.readers = [], []
@@ -139,7 +137,6 @@ class Volumes:
 
 
 def record(session, found=LOCAL):
-    """Session `session`'s daemon record: daemon `found`, reached by DOCKER."""
     daemon.save_record(session, DaemonRecord(found, DOCKER))
 
 

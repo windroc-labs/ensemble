@@ -506,7 +506,7 @@ class DockerHost(Host):
 
     def _beside(self, down: tuple[Daemon, ...]) -> tuple[Daemon, ...]:
         """The unreachable daemons of two: with one, it stays silent as before."""
-        return down if len(self._target().daemons) > 1 else ()
+        return down if down and len(self._target().daemons) > 1 else ()
 
     def tui_settings(self) -> TuiSettings:
         return replace(super().tui_settings(), status_line=True, badge="🐳")
@@ -518,7 +518,12 @@ class DockerHost(Host):
         reach are not asked. Admission needs one answer: a worker on an unreachable daemon loses
         its heartbeat and ends.
         """
-        daemons = self._target().daemons
+        try:
+            daemons = self._target().daemons
+        except SessionError as error:
+            if required:
+                raise SessionError(f"host {self.name}: inventory unavailable ({error})") from None
+            return [], ()
         listed: list[tuple[Daemon, list[str]]] = []
         down = []
         for daemon in daemons:
@@ -646,10 +651,8 @@ class DockerHost(Host):
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
     def remove_workspaces(self, cwd: str) -> list[str]:
-        """Every volume labelled realpath(cwd) on the daemon its session is recorded on, unsaved
-        work included; at a refusal, the rest kept. A session at cwd whose recorded daemon is not
-        reached is removed by that daemon's ID, which the broker refuses while no configured
-        daemon has it.
+        """Every volume labelled realpath(cwd), on its session's daemon, unsaved work included;
+        at a refusal, the rest kept.
         """
         anchor, target = os.path.realpath(cwd), self._target()
         found: list[tuple[Daemon, str]] = []
@@ -681,7 +684,15 @@ class DockerHost(Host):
     def _reclaim(self) -> None:
         """Each daemon that answers; an unreachable one's volumes and markers stay."""
         daemons = self._target().daemons
-        listed = {d: rows for d in daemons if (rows := self._workspaces(d)) is not None}
+        listed = {}
+        for daemon in daemons:
+            try:
+                rows = self._workspaces(daemon)
+            except Unanswered as error:
+                LOG.warning("docker reclaim: %s", error)
+                continue
+            if rows is not None:
+                listed[daemon] = rows
         gone = [
             (daemon, volume)
             for daemon, rows in listed.items()
@@ -911,7 +922,7 @@ class DockerHost(Host):
         return found
 
     def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> Daemon | None:
-        """A resume's daemon, refused before any build; None for a new start."""
+        """A resume's daemon, before any build; None for a new start."""
         if (metadata or {}).get("resume") == "1":
             return self._resumed(name)
         return None
