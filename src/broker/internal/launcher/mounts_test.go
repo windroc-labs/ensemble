@@ -101,3 +101,14 @@ func TestMountCSVQuoting(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSessionVolumesRoundTrip(t *testing.T) {
+	if got := volumesOf("worker_1"); got != (sessionVolumes{Workspace: "ensemble-ws-worker_1", State: "ensemble-state-worker_1"}) {
+		t.Fatalf("volumesOf = %+v", got)
+	}
+	for volume, want := range map[string]string{"ensemble-ws-worker_1": "worker_1", "ensemble-ws-": "", "custom": "", "ensemble-state-worker_1": ""} {
+		if name, ok := sessionOf(volume); name != want || ok != (want != "") {
+			t.Errorf("sessionOf(%q) = %q, %v", volume, name, ok)
+		}
+	}
+}

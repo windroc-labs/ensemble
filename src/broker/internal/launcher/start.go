@@ -168,7 +168,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, d, stateVolume(m.Name), e)
+				h.removeVolume(ctx, d, volumesOf(m.Name).State, e)
 			}
 		}()
 	}
@@ -226,7 +226,7 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	tmpfs := func(target, options string) {
 		add("--tmpfs", target+":"+options, audit.Mount{Type: "tmpfs", Target: target, Mode: "rw"})
 	}
-	state := stateVolume(m.Name)
+	state := volumesOf(m.Name).State
 	kept := func(subpath, target string) {
 		add("--mount", stateMount(state, subpath, target), audit.Mount{Type: "volume", Source: state, Target: target, Mode: "rw"})
 	}

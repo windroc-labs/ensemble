@@ -158,7 +158,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("invalid daemon")
 	case !imagePattern.MatchString(m.Image):
 		return reject("image must be ensemble-worker:<64 hex>")
-	case m.Workspace != "ensemble-ws-"+m.Name:
+	case m.Workspace != volumesOf(m.Name).Workspace:
 		return reject("workspace must be ensemble-ws-<name>")
 	case !strings.HasPrefix(m.CWD, "/") || !strings.HasPrefix(m.StateDir(), "/") || m.HasHook && !strings.HasPrefix(m.HookPath, "/"):
 		return reject("paths must be absolute")

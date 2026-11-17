@@ -127,8 +127,22 @@ func stateMount(volume, subpath, target string) string {
 	return mountSpec("type=volume", "source="+volume, "target="+target, "volume-subpath="+subpath, "volume-nocopy")
 }
 
-func stateVolume(name string) string {
-	return stateVolumePrefix + name
+const workspacePrefix = "ensemble-ws-"
+
+// sessionVolumes are a session's workspace and client state volumes, found by name alone.
+type sessionVolumes struct{ Workspace, State string }
+
+func volumesOf(name string) sessionVolumes {
+	return sessionVolumes{Workspace: workspacePrefix + name, State: stateVolumePrefix + name}
+}
+
+// sessionOf is the session whose workspace volume is named workspace.
+func sessionOf(workspace string) (string, bool) {
+	name, ok := strings.CutPrefix(workspace, workspacePrefix)
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // stateDirs are the subpaths m's mounts name, parents first.
@@ -237,7 +251,7 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 }
 
 func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
-	v := stateVolume(m.Name)
+	v := volumesOf(m.Name).State
 	labels, err := h.volumeLabels(ctx, d, v)
 	created = docker.Absent(err)
 	l := info.Config.Labels
@@ -277,7 +291,7 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 
 // removeStateVolume removes the readers first: they mount the volume.
 func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string) error {
-	v := stateVolume(name)
+	v := volumesOf(name).State
 	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
 	if err != nil {
 		return failure(err, protocol.WorkspaceFailed, "Cannot list the readers of "+v+".")
