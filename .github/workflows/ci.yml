@@ -134,7 +134,7 @@ jobs:
         run: '"$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes='
       - name: Typos
         if: ${{ !cancelled() && matrix.group == 'style' }}
-        uses: crate-ci/typos@v1.47.0
+        uses: crate-ci/typos@v1.52.2
         with:
           config: pyproject.toml
 
