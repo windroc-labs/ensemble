@@ -1,0 +1,142 @@
+[
+  {
+    "name": "target-output-local",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "default": "local",
+      "daemons": [
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-remote",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "default": "remote",
+      "daemons": [
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:DAEMON:1"
+        },
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-remote-unreachable",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "default": "remote",
+      "daemons": [
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "unreachable": "host key unknown: not in ~/.ssh/known_hosts (Host key verification failed.)"
+        },
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-id-and-unreachable",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "default": "local",
+      "daemons": [
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
+          "unreachable": "x"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-neither",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "default": "local",
+      "daemons": [
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-other-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "default": "local",
+      "daemons": [
+        {
+          "name": "pc",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  }
+]

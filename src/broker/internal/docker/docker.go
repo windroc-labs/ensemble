@@ -145,6 +145,9 @@ func New(home string) (*CLI, func(), error) {
 // Target is the Docker target setting c was made with.
 func (c *CLI) Target() Target { return c.target }
 
+// TargetErr is the invalid target setting's error; nil for a valid one or none.
+func (c *CLI) TargetErr() error { return c.targetErr }
+
 // Local is a CLI for the local Docker Desktop beside c's remote target, with c's config and Progress; nil when c's
 // target is the local Docker Desktop.
 func (c *CLI) Local() *CLI {

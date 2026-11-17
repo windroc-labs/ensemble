@@ -136,16 +136,34 @@ func (r records) replacedPath(key string) string { return r.path(key + ".replace
 
 // identify is d with its ID, and its image records; failures are code, an unreachable daemon docker_unreachable.
 func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemon, records, error) {
-	out, err := d.Runner.Run(ctx, []string{"info", "--format", "{{json .ID}}"}, nil)
-	if err != nil {
-		return Daemon{}, records{}, failure(err, code, "Cannot read the Docker daemon's ID.")
-	}
-	var id string
-	if json.Unmarshal(bytes.TrimSpace(out), &id) != nil || !daemonPattern.MatchString(id) {
-		return Daemon{}, records{}, protocol.Newf(code, "The Docker daemon's ID %.80q is not usable.", strings.TrimSpace(string(out)))
+	id, err := daemonID(ctx, d)
+	var u *docker.Unreachable
+	switch {
+	case errors.As(err, &u):
+		return Daemon{}, records{}, failure(err, code, "")
+	case err != nil:
+		return Daemon{}, records{}, protocol.New(code, err.(*protocol.Error).Message)
 	}
 	d.ID = id
 	return d, records{filepath.Join(h.dockerPath("images"), id)}, nil
+}
+
+// daemonID is d's daemon's ID: a *docker.Unreachable when d cannot be reached, else a *protocol.Error whose message
+// says why.
+func daemonID(ctx context.Context, d Daemon) (string, error) {
+	out, err := d.Runner.Run(ctx, docker.InfoID, nil)
+	var u *docker.Unreachable
+	switch {
+	case errors.As(err, &u):
+		return "", u
+	case err != nil:
+		return "", protocol.New(protocol.InternalError, "Cannot read the Docker daemon's ID.")
+	}
+	var id string
+	if json.Unmarshal(bytes.TrimSpace(out), &id) != nil || !daemonPattern.MatchString(id) {
+		return "", protocol.Newf(protocol.InternalError, "The Docker daemon's ID %.80q is not usable.", strings.TrimSpace(string(out)))
+	}
+	return id, nil
 }
 
 func (h Host) now() time.Time {

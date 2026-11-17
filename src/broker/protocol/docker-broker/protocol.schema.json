@@ -989,7 +989,8 @@
                 "workspace-rm",
                 "unknown",
                 "probe-provider",
-                "check-clients"
+                "check-clients",
+                "target"
               ]
             },
             "code": {
@@ -1147,7 +1148,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "check-clients"
+                    "check-clients",
+                    "target"
                   ]
                 }
               }
@@ -1248,7 +1250,8 @@
                     "build",
                     "start",
                     "close",
-                    "workspace-rm"
+                    "workspace-rm",
+                    "target"
                   ]
                 }
               }
@@ -1451,7 +1454,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "check-clients"
+                    "check-clients",
+                    "target"
                   ]
                 }
               }
@@ -1772,6 +1776,92 @@
       },
       "required": [
         "rebuilt"
+      ],
+      "additionalProperties": false
+    },
+    "target_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "target"
+            }
+          ],
+          "items": false,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "target_output": {
+      "$comment": "The configured Docker daemons, the default first: local, the Mac's Docker Desktop, always; remote, the target setting's host, when set. A daemon the broker reached has its id; one it could not reach has why instead.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "enum": [
+            "local",
+            "remote"
+          ]
+        },
+        "daemons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "endpoint": {
+                "$ref": "#/$defs/endpoint"
+              },
+              "remote": {
+                "type": "boolean"
+              },
+              "path": {
+                "$ref": "#/$defs/text"
+              },
+              "id": {
+                "$ref": "#/$defs/daemon"
+              },
+              "unreachable": {
+                "$ref": "#/$defs/text"
+              }
+            },
+            "required": [
+              "name",
+              "endpoint",
+              "remote",
+              "path"
+            ],
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "required": [
+                  "id"
+                ]
+              },
+              {
+                "required": [
+                  "unreachable"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "default",
+        "daemons"
       ],
       "additionalProperties": false
     },

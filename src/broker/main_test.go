@@ -62,7 +62,8 @@ func recording(calls *[]call) app {
 		},
 		checkClients: func(ctx context.Context, k keys, p io.Writer) (any, error) {
 			return result("check-clients")(ctx, k, "", p)
-		}}
+		},
+		target: func(ctx context.Context, k keys) (any, error) { return result("target")(ctx, k, "", nil) }}
 }
 
 // invoke runs args on a, with a keychain and an old-name check that find nothing unless a sets its own.
@@ -189,7 +190,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "check_clients_input", "target_input") {
 		t.Run(c.Name, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -205,7 +206,7 @@ func TestInputFixtures(t *testing.T) {
 				switch in.Argv[0] {
 				case "probe-provider":
 					want.arg = in.Argv[2] + " " + in.Argv[4]
-				case "version", "status", "check-clients":
+				case "version", "status", "check-clients", "target":
 				default:
 					want.arg = in.Argv[2]
 				}
@@ -1187,7 +1188,7 @@ func TestWithHostDaemons(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer clean()
-	local := launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock"}
+	local := launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Path: "/usr/bin:/bin:/usr/sbin:/sbin"}
 	if got := daemons(d); len(got) != 1 || got[0].Runner != d || withoutRunner(got[0]) != local {
 		t.Fatalf("no target: %+v", got)
 	}
@@ -1201,7 +1202,7 @@ func TestWithHostDaemons(t *testing.T) {
 	}
 	defer clean()
 	got := daemons(d)
-	remote := launcher.Daemon{Name: launcher.DaemonRemote, Endpoint: "ssh://u@pc", Remote: true}
+	remote := launcher.Daemon{Name: launcher.DaemonRemote, Endpoint: "ssh://u@pc", Remote: true, Path: docker.SSHDir + ":/usr/bin:/bin:/usr/sbin:/sbin"}
 	if len(got) != 2 || got[0].Runner != d || withoutRunner(got[0]) != remote || got[1].Runner == nil || withoutRunner(got[1]) != local {
 		t.Fatalf("remote target: %+v", got)
 	}
@@ -1214,4 +1215,22 @@ func TestWithHostDaemons(t *testing.T) {
 func withoutRunner(d launcher.Daemon) launcher.Daemon {
 	d.Runner = nil
 	return d
+}
+
+func TestTargetCommandRefusesAnInvalidSetting(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, docker.TargetFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"host": "ssh://u@pc", "local_secrets": [], "extra": 1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := system()
+	a.keychain = func(bool) (keys, error) { return keys{Home: home}, nil }
+	code, out, errOut := invoke(a, "target")
+	assertError(t, errOut, out, "target", protocol.DockerUnreachable)
+	if code != 7 || !strings.Contains(errOut, path) || !strings.Contains(errOut, "invalid target setting") {
+		t.Fatalf("%d %s", code, errOut)
+	}
 }

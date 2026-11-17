@@ -174,6 +174,8 @@ class DockerBrokerProtocol(Case):
             "status_output",
             "workspace_rm_input",
             "workspace_rm_output",
+            "target_input",
+            "target_output",
             "error",
         ):
             for valid in (True, False):

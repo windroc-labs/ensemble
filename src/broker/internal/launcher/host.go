@@ -84,7 +84,43 @@ type Daemon struct {
 	ID       string
 	Endpoint string
 	Remote   bool
+	Path     string // the PATH its docker runs with
 	Runner   docker.Runner
+}
+
+// TargetDaemon is one configured daemon as the target command reports it: its ID once reached, else why not.
+type TargetDaemon struct {
+	Name        string `json:"name"`
+	Endpoint    string `json:"endpoint"`
+	Remote      bool   `json:"remote"`
+	Path        string `json:"path"`
+	ID          string `json:"id,omitempty"`
+	Unreachable string `json:"unreachable,omitempty"`
+}
+
+type TargetResult struct {
+	Default string         `json:"default"`
+	Daemons []TargetDaemon `json:"daemons"`
+}
+
+// Target is every configured daemon, the default first, each identified once.
+func (h Host) Target(ctx context.Context) TargetResult {
+	result := TargetResult{Default: h.Daemons[0].Name, Daemons: []TargetDaemon{}}
+	for _, d := range h.Daemons {
+		t := TargetDaemon{Name: d.Name, Endpoint: d.Endpoint, Remote: d.Remote, Path: d.Path}
+		id, err := daemonID(ctx, d)
+		var u *docker.Unreachable
+		switch {
+		case err == nil:
+			t.ID = id
+		case errors.As(err, &u):
+			t.Unreachable = u.Reason
+		default:
+			t.Unreachable = err.(*protocol.Error).Message
+		}
+		result.Daemons = append(result.Daemons, t)
+	}
+	return result
 }
 
 type Host struct {

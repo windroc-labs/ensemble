@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | target | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -63,6 +63,7 @@ type app struct {
 	installCodex  func(context.Context, string, bool) (any, error)
 	hostGH        func(ctx context.Context, k keys, gh string) (any, error) // host-gh-login --gh PATH
 	checkClients  func(ctx context.Context, k keys, progress io.Writer) (any, error)
+	target        func(ctx context.Context, k keys) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -234,7 +235,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "check-clients":
+		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "check-clients", "target":
 			command = args[0]
 		case "login", "retrust":
 			var login func(keys) error
@@ -326,6 +327,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, k keys, volume string, _ io.Writer) (any, error) {
 			return a.workspaceRm(ctx, k, volume, o.force, o.local)
 		}, args[2]
+	case command == "target" && len(args) == 1:
+		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
+			return a.target(ctx, k)
+		}
 	case command == "check-clients" && len(args) == 1:
 		s = func(ctx context.Context, k keys, _ string, progress io.Writer) (any, error) {
 			return a.checkClients(ctx, k, progress)
@@ -422,9 +427,9 @@ func daemons(d *docker.CLI) []launcher.Daemon {
 	if d.Target().Remote() {
 		name = launcher.DaemonRemote
 	}
-	list := []launcher.Daemon{{Name: name, Endpoint: d.Endpoint(), Remote: d.Target().Remote(), Runner: d}}
+	list := []launcher.Daemon{{Name: name, Endpoint: d.Endpoint(), Remote: d.Target().Remote(), Path: d.Path(), Runner: d}}
 	if local := d.Local(); local != nil {
-		list = append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: local.Endpoint(), Runner: local})
+		list = append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: local.Endpoint(), Path: local.Path(), Runner: local})
 	}
 	return list
 }
@@ -507,6 +512,18 @@ func system() app {
 		},
 		checkClients: func(ctx context.Context, k keys, progress io.Writer) (any, error) {
 			return withHost("check-clients", "", k, progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
+		},
+		target: func(ctx context.Context, k keys) (any, error) {
+			d, clean, err := docker.New(k.Home)
+			if err != nil {
+				return nil, err
+			}
+			defer clean()
+			var u *docker.Unreachable
+			if errors.As(d.TargetErr(), &u) {
+				return nil, protocol.New(protocol.DockerUnreachable, u.Error())
+			}
+			return launcher.Host{Home: k.Home, Daemons: daemons(d)}.Target(ctx), nil
 		},
 		start: func(ctx context.Context, k keys, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", k, progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
