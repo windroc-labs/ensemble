@@ -1426,7 +1426,8 @@ class HostedSession(Session):
         if not self._bound:
             return
         try:
-            resolved = self._client.session_metadata(self._info)
+            home = self._host._home_store(self.name or "", _client_home(self._client))
+            resolved = self._client.session_metadata(self._info, home=home)
             resume = self._host_resume(self._info.cwd) or resolved.resume
             info = replace(self._info, transcript=resolved.transcript, resume=resume)
         except OSError:

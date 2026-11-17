@@ -12,7 +12,7 @@ from ensemble.session.clients.codex.common import (
     reset_at,
 )
 from ensemble.session.clients.codex.common.types import SessionState
-from ensemble.session.clients.common import split_flags
+from ensemble.session.clients.common import home_of, split_flags
 from ensemble.session.engine.types import (
     Activity,
     Blocked,
@@ -44,7 +44,8 @@ class CodexHeadless(JsonHeadless):
 
     def launch(self, spec: Spec):
         resume = spec.resume
-        self.state = self.common.prepare(spec)
+        home = home_of(self._context)
+        self.state = self.common.prepare(spec, home)
         self.limit_sent, self.started, self.last_reply = False, False, ""
         snapshot = self.state.snapshot
         found = self._context.container
@@ -58,6 +59,7 @@ class CodexHeadless(JsonHeadless):
                 interactive=False,
                 mode=mode,
                 configured=self.common.flags,
+                home=home,
                 unattended=found is not None,
                 resume=resume,
             ),
@@ -72,7 +74,7 @@ class CodexHeadless(JsonHeadless):
             unset=self.common.UNSET,
             cwd=snapshot.cwd,
             project=snapshot.project,
-            transcript=self.common.transcript(self.state) if resume else "",
+            transcript=self.common.transcript(self.state, home) if resume else "",
             resume=self.common.resume_command(self.state) if resume else "",
         )
 

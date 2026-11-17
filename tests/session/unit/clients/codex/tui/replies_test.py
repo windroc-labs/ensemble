@@ -11,9 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import tui
-from ensemble.session.clients.codex.common import SessionStore
+from ensemble.session.clients.codex.common import SessionStore, session_size
 from ensemble.session.clients.codex.tui import replies
-from ensemble.session.engine.types import HookCall
+from ensemble.session.engine.client_state import LocalHome, VolumeHome
+from ensemble.session.engine.types import HomePath, HomeStore, HookCall
 from ensemble.utils import STALE_AGE, docker_home, file_lock, read_reply
 from tests.session.case import SPAWNS
 from tests.session.state_volumes import serve
@@ -24,6 +25,8 @@ NAME = "w1"
 
 
 class RepliesBase(Base):
+    store: HomeStore = LocalHome()  # the session's home-store
+
     def setUp(self):
         super().setUp()
         self.prepare()
@@ -37,7 +40,7 @@ class RepliesBase(Base):
         self.state_file = replies.state_path(SessionStore().root, str(self.work), self.sid)
 
     def hook(self, label, *, events: str | None = "", name=NAME, **fields) -> dict:
-        state = {"store": SessionStore().root, "name": name}
+        state = {"store": SessionStore().root, "name": name, "home": self.store.persisted()}
         payload = {"session_id": NATIVE, "cwd": str(self.cwd), **fields}
         call = HookCall(
             label,
@@ -77,7 +80,7 @@ class RepliesBase(Base):
         self.append(said("user", prompt))
 
     def pump(self):
-        replies.settle_pending(SessionStore().root, str(self.work), self.sid)
+        replies.settle_pending(SessionStore().root, str(self.work), self.sid, self.store)
 
 
 class SteerTest(RepliesBase):
@@ -188,7 +191,7 @@ class SteerTest(RepliesBase):
         )
         with file_lock(self.state_file, wait=False):
             began = time.monotonic()
-            replies.on_hook(call, began=began - replies.DEADLINES["Interrupt"])
+            replies.on_hook(call, began=began - replies.DEADLINES["Interrupt"], home=self.store)
             self.assertLess(time.monotonic() - began, 0.5)
         self.assertIn("locked", self.stderr.getvalue())
 
@@ -335,10 +338,10 @@ class ScanTest(RepliesBase):
         self.append(*[filler] * 3000, said("user", "status?"), said("assistant", "answer"))
         state = self.state()
         start = state["turn"]["start"]
-        (found,) = replies.scan(state, budget=replies.HOOK_SCAN_MAX)["steers"].values()
+        (found,) = replies.scan(state, self.store, budget=replies.HOOK_SCAN_MAX)["steers"].values()
         self.assertIsNone(found["answer"])
         self.assertLessEqual(found["cursor"] - start, replies.SCAN_MAX)
-        (found,) = replies.scan(state, budget=1000)["steers"].values()
+        (found,) = replies.scan(state, self.store, budget=1000)["steers"].values()
         self.assertLessEqual(found["cursor"] - start, 1000)
         self.assertFalse(found["skip"])  # a read the budget cut short skips no record
         for _ in range(4):  # a pump's settle reads SCAN_MAX of the ~3 MB filler
@@ -373,7 +376,9 @@ class ScanTest(RepliesBase):
 
 
 class DockerRolloutTest(RepliesBase):
-    """Steer replies from a Docker session's Codex home, read through client_state."""
+    """Steer replies from a Docker session's Codex home, read through its volume's store."""
+
+    store = VolumeHome("w", "codex")
 
     def setUp(self):
         super().setUp()
@@ -395,7 +400,8 @@ class DockerRolloutTest(RepliesBase):
         self.assertEqual(read_reply(self.events, reply_id), "answer")
 
     def test_the_rollout_size_and_a_linked_rollout(self):
-        self.assertEqual(replies._size(str(self.path)), self.path.stat().st_size)
+        path = HomePath(str(self.codex_home), str(self.path.relative_to(self.codex_home)))
+        self.assertEqual(session_size(self.store, path), self.path.stat().st_size)
         self.open_turn()
         self.steer("status?")
         other = self.root / "other.jsonl"
@@ -403,7 +409,7 @@ class DockerRolloutTest(RepliesBase):
         other.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
         self.path.unlink()
         self.path.symlink_to(other)
-        self.assertEqual(replies._size(str(self.path)), 0)
+        self.assertEqual(session_size(self.store, path), 0)
         self.hook("Stop", turn_id="t1", last_assistant_message="end")
         self.assertEqual(self.lines(), [])
 
@@ -445,6 +451,7 @@ class PumpTest(RepliesBase):
                     budget=replies.HOOK_SCAN_MAX,
                     clock=clock,
                     sleep=clock.sleep,
+                    home=self.store,
                 )
                 self.assertIsNotNone(self.state()["steers"][0]["at"])
                 self.append(said("assistant", "answer"))

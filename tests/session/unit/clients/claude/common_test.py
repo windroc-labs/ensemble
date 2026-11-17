@@ -58,7 +58,7 @@ from tests.session.unit.clients.claude.support import (
     store,
     tui_launch,
 )
-from tests.session.unit.clients.support import holds, packaged_table
+from tests.session.unit.clients.support import holds, opened_below, packaged_table
 
 PLUGIN = '{"enabledPlugins": {"ensemble@windroc": false}}'
 
@@ -1118,30 +1118,6 @@ def write(path: str, data: bytes = b"{}\n", mtime: float | None = None) -> None:
         f.write(data)
     if mtime is not None:
         os.utime(path, (mtime, mtime))
-
-
-@contextlib.contextmanager
-def opened_below(root: str, *, itself: bool):
-    """The paths os.open, os.stat, os.lstat and os.scandir are called with, by name rather than
-    below a dir fd, under `root` (`itself`: or at it), recorded while the context lasts.
-    """
-    roots = {os.path.abspath(root), os.path.realpath(root)}
-    touched: list[str] = []
-
-    def watched(real):
-        def call(path=os.curdir, *args, **kwargs):
-            if kwargs.get("dir_fd") is None and isinstance(path, (str, bytes, os.PathLike)):
-                found = os.path.abspath(os.fsdecode(path))
-                if any(found.startswith(r + os.sep) or itself and found == r for r in roots):
-                    touched.append(found)
-            return real(path, *args, **kwargs)
-
-        return call
-
-    with contextlib.ExitStack() as stack:
-        for name in ("open", "stat", "lstat", "scandir"):
-            stack.enter_context(mock.patch(f"os.{name}", watched(getattr(os, name))))
-        yield touched
 
 
 class DockerStateReadTest(Base):

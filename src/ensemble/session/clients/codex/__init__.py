@@ -60,8 +60,8 @@ class CodexClient(Client):
     def usage(self, output):
         return self.common.parse_usage(output)
 
-    def session_metadata(self, info):
-        return self.common.session_metadata(info)
+    def session_metadata(self, info: SessionInfo, *, home: HomeStore):
+        return self.common.session_metadata(info, home)
 
     def resume_main(self, argv):
         return self.common.resume_main(argv)
@@ -73,7 +73,7 @@ class CodexClient(Client):
         env: Mapping[str, str] = MappingProxyType({}),
         home: HomeStore,
     ):
-        return self.common.session_status(info.sid, info.cwd, transcript=info.transcript)
+        return self.common.session_status(info.sid, info.cwd, transcript=info.transcript, home=home)
 
     def writable_dirs(self, spec: Spec):
         return self.common.writable_dirs(spec)

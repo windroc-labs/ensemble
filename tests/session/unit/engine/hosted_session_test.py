@@ -747,7 +747,7 @@ class HistoricalRecordTest(Case):
         )
         client = CodexClient(config)
         spec = Spec(workdir=str(self.work), sid=SID, access=Access(cwd=str(self.cwd), project=True))
-        client.common.save(client.common.prepare(spec))
+        client.common.save(client.common.prepare(spec, LocalHome()))
         client.common.bind(str(self.work), SID, SID)
         transcript = home / "sessions" / "2026" / "10" / "11" / f"rollout-test-{SID}.jsonl"
         transcript.parent.mkdir(parents=True)
@@ -1301,15 +1301,18 @@ class EventsOverAModeTest(Case):
 
     def test_binding_and_late_metadata_preserve_completion(self):
         client = fake_client.FakeClient({})
-        resolver = mock.Mock(side_effect=lambda info: dataclasses.replace(info, resume="resume n1"))
+        resolver = mock.Mock(
+            side_effect=lambda info, **_: dataclasses.replace(info, resume="resume n1")
+        )
         client.session_metadata = resolver
         session = self.session((0, [ClientBound("n1")], True), client=client)
         RunLog(self.dir).note("session", sid="s1", cwd=self.dir, project=False)
         self.assertEqual(self.events(session), [Exited(0)])
         self.assertEqual(session.info().resume, "resume n1")
+        self.assertEqual(resolver.call_args.kwargs["home"].persisted(), {"kind": "local"})
         self.assertEqual(RunLog(self.dir).session("s1").resume, "resume n1")
         RunLog(self.dir).note("result", outcome={"status": "done"})
-        resolver.side_effect = lambda info: dataclasses.replace(info, transcript="/late")
+        resolver.side_effect = lambda info, **_: dataclasses.replace(info, transcript="/late")
         self.assertEqual(session.info().transcript, "/late")
         self.assertEqual(RunLog(self.dir).session("s1").transcript, "/late")
         self.assertEqual(sum(e["kind"] == "session" for e in RunLog(self.dir).read()), 1)
@@ -1324,7 +1327,9 @@ class EventsOverAModeTest(Case):
                 self.dir = os.path.join(tmp, mode)
                 os.mkdir(self.dir)
                 client = fake_client.FakeClient({})
-                client.session_metadata = lambda info: dataclasses.replace(info, resume="resume n1")
+                client.session_metadata = lambda info, **_: dataclasses.replace(
+                    info, resume="resume n1"
+                )
                 session = self.session(
                     (0, [ClientBound("n1")], True), client=client, name="w1", mode=mode
                 )
@@ -1338,7 +1343,7 @@ class EventsOverAModeTest(Case):
 
     def test_binding_record_failure_remains_fatal(self):
         client = fake_client.FakeClient({})
-        client.session_metadata = mock.Mock(side_effect=lambda info: info)
+        client.session_metadata = mock.Mock(side_effect=lambda info, **_: info)
         session = self.session((0, [ClientBound("n1")], True), client=client)
         with (
             mock.patch("os.open", side_effect=OSError("binding failed")),
@@ -1365,7 +1370,7 @@ class EventsOverAModeTest(Case):
 
     def test_metadata_resolver_cannot_replace_session_identity_or_effective_project(self):
         client = fake_client.FakeClient({})
-        client.session_metadata = lambda info: dataclasses.replace(
+        client.session_metadata = lambda info, **_: dataclasses.replace(
             info, sid="other", cwd="/other", project=True, transcript="/t"
         )
         session = self.session((0, [ClientBound("n1")], True), client=client)
@@ -2707,8 +2712,8 @@ class AttachTest(HostedTuiBase):
         self.started(("tool", {"session_id": "n1"}))
         RunLog(self.workdir).note("result", outcome={"status": "done"})
 
-        def metadata(_client, info):
-            self.assertEqual(info.sid, SID)
+        def metadata(_client, info, *, home):
+            self.assertEqual((info.sid, home.persisted()), (SID, {"kind": "local"}))
             return dataclasses.replace(info, transcript="/attached", resume="resume n1")
 
         with mock.patch.object(fake_client.FakeClient, "session_metadata", metadata):

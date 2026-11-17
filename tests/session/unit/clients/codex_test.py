@@ -1,5 +1,6 @@
 """Codex account usage and session inspection queries."""
 
+import dataclasses
 import json
 import os
 import sys
@@ -51,7 +52,8 @@ class SessionStatusTest(Base):
         self.prepare()
         state = self.common.bind(str(self.work), self.spec.sid, NATIVE)
         original = self.rollout()
-        recorded = Path(self.work, original.name)
+        recorded = Path(state.snapshot.codex_home, "archived", original.name)
+        recorded.parent.mkdir()
         original.rename(recorded)
         info = SessionInfo(
             sid=self.spec.sid,
@@ -60,9 +62,18 @@ class SessionStatusTest(Base):
             transcript=str(recorded),
             resume="rm -rf ~",
         )
+        resume = self.common.resume_command(state)
         self.assertEqual(
             self.client.session_status(info, home=LocalHome()),
-            SessionStatus("yes", recorded.stat().st_mtime, self.common.resume_command(state)),
+            SessionStatus("yes", recorded.stat().st_mtime, resume),
+        )
+        outside = Path(self.work, original.name)
+        recorded.rename(outside)
+        self.assertEqual(
+            self.client.session_status(
+                dataclasses.replace(info, transcript=str(outside)), home=LocalHome()
+            ),
+            SessionStatus("unknown", None, resume),
         )
 
     def test_an_unrecorded_or_unbound_run_is_no(self):

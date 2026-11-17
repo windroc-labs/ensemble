@@ -3,7 +3,6 @@
 import json
 import os
 import shlex
-from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from unittest import mock
@@ -12,9 +11,7 @@ from zoneinfo import ZoneInfo
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
 from ensemble.session.clients.common import select
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
-    LOCAL_CONTEXT,
     Access,
     ConfigError,
     HomeStore,
@@ -25,6 +22,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.engine.types import Spec as BaseSpec
 from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import SID, Case
+from tests.session.unit.clients.support import homed
 from tests.utils.sandbox import scratch
 
 
@@ -130,12 +128,6 @@ class Base(Case):
 
     def launch(self, prompt="hi", config=CONFIG, **spec) -> Launch:
         return _launch("headless", self.work, prompt, config, **spec)
-
-
-def homed(run, home: HomeStore | None = None, permission=Permission.AUTO):
-    """`run` given a local context holding `home`, this machine's by default, as a mode gives it."""
-    run._context = replace(LOCAL_CONTEXT, permission=permission, home=home or LocalHome())
-    return run
 
 
 def _launch(

@@ -205,7 +205,7 @@ class ClientTest(Refusals):
 
     def test_session_metadata_preserves_info_by_default(self):
         info = engine_types.SessionInfo("s", "/c", project=False, transcript="/t", resume="r")
-        self.assertIs(StubClient({}).session_metadata(info), info)
+        self.assertIs(StubClient({}).session_metadata(info, home=LocalHome()), info)
 
     def test_writable_dirs_are_none_unless_overridden(self):
         for resume in (False, True):

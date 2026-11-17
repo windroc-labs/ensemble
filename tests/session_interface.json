@@ -201,7 +201,7 @@
  "ensemble.session.extension.Client.selection": "attribute",
  "ensemble.session.extension.Client.selection_uuid": "attribute",
  "ensemble.session.extension.Client.session_env": "attribute",
- "ensemble.session.extension.Client.session_metadata": "def(self:POSITIONAL_OR_KEYWORD, info:POSITIONAL_OR_KEYWORD)",
+ "ensemble.session.extension.Client.session_metadata": "def(self:POSITIONAL_OR_KEYWORD, info:POSITIONAL_OR_KEYWORD, home:KEYWORD_ONLY)",
  "ensemble.session.extension.Client.session_status": "def(self:POSITIONAL_OR_KEYWORD, info:POSITIONAL_OR_KEYWORD, env:KEYWORD_ONLY=mappingproxy, home:KEYWORD_ONLY)",
  "ensemble.session.extension.Client.tui": "def(self:POSITIONAL_OR_KEYWORD)",
  "ensemble.session.extension.Client.usage": "def(self:POSITIONAL_OR_KEYWORD, output:POSITIONAL_OR_KEYWORD)",

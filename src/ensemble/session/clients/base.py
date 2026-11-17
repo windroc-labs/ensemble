@@ -96,7 +96,7 @@ class Client:
         """None only when the probe failed."""
         return None
 
-    def session_metadata(self, info: SessionInfo) -> SessionInfo:
+    def session_metadata(self, info: SessionInfo, *, home: HomeStore) -> SessionInfo:
         return info
 
     def resume_main(self, argv: Sequence[str]) -> int:
