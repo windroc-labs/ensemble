@@ -11,11 +11,10 @@ flowchart LR
   C --> D[Start workers as usual]
 ```
 
-Do the steps in this order. The rules for `~/.ensemble/docker/target.json` (address form, SSH options, the check
-before each start) are in [Upgrading › Broker protocol 40](upgrading.md#broker-protocol-40-docker-target), and its
-`local_secrets` key in [Broker protocol 42](upgrading.md#broker-protocol-42-mini-op-workers-stay-on-the-mac). A session
-stays on the daemon that made it: switching the target to another machine leaves earlier sessions there, to resume or
-reclaim after switching back ([Upgrading › Broker protocol 41](upgrading.md#broker-protocol-41-a-docker-target-is-its-daemon)).
+Do the steps in this order. The rules for `~/.ensemble/docker/target.json` (address form, `local_secrets`, SSH
+options, the check before each start) are in [Upgrading › Broker protocol 43](upgrading.md#broker-protocol-43-remote-docker-target);
+`ensemble-broker target` shows how the broker reads it. A session stays on the daemon its first start chose:
+switching the target to another machine leaves earlier sessions there, to resume or reclaim after switching back.
 
 The target needs Docker Engine 26 or newer, an SSH server that accepts only keys, and `docker` on the PATH of the SSH
 login shell: `docker --host ssh://…` runs `ssh <host> docker system dial-stdio` there. It needs no bash, `gh`, GitHub
@@ -66,7 +65,7 @@ On the Mac:
    {"host": "ssh://<user>@<host>", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
    ```
 
-   `local_secrets` lists the secrets whose workers stay on the Mac ([Workers that stay on the
+   `local_secrets` lists the secrets the broker never gives a worker on the target ([Workers that stay on the
    Mac](#workers-that-stay-on-the-mac)).
 
 ## Windows target
@@ -126,8 +125,9 @@ bash <ensemble plugin directory>/scripts/install-target-egress.sh
 
 or `curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install-target-egress.sh | bash`.
 
-It fetches egress-proxy's `egress-install` with the Mac's `gh` and runs it against the target, through the broker's
-ssh wrapper, so the same SSH rules apply. The image comes from the Mac: `egress-install` fetches it by digest there
+It takes the target's address from `ensemble-broker target`, fetches egress-proxy's `egress-install` with the Mac's
+`gh` and runs it against the target, through the broker's ssh wrapper, so the same SSH rules apply. A target the broker
+cannot reach stops it before anything is installed. The image comes from the Mac: `egress-install` fetches it by digest there
 and loads it on the target, which never pulls. The install directory is `~/.egress-target` on the Mac. To change the
 policy, edit `~/.egress-target/config.local.yaml`, then apply it with the wrapper first on PATH, as the script prints:
 
@@ -142,10 +142,10 @@ mini-op workers use.
 
 ## Workers that stay on the Mac
 
-A worker given any secret in `local_secrets` runs on the Mac's Docker Desktop, never on the target: the test Mac
-mini's password and SSH key never leave the Mac. Today that is the verifier, and any role whose manifest asks for the
-mini-op credentials. Its image, egress proxy, prefetch and credential refresh are the Mac's, and its session belongs
-to the local Docker Desktop.
+A worker whose environment sets `daemon = "local"` runs on the Mac's Docker Desktop, never on the target: the packaged
+mini-op environment does, so the verifier and the test Mac mini's password and SSH key stay on the Mac. Its image,
+egress proxy, prefetch and credential refresh are the Mac's, and its session belongs to the local Docker Desktop.
+`local_secrets` guards the rest: the broker refuses to start a worker on the target with any listed secret.
 
 The Mac's worker and the target's workers share one view:
 
