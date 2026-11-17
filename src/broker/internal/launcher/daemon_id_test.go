@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -208,5 +209,36 @@ func TestDaemonPatternMatchesSchema(t *testing.T) {
 	}
 	if !ValidDaemon(testDaemon) || ValidDaemon("a b") || ValidDaemon("") {
 		t.Fatal("ValidDaemon")
+	}
+}
+
+func TestMaintainFailsOnAnUnconfiguredDaemon(t *testing.T) {
+	h, manifest, _, _ := maintainHost(t, true, nil)
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	onDaemon("GONE:DAEMON")(fields)
+	local := h.Daemons[0].Runner.(*fakeDocker)
+	local.respond = idThen(localDaemon, local.respond)
+	_, err = h.Maintain(context.Background(), container, writeManifest(t, must(json.Marshal(fields))), true)
+	if e := protoErr(t, err); e.Code != protocol.DockerUnreachable || !strings.Contains(e.Message, "GONE:DAEMON") {
+		t.Fatalf("%+v", e)
+	}
+	if len(beyondInfo(local)) != 0 {
+		t.Fatalf("maintained on another daemon: %q", local.calls)
+	}
+}
+
+func TestWhyIsAProtocolErrorsMessageElseItsText(t *testing.T) {
+	if got := why(protocol.New(protocol.StartFailed, "m")); got != "m" {
+		t.Fatal(got)
+	}
+	if got := why(errors.New("plain")); got != "plain" {
+		t.Fatal(got)
 	}
 }

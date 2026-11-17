@@ -17,21 +17,18 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// claudeMinVersion is the lowest Claude Code a build installs.
 const claudeMinVersion = "2.1.0"
 
-// clientCheckInterval is how often builds spawn check-clients.
 const clientCheckInterval = time.Hour
 
-// Releases is the npm registry's side of a build: a client package's latest stable release.
 type Releases interface {
 	Latest(ctx context.Context, pkg string) (string, error)
 }
 
-// ClientVersions are the client versions an image carries in its labels, each an exact stable X.Y.Z.
+// ClientVersions are exact stable X.Y.Z versions from an image's labels.
 type ClientVersions struct{ Claude, Codex, Opencode string }
 
-// clientPackages are the image's clients, in ClientVersions' field order.
+// clientPackages is in ClientVersions' field order.
 var clientPackages = [...]struct{ name, pkg, label, min string }{
 	{"claude", "@anthropic-ai/claude-code", "ensemble.claude-version", claudeMinVersion},
 	{"codex", "@openai/codex", "ensemble.codex-version", codex.MinVersion},
@@ -42,7 +39,6 @@ func (v *ClientVersions) fields() [len(clientPackages)]*string {
 	return [...]*string{&v.Claude, &v.Codex, &v.Opencode}
 }
 
-// MarshalJSON writes v as an object keyed by client name.
 func (v ClientVersions) MarshalJSON() ([]byte, error) {
 	named := map[string]string{}
 	for i, field := range v.fields() {
@@ -51,7 +47,6 @@ func (v ClientVersions) MarshalJSON() ([]byte, error) {
 	return json.Marshal(named)
 }
 
-// latestClients looks up every client's latest release within 2 minutes; each must be at least its minimum.
 func (h Host) latestClients(ctx context.Context) (ClientVersions, error) {
 	if h.Releases == nil {
 		return ClientVersions{}, errors.New("no client release lookup")
@@ -80,7 +75,7 @@ func (h Host) latestClients(ctx context.Context) (ClientVersions, error) {
 	return v, nil
 }
 
-// imageClients reads an image's client versions from its labels; ok only when all three are valid.
+// imageClients is ok only when all three labels are valid.
 func imageClients(labels map[string]string) (ClientVersions, bool) {
 	var v ClientVersions
 	for i, field := range v.fields() {
@@ -92,20 +87,19 @@ func imageClients(labels map[string]string) (ClientVersions, bool) {
 	return v, true
 }
 
-// CheckResult is check-clients' output: the latest releases and the images rebuilt to them. Latest is absent when
-// another check held the lock.
+// CheckResult's Latest is absent when another check held the lock.
 type CheckResult struct {
 	Latest  ClientVersions `json:"latest,omitzero"`
 	Rebuilt []string       `json:"rebuilt"`
 }
 
-// checkState is a daemon's clients-check.json in its image records, written only by check-clients.
+// checkState is written only by check-clients.
 type checkState struct {
 	CheckedAt time.Time `json:"checked_at"`
 	Failure   string    `json:"failure"`
 }
 
-// variant is a variant record, <key>.json in a daemon's image records: the build inputs that reproduce key.
+// variant holds the build inputs that reproduce key.
 type variant struct {
 	Package      string   `json:"package"`
 	BaseImage    string   `json:"base_image"`
@@ -113,7 +107,6 @@ type variant struct {
 	ImagePlugins []string `json:"image_plugins"`
 }
 
-// variantFile matches a key's variant record (json) and replaced list (replaced) in a daemon's image records.
 var variantFile = regexp.MustCompile(`^([0-9a-f]{64})\.(json|replaced)$`)
 
 // daemonPattern is a usable Docker daemon ID: docker info prints untrusted text, and the ID names a Mac directory.
@@ -123,7 +116,7 @@ func (h Host) dockerPath(name string) string {
 	return filepath.Join(h.Home, ".ensemble/docker", name)
 }
 
-// records is an identified daemon's image records dir, images/<ID>: an image exists only on the daemon that built it.
+// records is images/<ID>: an image exists only on the daemon that built it.
 type records struct{ dir string }
 
 func (r records) path(name string) string { return filepath.Join(r.dir, name) }
@@ -134,7 +127,6 @@ func (r records) recordPath(key string) string { return r.path(key + ".json") }
 
 func (r records) replacedPath(key string) string { return r.path(key + ".replaced") }
 
-// identify is d with its ID, and its image records; failures are code, an unreachable daemon docker_unreachable.
 func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemon, records, error) {
 	id, err := daemonID(ctx, d)
 	var u *docker.Unreachable
@@ -148,7 +140,6 @@ func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemo
 	return d, records{filepath.Join(h.dockerPath("images"), id)}, nil
 }
 
-// why is a failure's message: a protocol error's own, else its text.
 func why(err error) string {
 	if e, ok := errors.AsType[*protocol.Error](err); ok {
 		return e.Message
@@ -156,8 +147,6 @@ func why(err error) string {
 	return err.Error()
 }
 
-// daemonID is d's daemon's ID: a *docker.Unreachable when d cannot be reached, else a *protocol.Error whose message
-// says why.
 func daemonID(ctx context.Context, d Daemon) (string, error) {
 	out, err := d.Runner.Run(ctx, docker.InfoID, nil)
 	var u *docker.Unreachable
@@ -181,7 +170,6 @@ func (h Host) now() time.Time {
 	return time.Now()
 }
 
-// writePrivate writes data to path, 0600, through a temporary file in its directory.
 func writePrivate(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -203,7 +191,7 @@ func writePrivate(path string, data []byte) error {
 	return nil
 }
 
-// record writes key's variant record for check-clients; a failure is only noted.
+// record only notes a failure.
 func (h Host) record(r records, key, pkg string, spec BuildSpec) {
 	data, err := json.Marshal(variant{Package: pkg, BaseImage: spec.BaseImage, Plugins: append([]string{}, spec.Plugins...),
 		ImagePlugins: append([]string{}, spec.ImagePlugins...)})
@@ -229,7 +217,7 @@ func writeCheckState(r records, state checkState) error {
 	return writePrivate(r.path("clients-check.json"), data)
 }
 
-// afterBuild reports the last check's failure once, then spawns check-clients when one is due; neither fails the build.
+// afterBuild never fails the build.
 func (h Host) afterBuild(r records) {
 	state, ok := readCheckState(r)
 	if ok {
@@ -250,7 +238,6 @@ func (h Host) afterBuild(r records) {
 	}
 }
 
-// checkLock takes the client check lock without waiting; held: another check has it.
 func (h Host) checkLock() (unlock func(), held bool, err error) {
 	path := h.dockerPath("clients-check.lock")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -270,9 +257,8 @@ func (h Host) checkLock() (unlock func(), held bool, err error) {
 	return func() { _ = f.Close() }, false, nil
 }
 
-// CheckClients rebuilds, under its own key, every recorded variant a build used within variantLease whose image's
-// clients differ from the latest releases, then prunes, on each configured daemon in turn. A daemon's failure does not
-// stop the others' checks; the first failure is the result's error. Another check running: it does nothing.
+// CheckClients rebuilds stale variants used within variantLease on each daemon; one daemon's failure does not stop
+// the others. Another check running: it does nothing.
 func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	unlock, held, err := h.checkLock()
 	if err != nil {
@@ -297,7 +283,6 @@ func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	return result, first
 }
 
-// checkDaemon is CheckClients on d alone.
 func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
 	d, r, err := h.identify(ctx, d, protocol.BuildFailed)
 	if err != nil {
@@ -344,8 +329,7 @@ func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
 	return result, nil
 }
 
-// checkVariant rebuilds key's variant at latest when its image's clients differ, returning the failure's protocol
-// message, never Docker's diagnostic, so a persistent failure keeps one text. A stale record is deleted.
+// checkVariant fails with a protocol message, never Docker's diagnostic, so a persistent failure keeps one text.
 func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string, latest ClientVersions) (rebuilt bool, failed string) {
 	image := "ensemble-worker:" + key
 	drop := func(why string) (bool, string) {
@@ -388,7 +372,6 @@ func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string,
 	return true, ""
 }
 
-// message is err's protocol message.
 func message(err error) string {
 	var e *protocol.Error
 	if errors.As(err, &e) {

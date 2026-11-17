@@ -18,29 +18,26 @@ import (
 )
 
 type Manifest struct {
-	Linear                                                                                              *credential.LinearRequest // the requested role app token and board config; nil without linear
+	Linear                                                                                              *credential.LinearRequest
 	Name, Generation, Daemon, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
 	HasHook                                                                                             bool
 	Labels                                                                                              map[string]string
-	GitHubApp                                                                                           string            // the declared App; "": no github credential
-	GitHubPermissions                                                                                   map[string]string // the declared repository permissions; nil without github
-	OpencodeProviders                                                                                   []string          // the providers whose API keys an opencode container gets
-	ClaudeAccount                                                                                       string            // the account whose setup-token a claude container gets; "" for other clients
-	Secrets                                                                                             []Secret          // the merged env request; nil without env
-	Lock, LockOwner                                                                                     string            // optional lock name and readable owner
-	Gateway                                                                                             string            // the egress proxy's caller network key; workers without the field
-	Prefetch                                                                                            *Prefetch         // the repo cloned into a new workspace; nil without the field
+	GitHubApp                                                                                           string // "": no github credential
+	GitHubPermissions                                                                                   map[string]string
+	OpencodeProviders                                                                                   []string
+	ClaudeAccount                                                                                       string // "" for other clients
+	Secrets                                                                                             []Secret
+	Lock, LockOwner                                                                                     string
+	Gateway                                                                                             string // the egress proxy's caller network key
+	Prefetch                                                                                            *Prefetch
 }
 
-// Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
-// name, "" for the default branch.
+// Prefetch's Ref is a branch or tag; "": the default branch.
 type Prefetch struct{ Repo, Ref string }
 
-// Secret is one environment secret a start writes: Item is its keychain reference (ValidEnvItem), File its name in
-// the container's secrets directory.
+// Secret's File is its name in the container's secrets directory.
 type Secret struct{ Item, File string }
 
-// A workspace volume's labels: its kind (always kind) and its mount point.
 const (
 	kindLabel      = "ensemble.kind"
 	kind           = "ws"
@@ -63,21 +60,17 @@ var (
 	gatewayPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 	refChars       = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 	shaPattern     = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
-	// An OpenCode provider's name: its keychain account and its key file's name, <name>.key.
+	// An OpenCode provider's name is its keychain account and <name>.key.
 	providerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	// A Claude account's name: its setup-token item's keychain account. Lowercase only, so the keychain's case
-	// handling cannot merge two names.
+	// Lowercase only, so the keychain's case handling cannot merge two Claude account names.
 	claudeAccountPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
-// ValidEnvName is whether name can be an environment secret, item ensemble-broker-env/<name>.
 func ValidEnvName(name string) bool { return docker.ValidEnvName(name) }
 
-// ValidEnvItem is whether item is an environment secret's reference, ensemble-broker-env/<name>; no other keychain service is.
+// ValidEnvItem: no other keychain service is an environment secret's.
 func ValidEnvItem(item string) bool { return docker.ValidEnvItem(item) }
 
-// validSecretFile is whether file can name a secret in the container: one path component of at most maxSecretFile
-// bytes, with no C0 or C1 control character, not . or ..
 func validSecretFile(file string) bool {
 	return file != "" && len(file) <= maxSecretFile && file != "." && file != ".." && !strings.ContainsFunc(file, func(r rune) bool {
 		return r == '/' || r < 0x20 || r >= 0x7f && r <= 0x9f
@@ -88,8 +81,7 @@ func ValidLock(name string) bool { return lockPattern.MatchString(name) }
 
 func validGateway(key string) bool { return gatewayPattern.MatchString(key) }
 
-// ValidRef is whether ref names a branch or tag, by ensemble.utils.git.check_ref's rule: never an
-// option, a full ref, HEAD or something that looks like a commit SHA.
+// ValidRef follows ensemble.utils.git.check_ref: never an option, a full ref, HEAD or a SHA-like name.
 func ValidRef(ref string) bool {
 	if len(ref) > 255 || !refChars.MatchString(ref) || strings.HasPrefix(ref, "-") || ref == "HEAD" ||
 		strings.HasPrefix(ref, "refs/") || shaPattern.MatchString(ref) || strings.Contains(ref, "..") || strings.HasSuffix(ref, ".") {
@@ -103,10 +95,10 @@ func ValidRef(ref string) bool {
 	return true
 }
 
-// ValidProvider is whether name can be a listed OpenCode provider; ollama needs no key.
+// ValidProvider excludes ollama, which needs no key.
 func ValidProvider(name string) bool { return providerPattern.MatchString(name) && name != "ollama" }
 
-// ValidClaudeAccount is whether name can be a Claude account; setup-token is the retired single item's account.
+// setup-token is the retired single item's account.
 func ValidClaudeAccount(name string) bool {
 	return claudeAccountPattern.MatchString(name) && name != "setup-token"
 }
@@ -115,7 +107,7 @@ func hasControl(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
-// ParseManifest validates a manifest against the protocol's schema; every failure is manifest_rejected.
+// ParseManifest fails only with manifest_rejected.
 func ParseManifest(data []byte) (Manifest, error) {
 	reject := func(format string, args ...any) (Manifest, error) {
 		return Manifest{}, protocol.Newf(protocol.ManifestRejected, "Manifest rejected: "+format, args...)

@@ -26,44 +26,39 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
-// checks run via stdin before building the ensemble layer or during session startup;
-// they never enter a build context.
+// checks run via stdin; they never enter a build context.
 //
 //go:embed checks/*
 var checks embed.FS
 
-// checkPath is the ensemble layer's PATH less /opt/ensemble/bin: where the layer finds what it needs.
+// checkPath is the ensemble layer's PATH less /opt/ensemble/bin.
 const checkPath = "/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 
 var baseImagePattern = regexp.MustCompile(`^(?:sha256:[a-f0-9]{64}|[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?)$`)
 
-// ValidBaseImage reports whether s names a local image: a tag, repository[:tag], or sha256 ID (no registry port or
-// digest).
+// ValidBaseImage allows a local image name or sha256 ID: no registry port or digest.
 func ValidBaseImage(s string) bool {
 	return len(s) <= 255 && baseImagePattern.MatchString(s)
 }
 
-// baseRequirements are what the base check reports missing, in its order; agent is its non-root user agent.
+// baseRequirements is the base check's report order; agent is its non-root user.
 var baseRequirements = []string{"apt-get", "dpkg", "node", "npm", "tmux", "git", "agent"}
 
-// BuildSpec is what a build adds to the ensemble package.
 type BuildSpec struct {
-	BaseImage    string   // a local image as stage 1, never pulled or rebuilt; "": built from ~/.ensemble/docker/worker
-	Plugins      []string // repository sources both clients install
-	ImagePlugins []string // plugins the stage-1 image carries under /opt/windroc/plugins, for Claude Code
-	Daemon       string   // the ID of the daemon to build on, never part of the image
+	BaseImage    string // a local stage-1 image, never pulled; "": built from ~/.ensemble/docker/worker
+	Plugins      []string
+	ImagePlugins []string // for Claude Code, under /opt/windroc/plugins
+	Daemon       string   // never part of the image
 }
 
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 var builtPattern = regexp.MustCompile(`^ensemble-(?:user|worker):[0-9a-f]{64}$`)
 
-// imageLease is how long prune keeps a key's images after a build last leased the key:
-// through a rebuild in progress and the start that follows a build.
+// imageLease covers a rebuild in progress and the start that follows a build.
 const imageLease = time.Hour
 
-// variantLease is how long prune keeps, and check-clients refreshes, a recorded variant after a build last used it
-// (its record's mtime, which only Build writes), so a variant idle for a while still starts without a rebuild.
+// variantLease keeps an idle variant startable without a rebuild; only Build writes its record's mtime.
 const variantLease = 7 * 24 * time.Hour
 
 type imageInfo struct {
@@ -74,7 +69,6 @@ type imageInfo struct {
 	}
 }
 
-// snapshotTree copies src to dst, less Python caches and the src-relative paths in skip.
 func snapshotTree(src, dst string, skip ...string) error {
 	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -133,8 +127,7 @@ func snapshotTree(src, dst string, skip ...string) error {
 	})
 }
 
-// readablePackage sets image content modes explicitly, independent of source modes and the caller's umask.
-// Symlinks stay intact; the private staging root and the user's worker definition are outside this tree.
+// readablePackage sets modes independent of source modes and umask.
 func readablePackage(root string) error {
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -175,8 +168,7 @@ func treeDigest(root string) (string, error) {
 		}
 		mode := info.Mode()
 		if mode&os.ModeSymlink != 0 {
-			// Darwin applies umask to new symlinks. Hash Linux's fixed link mode:
-			// target permissions, not link permissions, govern access in the image.
+			// Darwin applies umask to symlinks; hash Linux's fixed link mode.
 			mode = os.ModeSymlink | 0o777
 		}
 		fmt.Fprintf(h, "%d:%s:%o:", len(rel), rel, mode)
@@ -200,7 +192,6 @@ func treeDigest(root string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), err
 }
 
-// inspectImage returns found=false when Docker reports the image absent.
 func (h Host) inspectImage(ctx context.Context, d Daemon, image string) (imageInfo, bool, error) {
 	out, err := d.Runner.Run(ctx, []string{"image", "inspect", image}, nil)
 	if docker.Absent(err) {
@@ -221,7 +212,7 @@ func numeric(s string) bool {
 	return err == nil && n > 0
 }
 
-// checkImage requires a broker-built image: matching key, version and agent ids in its labels.
+// checkImage requires a broker-built image's labels.
 func (h Host) checkImage(ctx context.Context, d Daemon, image string) (imageInfo, error) {
 	info, found, err := h.inspectImage(ctx, d, image)
 	if err != nil {
@@ -235,9 +226,7 @@ func (h Host) checkImage(ctx context.Context, d Daemon, image string) (imageInfo
 	return info, nil
 }
 
-// stage snapshots the worker image definition (none with a base image), package, plugin sources and embedded assets
-// into tmp, and returns the package version and Claude Code's plugin directories. Key-only inputs go in tmp itself,
-// outside every build context.
+// stage puts key-only inputs in tmp itself, outside every build context.
 func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, error) {
 	userDir, packageDir := filepath.Join(tmp, "user"), filepath.Join(tmp, "package")
 	if spec.BaseImage == "" {
@@ -289,15 +278,12 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 	return meta.Version, dirs, nil
 }
 
-// prepared is what prepare derives: the key, the package version, Claude Code's plugin directories, the base image's
-// ID ("" for none) and spec with its in-image plugins sorted.
 type prepared struct {
 	key, version, dirs, baseID string
 	spec                       BuildSpec
 }
 
-// prepare stages spec's build context into tmp and derives its key; Build and CheckClients share it so a key is
-// derived one way.
+// prepare is shared by Build and CheckClients so a key is derived one way.
 func (h Host) prepare(ctx context.Context, d Daemon, pkg string, spec BuildSpec, tmp string) (prepared, error) {
 	spec.ImagePlugins = slices.Sorted(slices.Values(spec.ImagePlugins))
 	version, dirs, err := h.stage(pkg, spec, tmp)
@@ -320,9 +306,8 @@ func (h Host) prepare(ctx context.Context, d Daemon, pkg string, spec BuildSpec,
 	return prepared{key: key, version: version, dirs: dirs, baseID: base.ID, spec: spec}, nil
 }
 
-// Build produces ensemble-worker:<key> in two stages; an image with this key, version and client versions built less
-// than maxAge ago is reused (maxAge < 0: of any age; 0: never). A rebuild installs each client's latest release; both
-// stages rebuild without cache to refresh plugins. spec's plugins are part of the key.
+// Build reuses a matching image built within maxAge (<0: any age; 0: never); a rebuild installs each client's
+// latest release, without cache to refresh plugins.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
 	d, r, err := h.find(ctx, spec.Daemon, protocol.BuildFailed)
 	spec.Daemon = ""
@@ -332,7 +317,6 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 	return h.build(ctx, d, r, pkg, spec, maxAge)
 }
 
-// build is Build on the daemon whose image records are r.
 func (h Host) build(ctx context.Context, d Daemon, r records, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")
 	if err != nil {
@@ -387,8 +371,7 @@ func (h Host) build(ctx context.Context, d Daemon, r records, pkg string, spec B
 	return built(result)
 }
 
-// leaseImage leases key, then inspects its worker image, both under the image lock:
-// a concurrent prune either finished before the lease or keeps the image.
+// leaseImage holds the image lock: a concurrent prune either finished before the lease or keeps the image.
 func (h Host) leaseImage(ctx context.Context, d Daemon, r records, key string) (imageInfo, bool, error) {
 	unlock, err := h.Lock()
 	if err != nil {
@@ -409,7 +392,6 @@ func leaseFailed() *protocol.Error {
 	return protocol.New(protocol.BuildFailed, "Cannot write the image lease in ~/.ensemble/docker/images.")
 }
 
-// lease marks key's images as in use by a build from now on.
 func lease(r records, key string) error {
 	path := r.leasePath(key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -426,27 +408,21 @@ func lease(r records, key string) error {
 	return os.Chtimes(path, now, now)
 }
 
-// leased reports whether a build leased key less than d ago.
 func (h Host) leased(r records, key string, d time.Duration) bool {
 	info, err := os.Stat(r.leasePath(key))
 	return err == nil && h.now().Sub(info.ModTime()) < d
 }
 
-// kept reports whether prune keeps key's images: leased within imageLease, or a variant a build used within
-// variantLease.
 func (h Host) kept(r records, key string) bool {
 	return h.leased(r, key, imageLease) || h.inUse(r, key)
 }
 
-// inUse reports whether a build used key's recorded variant less than variantLease ago; a check rebuild's own leases
-// never count, so an abandoned variant ages out.
+// inUse ignores a check rebuild's own leases, so an abandoned variant ages out.
 func (h Host) inUse(r records, key string) bool {
 	info, err := os.Stat(r.recordPath(key))
 	return err == nil && h.now().Sub(info.ModTime()) < variantLease
 }
 
-// rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set, the
-// ensemble layer installing the clients at v.
 func (h Host) rebuild(ctx context.Context, d Daemon, r records, tmp, key, version, plugins string, spec BuildSpec, baseID string, v ClientVersions) (BuildResult, error) {
 	image, userImage := "ensemble-worker:"+key, "ensemble-user:"+key
 	var uid, gid string
@@ -500,23 +476,20 @@ func (h Host) rebuild(ctx context.Context, d Daemon, r records, tmp, key, versio
 	return BuildResult{Image: image, Digest: info.ID, Rebuilt: true}, nil
 }
 
-// retagGrace is how long prune keeps an image ID a rebuild took key's tag from: a start that inspected the tag just
-// before keeps using that ID for every step. pendingGrace bounds an entry whose rebuild has not retagged yet.
+// retagGrace: a start that inspected the tag just before a retag keeps using the old ID for every step.
 const (
 	retagGrace   = 10 * time.Minute
 	pendingGrace = 2 * time.Hour
 )
 
-// replacedImage is an entry of <key>.replaced in a daemon's image records: an image ID a rebuild took key's tag from, and when; Pending
-// while that rebuild still runs.
+// replacedImage is an image ID a rebuild took key's tag from; Pending while that rebuild runs.
 type replacedImage struct {
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
 	Pending bool      `json:"pending,omitempty"`
 }
 
-// readReplaced is key's replaced entries younger than retagGrace, or pendingGrace while pending; an unreadable list is
-// empty.
+// readReplaced treats an unreadable list as empty.
 func (h Host) readReplaced(r records, key string) []replacedImage {
 	var entries []replacedImage
 	if data, err := os.ReadFile(r.replacedPath(key)); err != nil || json.Unmarshal(data, &entries) != nil {
@@ -528,8 +501,7 @@ func (h Host) readReplaced(r records, key string) []replacedImage {
 	})
 }
 
-// markReplaced records, under the image lock, the ID key's worker tag names (prior's ID when set, replacing that entry)
-// as replaced now, pending as prior is; it returns the entry, a zero one when the tag names no image.
+// markReplaced returns a zero entry when the tag names no image.
 func (h Host) markReplaced(ctx context.Context, d Daemon, r records, key string, prior replacedImage) (replacedImage, error) {
 	unlock, err := h.Lock()
 	if err != nil {
@@ -558,7 +530,6 @@ func (h Host) markReplaced(ctx context.Context, d Daemon, r records, key string,
 	return entry, nil
 }
 
-// buildDefinition builds ~/.ensemble/docker/worker's snapshot in tmp as userImage and returns its agent's ids.
 func (h Host) buildDefinition(ctx context.Context, d Daemon, tmp, key, userImage string) (string, string, error) {
 	if _, err := d.Runner.Run(ctx, []string{"build", "--progress=plain", "--no-cache", "--label", "ensemble.key=" + key, "--tag", userImage, filepath.Join(tmp, "user")}, nil); err != nil {
 		return "", "", diagnosed(err, protocol.BuildFailed, "Building the worker image definition failed.")
@@ -575,7 +546,7 @@ func (h Host) buildDefinition(ctx context.Context, d Daemon, tmp, key, userImage
 	return ids[0], ids[1], nil
 }
 
-// baseImage inspects ref, which must be a local image without reserved labels.
+// baseImage requires a local image without reserved labels.
 func (h Host) baseImage(ctx context.Context, d Daemon, ref string) (imageInfo, error) {
 	if !ValidBaseImage(ref) {
 		return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+": use a local image tag or sha256 ID.")
@@ -596,7 +567,7 @@ func (h Host) baseImage(ctx context.Context, d Daemon, ref string) (imageInfo, e
 	if len(reserved) == 0 {
 		return info, nil
 	}
-	// Label keys come from the image: name a few, never echoing a control character or a long key.
+	// Label keys come from the image: never echo a control character or a long key.
 	slices.Sort(reserved)
 	shown := reserved[:min(5, len(reserved))]
 	for i, label := range shown {
@@ -611,7 +582,6 @@ func (h Host) baseImage(ctx context.Context, d Daemon, ref string) (imageInfo, e
 	return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+" carries reserved labels "+names+"; remove every windroc. and ensemble. label.")
 }
 
-// useBase checks ref's image, baseID, meets the ensemble layer's needs, tags it userImage and returns its agent's ids.
 func (h Host) useBase(ctx context.Context, d Daemon, ref, baseID, userImage string) (string, string, error) {
 	unexpected := protocol.New(protocol.BuildFailed, "Checking base image "+ref+" gave unexpected output.")
 	lines, err := h.baseCheck(ctx, d, ref, baseID, "65534:65534", "agent", "/usr/bin:/bin")
@@ -661,8 +631,7 @@ func (h Host) useBase(ctx context.Context, d Daemon, ref, baseID, userImage stri
 	return ids[0], ids[1], nil
 }
 
-// baseCheck runs checks/base-check's mode with path in baseID's image as user, offline and without capabilities, and
-// returns its output lines.
+// baseCheck runs offline and without capabilities.
 func (h Host) baseCheck(ctx context.Context, d Daemon, ref, baseID, user, mode, path string) ([]string, error) {
 	script, err := checks.ReadFile("checks/base-check")
 	if err != nil {
@@ -679,8 +648,6 @@ func (h Host) baseCheck(ctx context.Context, d Daemon, ref, baseID, user, mode, 
 	return nil, nil
 }
 
-// checkImagePlugins requires each of names to be a plugin directory agent can read in image, its
-// plugin.json naming it.
 func (h Host) checkImagePlugins(ctx context.Context, d Daemon, image string, names []string) error {
 	script, err := checks.ReadFile("checks/plugin-check.js")
 	if err != nil {
@@ -722,11 +689,9 @@ func (h Host) checkImagePlugins(ctx context.Context, d Daemon, image string, nam
 	return nil
 }
 
-// prune removes the user and worker images of keys other than key ("": none) that it does not keep (kept),
-// with a worker image its key's record and replaced list, and the untagged ones a same-key rebuild left, except one
-// replaced within retagGrace, that no container, running or stopped, uses, noting each to Progress; whatever fails is
-// kept and never fails the build. It holds the image lock, so a build's lease and inspect come wholly before or after
-// it.
+// prune removes other keys' unkept images and a same-key rebuild's untagged ones, sparing any a container uses or
+// replaced within retagGrace; a failure never fails the build. Its image lock puts a build's lease and inspect wholly
+// before or after it.
 func (h Host) prune(ctx context.Context, d Daemon, r records, key string) {
 	unlock, err := h.Lock()
 	if err != nil {
@@ -795,7 +760,6 @@ func (h Host) note(s string) {
 	}
 }
 
-// usedImages is the set of image IDs every container, running or stopped, was created from.
 func (h Host) usedImages(ctx context.Context, d Daemon) (map[string]bool, error) {
 	out, err := d.Runner.Run(ctx, []string{"container", "ls", "--all", "--quiet", "--no-trunc"}, nil)
 	ids := strings.Fields(string(out))

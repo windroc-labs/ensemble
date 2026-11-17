@@ -1,5 +1,4 @@
 // Package launcher builds worker images and starts and closes their containers.
-// Providers read credentials; the launcher delivers their opaque commands.
 package launcher
 
 import (
@@ -24,13 +23,13 @@ import (
 	"ensemble/broker/internal/releases"
 )
 
-// Credentials prepares the selected Claude token; the caller executes and erases the command.
+// Credentials: the caller executes and erases the command.
 type Credentials interface {
 	Ready(account string) error
 	Inject(account string) (credential.Command, error)
 }
 
-// CodexInjection holds the account lock until Finish, including actual delivery and expiry publication.
+// CodexInjection holds the account lock until Finish.
 type CodexInjection struct {
 	Command credential.Command
 	Expiry  string
@@ -43,7 +42,6 @@ type CodexCredentials interface {
 	Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error)
 }
 
-// ProviderKeys transfers owned provider-key commands to the caller.
 type ProviderKeys interface {
 	Ready(providers []string) error
 	Inject(providers []string) ([]credential.Command, error)
@@ -54,19 +52,18 @@ type EnvSecrets interface {
 	Inject(s Secret) (credential.Command, error)
 }
 
-// Tokens prepares startup writes; refresh remains synchronous. Errors never carry credential values.
+// Tokens' errors never carry credential values.
 type Tokens interface {
 	Ready(app string) error
 	BotUserID(app string) (int64, error)
-	// Issue revokes all issued tokens on preparation failure. On success the caller owns
-	// commands and revoke, which revokes every issued token once if startup later fails.
+	// Issue revokes all issued tokens on failure; on success the caller owns revoke, for a later startup failure.
 	Issue(ctx context.Context, app string, permissions map[string]string, container string) ([]credential.Command, func(), []protocol.Expiry, error)
 	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Revoke(ctx context.Context, container string, read func(ctx context.Context, argv []string) ([]byte, error))
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
 }
 
-// LinearTokens delivers a role app's separate container token, never its host token.
+// LinearTokens delivers a container token, never the app's host token.
 type LinearTokens interface {
 	Ready(credential.LinearApp) error
 	Issue(context.Context, credential.LinearRequest, string) ([]credential.Command, func(), string, error)
@@ -74,23 +71,20 @@ type LinearTokens interface {
 	Revoke(context.Context, string) error
 }
 
-// The configured daemons' names: the local Docker Desktop, always present, and the remote target, when set.
 const (
 	DaemonLocal  = "local"
 	DaemonRemote = "remote"
 )
 
-// Daemon is one configured Docker daemon, built once per command; ID is set only by identify.
 type Daemon struct {
 	Name     string
 	ID       string
 	Endpoint string
 	Remote   bool
-	Path     string // the PATH its docker runs with
+	Path     string
 	Runner   docker.Runner
 }
 
-// TargetDaemon is one configured daemon as the target command reports it: its ID once reached, else why not.
 type TargetDaemon struct {
 	Name        string `json:"name"`
 	Endpoint    string `json:"endpoint"`
@@ -105,7 +99,6 @@ type TargetResult struct {
 	Daemons []TargetDaemon `json:"daemons"`
 }
 
-// Target is every configured daemon, the default first, each identified once.
 func (h Host) Target(ctx context.Context) TargetResult {
 	result := TargetResult{Default: h.Daemons[0].Name, Daemons: []TargetDaemon{}}
 	for _, d := range h.Daemons {
@@ -129,42 +122,31 @@ type Host struct {
 	Home      string
 	IsDir     func(string) bool
 	Safe      func(string) error
-	Daemons   []Daemon // every configured daemon, the default first; never empty
-	LocalOnly []string // environment secret items no remote daemon is given
+	Daemons   []Daemon // the default first; never empty
+	LocalOnly []string
 	Creds     Credentials
 	Codex     CodexCredentials
 	Opencode  ProviderKeys
 	Env       EnvSecrets
-	Schedule  Schedule // nil: no token record, as tests without one; every token provider is then always due
+	Schedule  Schedule // nil: every token provider is always due
 	GitHub    Tokens
 	Linear    LinearTokens
 	Versions  CodexVersions
-	Releases  Releases                          // nil: a build that must rebuild fails
-	Progress  io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
-	Lock      func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
-	Audit     *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
-	Now       func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
-	Spawn     func() error                      // nil: none; starts check-clients detached, for a build
+	Releases  Releases // nil: a build that must rebuild fails
+	Progress  io.Writer
+	Lock      func() (unlock func(), err error) // orders build's lease and inspect against prune
+	Audit     *audit.Recorder
+	Now       func() time.Time
+	Spawn     func() error
 }
 
-// ValidDaemon is whether id can name a Docker daemon.
 func ValidDaemon(id string) bool { return daemonPattern.MatchString(id) }
 
-// find is the configured daemon whose ID is id, identified, and its image records; the local Docker Desktop is asked
-// first, so a local ID opens no ssh connection. With no daemon of that ID: the first daemon that could not be
-// identified fails it (an unreachable one docker_unreachable, else code), else docker_unreachable names id and every
-// configured daemon.
+// find asks the local daemon first, so a local ID opens no ssh connection.
 func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, records, error) {
-	order := slices.Clone(h.Daemons)
-	slices.SortStableFunc(order, func(a, b Daemon) int {
-		switch {
-		case a.Remote == b.Remote:
-			return 0
-		case a.Remote:
-			return 1
-		}
-		return -1
-	})
+	isRemote := func(d Daemon) bool { return d.Remote }
+	isLocal := func(d Daemon) bool { return !d.Remote }
+	order := slices.Concat(slices.DeleteFunc(slices.Clone(h.Daemons), isRemote), slices.DeleteFunc(slices.Clone(h.Daemons), isLocal))
 	var failed error
 	configured := make([]string, 0, len(order))
 	for _, d := range order {
@@ -185,14 +167,12 @@ func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, 
 		id, strings.Join(configured, ", "))
 }
 
-// Find is the configured daemon whose ID is id, by find's rule.
 func (h Host) Find(ctx context.Context, id string, code protocol.Code) (Daemon, error) {
 	d, _, err := h.find(ctx, id, code)
 	return d, err
 }
 
-// localOnly refuses a start that would give a remote daemon d any of the environment secrets that stay on the local
-// Docker Desktop: the manifest names the daemon, so this rule never trusts its naming, only d.Remote.
+// localOnly trusts only d.Remote, never the manifest's naming of the daemon.
 func (h Host) localOnly(d Daemon, m Manifest) error {
 	if !d.Remote {
 		return nil
@@ -207,7 +187,6 @@ func (h Host) localOnly(d Daemon, m Manifest) error {
 	return nil
 }
 
-// secretItems are secrets' keychain items.
 func secretItems(secrets []Secret) []string {
 	items := make([]string, len(secrets))
 	for i, s := range secrets {
@@ -216,8 +195,6 @@ func secretItems(secrets []Secret) []string {
 	return items
 }
 
-// NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens
-// also reports to.
 func NewHost(home string, daemons []Daemon, creds Credentials, tokens Tokens, rec *audit.Recorder) Host {
 	return Host{
 		Home:     home,
@@ -236,8 +213,6 @@ func NewHost(home string, daemons []Daemon, creds Credentials, tokens Tokens, re
 
 const checkLogMax = 1 << 20
 
-// spawnCheck starts this executable's check-clients in a session of its own, outliving the build, its output in
-// ~/.ensemble/docker/clients-check.log.
 func spawnCheck(home string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -261,9 +236,7 @@ func spawnCheck(home string) error {
 	return cmd.Process.Release()
 }
 
-// openCheckLog opens dir's clients-check.log for appending, first moving one past checkLogMax to clients-check.log.1:
-// a running check keeps writing to the moved file, so a spawn never loses its output. A log another spawn moved first
-// is fine.
+// openCheckLog rotates by rename: a running check keeps writing to the moved file, so no output is lost.
 func openCheckLog(dir string, rename func(oldpath, newpath string) error) (*os.File, error) {
 	path := filepath.Join(dir, "clients-check.log")
 	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
@@ -298,7 +271,7 @@ type StartResult struct {
 
 type StatusResult struct {
 	Codex  *protocol.CodexStatus `json:"codex,omitempty"`
-	Claude map[string]bool       `json:"claude"` // each account logged in by name: whether its setup-token is usable
+	Claude map[string]bool       `json:"claude"` // whether each account's setup-token is usable
 }
 
 type CloseResult struct {
@@ -311,14 +284,12 @@ type WorkspaceResult struct {
 	Removed bool   `json:"removed"`
 }
 
-// clientLabel names the client a container was started for, secretsLabel the environment secrets it got (their
-// references, comma-joined; never a value); manifest labels cannot use the ensemble. prefix.
+// secretsLabel holds secret references, never a value; manifest labels cannot use the ensemble. prefix.
 const (
 	clientLabel  = "ensemble.client"
 	secretsLabel = "ensemble.secrets"
 )
 
-// clientKind is the audit kind of the credential client's container holds; "" for none.
 func clientKind(client string) string {
 	switch client {
 	case "claude":
@@ -329,7 +300,6 @@ func clientKind(client string) string {
 	return ""
 }
 
-// failure classifies a Docker error: an unreachable target, named with its reason, else code.
 func failure(err error, code protocol.Code, message string) *protocol.Error {
 	var u *docker.Unreachable
 	if errors.As(err, &u) {
@@ -338,7 +308,7 @@ func failure(err error, code protocol.Code, message string) *protocol.Error {
 	return protocol.New(code, message)
 }
 
-// diagnosed is failure with Docker's diagnostic as cause, only for the steps the protocol names: build stages, run, and workspace-rm's check and volume rm.
+// diagnosed adds Docker's diagnostic only for the steps the protocol names.
 func diagnosed(err error, code protocol.Code, message string) *protocol.Error {
 	e := failure(err, code, message)
 	if e.Code == code {

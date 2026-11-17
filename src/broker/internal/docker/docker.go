@@ -1,4 +1,4 @@
-// Package docker is the only code that runs the Docker CLI: fixed binary, the user's one Docker target, clean environment.
+// Package docker is the only code that runs the Docker CLI.
 package docker
 
 import (
@@ -26,15 +26,14 @@ const (
 	capture    = 65536
 )
 
-// A credential request kind's directory in a container (protocol credential-dirs.json).
+// Credential request kinds' directories in a container (protocol credential-dirs.json).
 const (
 	GitHubDir = SecretsDir + "/github"
 	LinearDir = SecretsDir + "/linear"
 	EnvDir    = SecretsDir + "/env"
 )
 
-// InfoID asks for the daemon's ID; a remote CLI answers it from its probe, so identifying a remote target opens no
-// second ssh connection.
+// InfoID: a remote CLI answers it from its probe, opening no second ssh connection.
 var InfoID = []string{"info", "--format", "{{json .ID}}"}
 
 var probeArgs = []string{"info", "--format", `{"id":{{json .ID}},"version":{{json .ServerVersion}}}`}
@@ -45,8 +44,7 @@ type Runner interface {
 
 var ErrUnreachable = errors.New("Docker target unreachable")
 
-// Unreachable is the only error for a Docker target the CLI cannot reach: the target and why, never a container's
-// output. It matches ErrUnreachable.
+// Unreachable says the target and why, never a container's output.
 type Unreachable struct {
 	Endpoint, Reason string
 }
@@ -59,7 +57,7 @@ func (e *Unreachable) Is(target error) bool { return target == ErrUnreachable }
 
 const startDesktop = "; start Docker Desktop and retry"
 
-// networkNotFound is the daemon's answer for a missing network, as newer CLIs pass it through.
+// Newer CLIs pass the daemon's missing-network answer through.
 var networkNotFound = regexp.MustCompile(`network \S+ not found`)
 
 type CommandError struct {
@@ -71,8 +69,6 @@ func (e *CommandError) Error() string {
 	return fmt.Sprintf("docker exited %d: %s", e.Exit, strings.TrimSpace(e.Stderr))
 }
 
-// Diagnostic is Docker's diagnostic: the last stderr line that is not the CLI's --help trailer
-// or Docker Desktop's build-details link.
 func Diagnostic(err error) string {
 	var ce *CommandError
 	if !errors.As(err, &ce) {
@@ -88,7 +84,6 @@ func Diagnostic(err error) string {
 	return err.Error()
 }
 
-// Absent reports whether Docker says the image, object, container, volume or network does not exist.
 func Absent(err error) bool {
 	var ce *CommandError
 	return errors.As(err, &ce) && (strings.Contains(ce.Stderr, "No such image") || strings.Contains(ce.Stderr, "No such object") ||
@@ -96,14 +91,12 @@ func Absent(err error) bool {
 		strings.Contains(ce.Stderr, "No such network") || networkNotFound.MatchString(ce.Stderr))
 }
 
-// Conflict reports whether Docker refused a container name another container holds.
 func Conflict(err error) bool {
 	var ce *CommandError
 	return errors.As(err, &ce) && strings.Contains(ce.Stderr, "Conflict. The container name")
 }
 
-// TempDir makes a private directory under <home>/.ensemble/docker/tmp, never TMPDIR or /tmp, which no container
-// mounts, so no worker can rewrite the contents.
+// TempDir avoids TMPDIR and /tmp: no container mounts its base, so no worker can rewrite it.
 func TempDir(home, pattern string) (string, error) {
 	base := filepath.Join(home, ".ensemble/docker/tmp")
 	if err := os.MkdirAll(base, 0o700); err != nil {
@@ -114,18 +107,17 @@ func TempDir(home, pattern string) (string, error) {
 
 type CLI struct {
 	path, buildx, home, config string
-	Progress                   io.Writer // nil: none; gets each docker build's stderr as it arrives
+	Progress                   io.Writer // gets each docker build's stderr live
 	target                     Target
-	targetErr                  error  // an invalid TargetFile: every Run's error
-	sshDir                     string // SSHDir; tests' own
+	targetErr                  error // an invalid TargetFile: every Run's error
+	sshDir                     string
 	mu                         sync.Mutex
 	probed                     bool
 	probeErr                   error
 	probedID                   string
 }
 
-// New writes a private CLI config that ignores ~/.docker and reads the Docker target; Run checks Docker Desktop's
-// executables, so a command's local validation fails first.
+// New's CLI config ignores ~/.docker; Run checks executables, so local validation fails first.
 func New(home string) (*CLI, func(), error) {
 	dir, err := TempDir(home, "ensemble-docker-")
 	if err != nil {
@@ -142,14 +134,11 @@ func New(home string) (*CLI, func(), error) {
 		targetErr: targetErr, sshDir: SSHDir}, clean, nil
 }
 
-// Target is the Docker target setting c was made with.
 func (c *CLI) Target() Target { return c.target }
 
-// TargetErr is the invalid target setting's error; nil for a valid one or none.
 func (c *CLI) TargetErr() error { return c.targetErr }
 
-// Local is a CLI for the local Docker Desktop beside c's remote target, with c's config and Progress; nil when c's
-// target is the local Docker Desktop.
+// Local is nil when c's target is already local.
 func (c *CLI) Local() *CLI {
 	if !c.target.Remote() {
 		return nil
@@ -164,8 +153,7 @@ func (c *CLI) Endpoint() string {
 	return "unix://" + filepath.Join(c.home, ".docker/run/docker.sock")
 }
 
-// Command is docker's argv and environment; a remote target's also put the ssh wrapper first on PATH and pass the
-// ssh agent's socket, the one variable added for ssh.
+// Command passes a remote target only SSH_AUTH_SOCK beyond the fixed environment.
 func (c *CLI) Command(args []string) (string, []string, []string) {
 	argv := append([]string{"--config", c.config, "--host", c.Endpoint()}, args...)
 	env := []string{"PATH=" + c.Path(), "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
@@ -175,7 +163,6 @@ func (c *CLI) Command(args []string) (string, []string, []string) {
 	return c.path, argv, env
 }
 
-// Path is the PATH docker runs with: a remote target's puts the ssh wrapper first.
 func (c *CLI) Path() string {
 	if c.target.Remote() {
 		return c.sshDir + ":" + systemPath
@@ -183,7 +170,7 @@ func (c *CLI) Path() string {
 	return systemPath
 }
 
-// capped keeps the last capture bytes: a long build's error comes last.
+// capped keeps the tail: a long build's error comes last.
 type capped struct{ data []byte }
 
 func (b *capped) Write(p []byte) (int, error) {
@@ -199,8 +186,7 @@ func executable(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0
 }
 
-// Run runs docker args against the target. A remote target is first probed once: reached over ssh, with docker on
-// the remote and an Engine of at least minEngine; once the probe fails, no docker process runs again.
+// Run probes a remote target once; after a failed probe no docker process runs again.
 func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
 	if c.targetErr != nil {
 		return nil, c.targetErr
@@ -237,8 +223,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
 }
 
-// probe checks a remote target once per CLI, keeping its daemon's ID; its diagnostic comes from docker info, never a
-// container.
+// probe's diagnostic comes from docker info, never a container.
 func (c *CLI) probe(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -271,7 +256,6 @@ func (c *CLI) probe(ctx context.Context) error {
 	return nil
 }
 
-// unreachable classifies a failed docker's stderr by target: nil when the daemon answered.
 func (c *CLI) unreachable(stderr string, detailed bool) *Unreachable {
 	if !c.target.Remote() {
 		if strings.Contains(stderr, "Cannot connect to the Docker daemon") || strings.Contains(stderr, "docker.sock: connect:") {
@@ -289,7 +273,6 @@ func (c *CLI) unreachable(stderr string, detailed bool) *Unreachable {
 	return &Unreachable{Endpoint: c.Endpoint(), Reason: reason}
 }
 
-// exec runs docker args: its stdout, its stderr's tail, and the run's error.
 func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, string, error) {
 	path, argv, env := c.Command(args)
 	cmd := exec.CommandContext(ctx, path, argv...)
@@ -299,7 +282,7 @@ func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, st
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if c.Progress != nil && len(args) > 0 && args[0] == "build" {
 		cmd.Stderr = io.MultiWriter(&stderr, c.Progress)
-		// The broker's own lines (error object, image notes) follow: start them on a fresh line.
+		// The broker's own lines follow: start them on a fresh line.
 		defer func() {
 			if n := len(stderr.data); n > 0 && stderr.data[n-1] != '\n' {
 				_, _ = c.Progress.Write([]byte{'\n'})
