@@ -26,6 +26,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.utils import docker_home
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.claude.support import (
     CEILING,
     CONFIG,
@@ -1183,6 +1184,7 @@ class DockerHomeTest(TranscriptCase):
 
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         home = docker_home("w", "claude")
         self.enterContext(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": home}))
         self.run = self.launched()

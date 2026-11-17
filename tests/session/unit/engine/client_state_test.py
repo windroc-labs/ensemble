@@ -1,16 +1,24 @@
 """session/engine/client_state.py: locate's lexical mapping, and read, stat, entries and snapshot
-refusing links, names and paths outside a client home, absent paths and size limits.
+through a session's reader (state_reader.py over its state volume, served by tests/session/state_volumes.py):
+refusing links, names and paths outside a client home, absent paths, size limits and broken replies.
 """
 
 import errno
+import io
+import json
 import os
 import sqlite3
 import stat as stat_module
+import tarfile
+import tempfile
+import threading
 from unittest import mock
 
-from ensemble.session.engine import client_state
-from ensemble.session.engine.types import StateEntry, StateFile, StateKind, StateStat
+from ensemble.session.engine import client_state, daemon
+from ensemble.session.engine.types import DockerAccess, StateEntry, StateFile, StateKind, StateStat
 from tests.session.case import Case
+from tests.session.state_volumes import DOCKER, HOST, IMAGE, record, serve
+from tests.session.unit.hosts.docker.support import ssh_wrapper
 
 HOME_DIR = "app"
 OPS = ("read", "stat", "entries", "snapshot")
@@ -21,6 +29,7 @@ class StateCase(Case):
         self.state = os.path.join(self.ensemble, "docker-state")
         self.client = os.path.join(self.state, "s1", HOME_DIR)
         os.makedirs(os.path.join(self.client, "a"))
+        self.volumes = self.enterContext(serve())
 
     def put(self, rel: str, data: bytes = b"") -> str:
         path = os.path.join(self.client, rel)
@@ -110,14 +119,31 @@ class LinkTest(StateCase):
             with self.subTest(op=op):
                 self.refused(op, StateFile("s1", HOME_DIR, rel))
 
-    def test_refuses_a_linked_client_home_or_session_dir(self):
-        os.symlink(self.secret, os.path.join(self.state, "s2"))
+    def test_refuses_a_linked_client_home(self):
         os.symlink(os.path.join(self.secret, HOME_DIR), os.path.join(self.state, "s1", "linked"))
-        for file in (StateFile("s2", HOME_DIR, "a/t"), StateFile("s1", "linked", "a/t")):
-            for op in OPS:
-                target = file._replace(rel="a") if op == "entries" else file
-                with self.subTest(file=file, op=op):
-                    self.refused(op, target)
+        file = StateFile("s1", "linked", "a/t")
+        for op in OPS:
+            target = file._replace(rel="a") if op == "entries" else file
+            with self.subTest(op=op):
+                self.refused(op, target)
+
+    def test_a_session_record_linked_outside_the_volume_writes_nothing_outside_the_temp_dir(self):
+        os.symlink(os.path.join(self.secret, "t"), os.path.join(self.client, "a", "s.jsonl"))
+        before = self.tree()
+        file = StateFile("s1", HOME_DIR, "a/s.jsonl")
+        for op in ("read", "stat", "snapshot"):
+            with self.subTest(op=op):
+                self.assertEqual(self.refused(op, file).errno, errno.ELOOP)
+        listed = client_state.entries(StateFile("s1", HOME_DIR, "a")) or ()
+        self.assertEqual([(e.name, e.kind) for e in listed], [("s.jsonl", StateKind.OTHER)])
+        self.assertEqual(self.tree(), before)
+
+    def tree(self) -> list[str]:
+        return sorted(
+            os.path.join(top, name)
+            for top, dirs, files in os.walk(self.home)
+            for name in dirs + files
+        )
 
     def test_a_linked_state_root_is_followed(self):
         os.rename(self.state, os.path.join(self.home, "elsewhere"))
@@ -185,6 +211,7 @@ class LocateTest(StateCase):
         os.symlink(real, linked)
         os.makedirs(os.path.join(real, ".ensemble", "docker-state", "s1", HOME_DIR))
         with mock.patch.dict(os.environ, {"HOME": linked}):
+            record("s1")
             for base in (linked, real):
                 path = os.path.join(base, ".ensemble", "docker-state", "s1", HOME_DIR, "t")
                 with self.subTest(base=base):
@@ -297,6 +324,28 @@ class SnapshotTest(StateCase):
         ):
             pass
 
+    def test_a_source_that_settles_is_copied_after_three_attempts_at_most(self):
+        self.put("a/x.db", b"main")
+        real = os.fstat
+        calls = []
+
+        def drifting(fd):
+            found = real(fd)
+            if not stat_module.S_ISREG(found.st_mode):
+                return found
+            calls.append(fd)
+            values = list(found)
+            values[stat_module.ST_SIZE] = found.st_size + (1 if len(calls) == 1 else 0)
+            return os.stat_result(values)
+
+        with (
+            mock.patch.object(os, "fstat", drifting),
+            client_state.snapshot(StateFile("s1", HOME_DIR, "a/x.db"), limit=100) as path,
+        ):
+            assert path is not None
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"main")
+
     def test_an_unstable_source_is_retried_then_refused(self):
         self.put("a/x.db", b"main")
         real = os.fstat
@@ -338,3 +387,229 @@ class SnapshotTest(StateCase):
                 self.assertEqual(reader.execute("SELECT count(*) FROM t").fetchone(), (2,))
             finally:
                 reader.close()
+
+
+class ReaderTest(StateCase):
+    def test_one_reader_serves_many_calls_with_no_mac_file_opened(self):
+        path = self.put("a/t", b"abc")
+        file = StateFile("s1", HOME_DIR, "a/t")
+        for _ in range(5):
+            self.assertEqual(client_state.read(file), b"abc")
+            self.assertEqual(client_state.stat(file), StateStat(3, os.stat(path).st_mtime))
+        self.assertEqual(len(self.volumes.readers), 1)
+        runs = [c for c in self.volumes.calls if c[3] == "run"]
+        self.assertEqual(len(runs), 1)
+
+    def test_the_reader_runs_confined_on_the_records_daemon(self):
+        self.put("a/t", b"abc")
+        client_state.read(StateFile("s1", HOME_DIR, "a/t"))
+        (run,) = [c for c in self.volumes.calls if c[3] == "run"]
+        self.assertEqual(run[:3], [DOCKER, "--host", HOST])
+        for flag in (
+            ["--log-driver", "none"],
+            ["--network", "none"],
+            ["--cap-drop", "ALL"],
+            ["--security-opt", "no-new-privileges"],
+            ["--user", "agent"],
+            ["--label", "ensemble.state-reader=s1"],
+            [
+                "--mount",
+                "type=volume,source=ensemble-state-s1,target=/state,readonly,volume-nocopy",
+            ],
+        ):
+            self.assertTrue(
+                any(run[i : i + 2] == flag for i in range(len(run))), f"{flag} not in {run}"
+            )
+        self.assertIn("--read-only", run)
+        self.assertIn("--rm", run)
+        self.assertEqual(run[run.index(IMAGE) + 1 : run.index(IMAGE) + 3], ["-I", "-c"])
+        with open(client_state.READER, encoding="utf-8") as f:
+            self.assertEqual(run[run.index(IMAGE) + 3], f.read())
+
+    def test_two_threads_each_get_their_own_reply(self):
+        self.put("a/x", b"x" * 300000)
+        self.put("a/y", b"y" * 300000)
+        found, errors = {}, []
+
+        def read(name):
+            try:
+                for _ in range(20):
+                    data = client_state.read(StateFile("s1", HOME_DIR, f"a/{name}"))
+                    if data != name.encode() * 300000:
+                        raise AssertionError(name)
+                found[name] = True
+            except (AssertionError, OSError) as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=read, args=(n,)) for n in ("x", "y")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(found, {"x": True, "y": True})
+        self.assertEqual(len(self.volumes.readers), 1)
+
+    def test_no_volume_is_absent_and_starts_no_reader(self):
+        self.volumes.volumes = set()
+        self.put("a/t", b"abc")
+        file = StateFile("s1", HOME_DIR, "a/t")
+        self.assertIsNone(client_state.read(file))
+        self.assertIsNone(client_state.stat(file))
+        self.assertIsNone(client_state.entries(file._replace(rel="a")))
+        with client_state.snapshot(file, limit=10) as path:
+            self.assertIsNone(path)
+        self.assertFalse([c for c in self.volumes.calls if c[3] == "run"])
+
+    def test_no_worker_image_is_refused(self):
+        self.volumes.images = "ensemble-worker:latest\n"
+        self.put("a/t")
+        self.assertEqual(self.refused("read", StateFile("s1", HOME_DIR, "a/t")).errno, errno.EIO)
+
+    def test_an_unreachable_daemon_is_refused(self):
+        self.volumes.inspect_error = "Cannot connect to the Docker daemon"
+        self.put("a/t")
+        self.assertEqual(self.refused("read", StateFile("s1", HOME_DIR, "a/t")).errno, errno.EIO)
+
+    def test_a_reader_that_exited_is_replaced_on_the_next_call(self):
+        self.put("a/t", b"abc")
+        file = StateFile("s1", HOME_DIR, "a/t")
+        self.assertEqual(client_state.read(file), b"abc")
+        self.volumes.readers[0].kill()
+        self.assertEqual(client_state.read(file), b"abc")
+        self.assertEqual(len(self.volumes.readers), 2)
+
+    def test_a_silent_reader_times_out_and_is_stopped(self):
+        self.put("a/t", b"abc")
+        file = StateFile("s1", HOME_DIR, "a/t")
+        self.assertEqual(client_state.read(file), b"abc")
+        self.volumes.readers[0].hang = True
+        clock = iter([0.0, *[client_state.REPLY_TIMEOUT + 1.0] * 4])
+        with mock.patch("time.monotonic", lambda: next(clock)):
+            self.assertEqual(self.refused("read", file).errno, errno.ETIMEDOUT)
+        self.assertTrue(self.volumes.readers[0].killed)
+        self.assertEqual(client_state.read(file), b"abc")
+
+
+class AccessRecordTest(Case):
+    def setUp(self):
+        self.client = os.path.join(self.ensemble, "docker-state", "s1", HOME_DIR)
+        os.makedirs(self.client)
+        with open(os.path.join(self.client, "t"), "wb") as f:
+            f.write(b"ok")
+        self.volumes = self.enterContext(serve(sessions=()))
+
+    def test_calls_use_the_sessions_recorded_docker_and_daemon(self):
+        daemon.save_access("s1", DockerAccess("/opt/docker", "ssh://pc"))
+        with ssh_wrapper():
+            self.assertEqual(client_state.read(StateFile("s1", HOME_DIR, "t")), b"ok")
+        self.assertTrue(self.volumes.calls)
+        for call in self.volumes.calls:
+            self.assertEqual(call[:3], ["/opt/docker", "--host", "ssh://pc"])
+
+    def test_no_record_is_absent(self):
+        self.assertIsNone(client_state.read(StateFile("s1", HOME_DIR, "t")))
+        self.assertFalse(self.volumes.calls)
+
+    def test_a_malformed_record_is_refused(self):
+        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.ACCESS_FILE)
+        for text in (
+            "[]",
+            '{"docker": "docker", "host": "unix:///s"}',
+            '{"docker": "/d", "host": "tcp://x:2375"}',
+            '{"docker": "/d", "host": "unix:///s", "extra": "x"}',
+            "{",
+        ):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            with self.subTest(text=text), self.assertRaises(OSError) as caught:
+                client_state.read(StateFile("s1", HOME_DIR, "t"))
+            self.assertEqual(caught.exception.errno, errno.EINVAL)
+
+
+class BrokenReplyTest(StateCase):
+    def reply(self, header: dict | None = None, payload: bytes = b"", *, raw: bytes | None = None):
+        base = {"errno": None, "message": "", "size": 0, "mtime": 0.0, "entries": []}
+        if raw is None:
+            found = {**base, **(header or {})}
+            found.setdefault("length", len(payload))
+            raw = json.dumps(found).encode() + b"\n" + payload
+        self.volumes.reply = raw
+
+    def assert_broken(self, op: str, file: StateFile):
+        self.assertEqual(self.refused(op, file).errno, errno.EPROTO)
+        self.assertTrue(self.volumes.readers[-1].killed)
+
+    @staticmethod
+    def archive(*members: tarfile.TarInfo, data: bytes = b"") -> bytes:
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as tar:
+            for member in members:
+                tar.addfile(member, io.BytesIO(data) if member.isreg() else None)
+        return buffer.getvalue()
+
+    def test_bad_headers_are_refused(self):
+        file = StateFile("s1", HOME_DIR, "a/t")
+        for raw in (
+            b"not json\n",
+            b"[]\n",
+            json.dumps({"errno": None}).encode() + b"\n",
+            json.dumps(
+                {"errno": None, "message": "", "size": -1, "mtime": 0, "entries": [], "length": 0}
+            ).encode()
+            + b"\n",
+        ):
+            with self.subTest(raw=raw):
+                self.reply(raw=raw)
+                self.assert_broken("read", file)
+
+    def test_a_length_over_the_bound_is_refused(self):
+        self.reply({"length": 4}, b"abcd")
+        with self.assertRaises(OSError) as caught:
+            client_state.read(StateFile("s1", HOME_DIR, "a/t"), limit=3)
+        self.assertEqual(caught.exception.errno, errno.EPROTO)
+
+    def test_a_header_with_no_end_is_refused_past_its_bound(self):
+        self.reply(raw=b"{" + b" " * (client_state.HEADER_MAX + 1))
+        self.assert_broken("read", StateFile("s1", HOME_DIR, "a/t"))
+
+    def test_entry_names_that_are_not_one_part_are_refused(self):
+        for name in ("../x", "a/b", "..", "", "x\u0000"):
+            with self.subTest(name=name):
+                self.reply({"entries": [[name, "file", 1, 0.0]]})
+                self.assert_broken("entries", StateFile("s1", HOME_DIR, "a"))
+
+    def test_snapshot_members_other_than_the_requested_files_are_refused(self):
+        file = StateFile("s1", HOME_DIR, "a/x.db")
+        link = tarfile.TarInfo("x.db")
+        link.type, link.linkname = tarfile.SYMTYPE, "/etc/hosts"
+        hard = tarfile.TarInfo("x.db")
+        hard.type, hard.linkname = tarfile.LNKTYPE, "x.db-wal"
+        sparse = tarfile.TarInfo("x.db")
+        sparse.type, sparse.size = tarfile.GNUTYPE_SPARSE, 0
+        named = {}
+        for name in ("../x.db", "/tmp/x.db", "other", "a/x.db"):
+            named[name] = tarfile.TarInfo(name)
+            named[name].size = 1
+        big = tarfile.TarInfo("x.db")
+        big.size = 11
+        twice = tarfile.TarInfo("x.db")
+        twice.size = 1
+        cases = {
+            "symlink": self.archive(link),
+            "hardlink": self.archive(hard),
+            "sparse": self.archive(sparse),
+            **{name: self.archive(member, data=b"x") for name, member in named.items()},
+            "over limit": self.archive(big, data=b"x" * 11),
+            "twice": self.archive(twice, twice, data=b"x"),
+            "not tar": b"garbage" * 100,
+        }
+        before = sorted(os.listdir(tempfile.gettempdir()))
+        for name, payload in cases.items():
+            with self.subTest(case=name):
+                self.reply(payload=payload)
+                with self.assertRaises(OSError) as caught, client_state.snapshot(file, limit=10):
+                    pass
+                self.assertEqual(caught.exception.errno, errno.EPROTO)
+        self.assertFalse(os.path.lexists(os.path.join(self.home, "x.db")))
+        self.assertEqual(sorted(os.listdir(tempfile.gettempdir())), before)

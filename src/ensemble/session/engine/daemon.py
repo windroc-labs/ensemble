@@ -1,8 +1,9 @@
 """The account's Docker target (the broker's TARGET_FILE, not session config), the one docker
-command line that reaches it whatever DOCKER_HOST, DOCKER_CONTEXT or DOCKER_CONFIG say, and a capped
-run of one whose output is untrusted.
+command line that reaches it whatever DOCKER_HOST, DOCKER_CONTEXT or DOCKER_CONFIG say, a capped
+run of one whose output is untrusted, and the record of which daemon holds a session's state.
 """
 
+import errno
 import json
 import os
 import pwd
@@ -12,7 +13,8 @@ import subprocess
 import tempfile
 import time
 
-from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
+from ensemble.utils import DOCKER_STATE, read_regular, save
 
 CLEARED = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 RUN_TIMEOUT = 10
@@ -23,10 +25,53 @@ TARGET = re.compile(r"ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,2
 SSH_DIR = "/usr/local/libexec/ensemble/ssh"
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 UNREACHABLE = ("Cannot connect to the Docker daemon", "error during connect")
+STATE_READER_LABEL = "ensemble.state-reader"
+ACCESS_FILE = "state-access.json"
+ACCESS_MAX = 4096
 
 
 class Overflow(OSError):
     pass
+
+
+def state_volume(name: str) -> str:
+    return f"ensemble-state-{name}"
+
+
+def _access_path(name: str) -> str:
+    return os.path.join(os.path.expanduser(DOCKER_STATE), name, ACCESS_FILE)
+
+
+def save_access(name: str, access: DockerAccess) -> None:
+    save(
+        _access_path(name), json.dumps({"docker": access.docker, "host": access.host}), durable=True
+    )
+
+
+def load_access(name: str) -> DockerAccess | None:
+    """None: no record; OSError (EINVAL): malformed."""
+    path = _access_path(name)
+    data = read_regular(path, limit=ACCESS_MAX + 1)
+    if data is None:
+        return None
+    try:
+        found = json.loads(data) if len(data) <= ACCESS_MAX else None
+    except ValueError:
+        found = None
+    if (
+        isinstance(found, dict)
+        and set(found) == {"docker", "host"}
+        and all(isinstance(v, str) for v in found.values())
+        and os.path.isabs(found["docker"])
+        and (_remote(found["host"]) or _local(found["host"]))
+    ):
+        return DockerAccess(found["docker"], found["host"])
+    raise OSError(errno.EINVAL, "malformed Docker state access record", path)
+
+
+def _local(host: str) -> bool:
+    path = host.removeprefix("unix://")
+    return host.startswith("unix:///") and "\0" not in path and os.path.normpath(path) == path
 
 
 def account_home() -> str:
@@ -73,9 +118,11 @@ def container_name(name: str, generation: str) -> str:
     return f"ensemble-{name}-{generation}"
 
 
-def docker_call(docker: str, *args: str) -> tuple[list[str], dict[str, str]]:
-    """argv and env for `docker <args>` against endpoint()."""
-    host = endpoint()
+def docker_call(
+    docker: str, *args: str, host: str | None = None
+) -> tuple[list[str], dict[str, str]]:
+    """argv and env for `docker <args>` against `host`, else endpoint()."""
+    host = endpoint() if host is None else host
     env = {k: v for k, v in os.environ.items() if k not in CLEARED}
     if host.startswith("ssh://"):
         env["PATH"] = os.pathsep.join((ssh_dir(host), env.get("PATH", os.defpath)))

@@ -31,6 +31,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.utils import LOCAL_ENV_VARS, docker_home
 from tests.session.case import SPAWNS, Case, packaged_hosts
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.claude.support import (
     CEILING,
     CONFIG,
@@ -1101,6 +1102,7 @@ class DockerStateReadTest(Base):
 
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         self.home_dir = docker_home("w", "claude")
         self.path = os.path.join(self.home_dir, "projects", "p", f"{SID}.jsonl")
         os.makedirs(os.path.dirname(self.path))
@@ -1139,6 +1141,7 @@ class DockerStateStatusTest(Base):
 
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         self.common = ClaudeCommon({})
         self.env_vars = {"CLAUDE_CONFIG_DIR": docker_home("w", "claude")}
         self.path = self.common.transcript(self.work, SID, self.env_vars)
@@ -1328,6 +1331,7 @@ LAST = "2f8fad5b-d9cb-469f-a165-70867728950e"
 class ContinuationTest(Base):
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
         self.common = ClaudeCommon({})
         self.path = self.common.transcript(self.work, SID)
         self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
