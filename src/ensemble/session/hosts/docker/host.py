@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
@@ -32,6 +32,7 @@ from ensemble.session.engine.daemon import (
     capped,
     container_name,
     daemon_id,
+    daemons,
     describe,
     docker_call,
     endpoint,
@@ -144,12 +145,16 @@ STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
 class Row(NamedTuple):
-    """A `docker ps` row whose labels match its container name."""
+    """A `docker ps` row whose labels match its container name, and the daemon that listed it."""
 
     name: str
     container: str
     generation: str
     state: str
+    host: str
+
+
+PS_FIELDS = 4  # PS_FORMAT's columns
 
 
 def _record(name: str) -> dict:
@@ -405,8 +410,26 @@ def _sessions_at(anchor: str) -> list[str]:
     return found
 
 
-def _no_daemon() -> str:
-    return f"no Docker CLI, or Docker target {endpoint()} unreachable"
+def _no_daemon(hosts: Iterable[str]) -> str:
+    return f"no Docker CLI, or Docker target {', '.join(hosts)} unreachable"
+
+
+def _session_rows(listed: Iterable[tuple[str, list[str]]]) -> list[Row]:
+    """The (daemon, ps row)s whose labels match their container names."""
+    return [
+        Row(name, container, generation, state, host)
+        for host, (container, name, generation, state) in (
+            (host, row) for host, row in listed if len(row) == PS_FIELDS
+        )
+        if SESSION_NAME.fullmatch(name)
+        and GEN.fullmatch(generation)
+        and container == container_name(name, generation)
+    ]
+
+
+def _tui_rows(rows: Iterable[Row]) -> dict[str, Row]:
+    """Name → its guarded tui row."""
+    return {row.name: row for row in rows if _kind(row.name, row.generation) == Kind.TUI}
 
 
 def _held(marker: str) -> bool:
@@ -460,16 +483,34 @@ class DockerHost(Host):
     def tui_settings(self) -> TuiSettings:
         return replace(super().tui_settings(), status_line=True, badge="🐳")
 
-    def _ps(self, *, required: bool = False) -> list[list[str]]:
-        """Admission requires an answer; others list none without a daemon/CLI."""
-        rows = self._listed("ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT)
-        if rows is None and required:
-            raise SessionError(f"host {self.name}: inventory unavailable ({_no_daemon()})")
-        return rows or []
+    def _inventory(
+        self, *, required: bool = False
+    ) -> tuple[list[tuple[str, list[str]]], tuple[str, ...]]:
+        """Every daemon's (daemon, ps row)s, and the daemons that did not answer, whose workers
+        are not listed, never taken as ended. Admission requires an answer from one daemon: a
+        worker on an unreachable one loses its harness's heartbeat and ends.
+        """
+        hosts = daemons()
+        listed: list[tuple[str, list[str]]] = []
+        down = []
+        for host in hosts:
+            rows = self._listed(
+                "ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT, host=host
+            )
+            if rows is None:
+                down.append(host)
+            else:
+                listed.extend((host, row) for row in rows)
+        if required and len(down) == len(hosts):
+            raise SessionError(f"host {self.name}: inventory unavailable ({_no_daemon(down)})")
+        return listed, tuple(down)
 
-    def _listed(self, *args: str) -> list[list[str]] | None:
+    def _ps(self, *, required: bool = False) -> list[tuple[str, list[str]]]:
+        return self._inventory(required=required)[0]
+
+    def _listed(self, *args: str, host: str) -> list[list[str]] | None:
         """Tab-separated rows; None without a reachable daemon or a CLI; Unanswered on failure."""
-        argv, env = docker_call(self.docker, *args, host=endpoint())
+        argv, env = docker_call(self.docker, *args, host=host)
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
         except FileNotFoundError:
@@ -483,23 +524,10 @@ class DockerHost(Host):
         return [line.split("\t") for line in res.stdout.splitlines()]
 
     def _rows(self, *, required: bool = False) -> list[Row]:
-        return [
-            Row(name, container, generation, state)
-            for container, name, generation, state in (
-                row for row in self._ps(required=required) if len(row) == len(Row._fields)
-            )
-            if SESSION_NAME.fullmatch(name)
-            and GEN.fullmatch(generation)
-            and container == container_name(name, generation)
-        ]
+        return _session_rows(self._ps(required=required))
 
     def _containers(self, *, required: bool = False) -> dict[str, Row]:
-        """Name → its guarded tui row."""
-        return {
-            row.name: row
-            for row in self._rows(required=required)
-            if _kind(row.name, row.generation) == Kind.TUI
-        }
+        return _tui_rows(self._rows(required=required))
 
     def sweep(self, own: str) -> None:
         """Closes rows whose owner lock is free, and `own`'s debris; others only under their tui
@@ -568,7 +596,13 @@ class DockerHost(Host):
     def _workspaces(self) -> list[tuple[str, str]] | None:
         """Run workspace volumes with their cwd label; None without a reachable daemon or a CLI."""
         rows = self._listed(
-            "volume", "ls", "--filter", f"label={KIND_LABEL}", "--format", VOLUME_FORMAT
+            "volume",
+            "ls",
+            "--filter",
+            f"label={KIND_LABEL}",
+            "--format",
+            VOLUME_FORMAT,
+            host=endpoint(),
         )
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
@@ -578,7 +612,9 @@ class DockerHost(Host):
         """
         rows = self._workspaces()
         if rows is None:
-            raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
+            raise SessionError(
+                f"host {self.name}: workspaces unknown ({_no_daemon((endpoint(),))})"
+            )
         anchor, removed = os.path.realpath(cwd), []
         for volume in sorted(v for v, a in rows if a == anchor):
             try:
@@ -633,7 +669,7 @@ class DockerHost(Host):
         if _damaged_record(row.name):
             return
         if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
-            self.broker.close(row.container, host=endpoint())
+            self.broker.close(row.container, host=row.host)
 
     def _client_context(self) -> ClientContext:
         return replace(
@@ -879,14 +915,14 @@ class DockerHost(Host):
         if resume not in ("0", "1"):
             raise SessionError(f"docker session {name}: bad resume flag {resume!r:.20}")
         self.sweep(name)
-        for row in self._ps():
+        for _, row in self._ps():
             if row[1:2] == [name]:
-                if len(row) == len(Row._fields) and _guarded(name, row[2]):
+                if len(row) == PS_FIELDS and _guarded(name, row[2]):
                     raise SessionError(
                         f"docker session {name}: a container for it exists; close {name} first"
                     )
                 if (
-                    len(row) == len(Row._fields)
+                    len(row) == PS_FIELDS
                     and GEN.fullmatch(row[2])
                     and row[0] == container_name(name, row[2])
                 ):
@@ -1066,7 +1102,7 @@ class DockerHost(Host):
                 if row.name == name and _guarded(name, row.generation):
                     if self._row_liveness(name, row.generation) != Liveness.ABSENT:
                         raise SessionBusy(name, BUSY)
-                    self.broker.close(row.container, host=endpoint())
+                    self.broker.close(row.container, host=row.host)
             with _Stops() as stops:
                 handle = self._guard(
                     name,
@@ -1163,7 +1199,7 @@ class DockerHost(Host):
                 hooks=HookWorker([hook, "hook", "--serve", tui_dir])
                 if metadata.get("owner")
                 else None,
-                remove=lambda: self._remove(container),
+                remove=lambda: self._remove(container, endpoint()),
                 owner=owner,
                 maintenance=functools.partial(
                     maintenance.Maintenance,
@@ -1200,8 +1236,8 @@ class DockerHost(Host):
         self._workers[name] = handle
         return handle
 
-    def _remove(self, container: str) -> None:
-        self.broker.close(container, host=endpoint())
+    def _remove(self, container: str, host: str) -> None:
+        self.broker.close(container, host=host)
         self._spawn_reclaim()
 
     def _reporter(self, name: str, events: str | None):
@@ -1238,11 +1274,12 @@ class DockerHost(Host):
 
     def _release(self, name: str, generation: str) -> None:
         """Once its owner lock is free."""
-        if not any(r.name == name and r.generation == generation for r in self._rows()):
+        row = next((r for r in self._rows() if (r.name, r.generation) == (name, generation)), None)
+        if row is None:
             return
         if not _lock_free(_owner_path(name)):
             raise SessionError(f"docker session {name}: owned by its harness")
-        self._remove(container_name(name, generation))
+        self._remove(row.container, row.host)
 
     def _row_liveness(self, name: str, generation: str) -> Liveness:
         """By docker; ABSENT permits only that container's removal."""
@@ -1262,7 +1299,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
             *("--probe", guard.run_paths(row.generation)["dir"]),
-            host=endpoint(),
+            host=row.host,
         )
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -1359,12 +1396,21 @@ class DockerHost(Host):
         return text if isinstance(text, str) else ""
 
     def rows(self) -> list[SessionRow]:
-        """[] when docker fails, so other Hosts' rows list; list() raises: callers act on absence."""
+        """[] when docker fails, so other Hosts' rows list; list() raises: callers act on absence.
+        Each daemon that does not answer is named on stderr: its workers are not listed.
+        """
         try:
-            containers = self._containers()
+            listed, down = self._inventory()
         except SessionError as error:
             LOG.warning("docker rows: %s", error)
             return []
+        for host in down:
+            print(
+                f"ensemble-session: docker: {describe(host)} unreachable; its workers are not"
+                " listed",
+                file=sys.stderr,
+            )
+        containers = _tui_rows(_session_rows(listed))
         return [self._row(containers[name]) for name in sorted(containers)]
 
     def _row(self, row: Row, *, probe: bool = False) -> SessionRow:
@@ -1400,7 +1446,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
             *("--attach", display),
-            host=endpoint(),
+            host=found.host,
         )[0]
         return CommandView(
             printed=shlex.join(argv),

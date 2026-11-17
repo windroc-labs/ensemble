@@ -100,7 +100,8 @@ def done(rc=0, out="", err=""):
 class FakeDocker:
     """The docker CLI: `ps` prints `ps`, `volume ls` prints `volumes`; an exec answers from `replies`, {command prefix: (rc, out,
     err), an exception or a callable of the command}, the first matching prefix; else success. `info` answers the ID
-    `daemons` gives its host (none: unreachable), recorded in `infos`, not `order`.
+    `daemons` gives its host (none: unreachable), recorded in `infos`, not `order`. `others`: another
+    daemon's host → its FakeDocker; any other daemon lists no session containers or volumes.
     """
 
     def __init__(self, ep, order):
@@ -110,6 +111,7 @@ class FakeDocker:
         self.daemons, self.infos = {ep: LOCAL_DAEMON}, []
         self.elsewhere = {}  # another daemon's host: the volumes it holds
         self.elsewhere_failing = {}  # another daemon's host: its volume inspect's failure
+        self.others = {}
 
     def __call__(self, argv, env, *, input=None, timeout):
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
@@ -118,6 +120,18 @@ class FakeDocker:
             if argv[2] not in self.daemons or self.down and argv[2] == self.ep:
                 return done(1, "", f"Cannot connect to the Docker daemon at {argv[2]}.\n")
             return done(0, json.dumps(self.daemons[argv[2]]) + "\n")
+        if argv[:2] == [DOCKER, "--host"] and argv[2] in self.others:
+            return self.others[argv[2]](argv, env, input=input, timeout=timeout)
+        if (
+            argv[:2] == [DOCKER, "--host"]
+            and argv[2] != self.ep
+            and argv[3:5]
+            in (
+                ["ps", "-a"],
+                ["volume", "ls"],
+            )
+        ):
+            return done(0, "")
         if argv[:2] == [DOCKER, "--host"] and argv[2] != self.ep:
             assert argv[3:5] == ["volume", "inspect"], argv
             if (failing := self.elsewhere_failing.get(argv[2])) is not None:
@@ -2123,7 +2137,7 @@ class ReclaimTest(Base):
             self.order.append("reclaim")
 
         with mock.patch.object(self.host, "_spawn_reclaim", side_effect=spawn):
-            self.host._remove(CONTAINER)
+            self.host._remove(CONTAINER, self.ep)
         self.assertEqual(self.order, [("close", CONTAINER), "reclaim"])
 
     def test_unsaved_work_keeps_the_volume_and_warns_once_for_good(self):
@@ -2591,6 +2605,96 @@ class AttachTargetTest(Base):
         )
         with self.assertRaisesRegex(SessionError, "^no docker session x$"):
             self.host.attach_target("x")
+
+
+REMOTE = "ssh://u@pc"
+REMOTE_DAEMON = "remote-daemon-id"
+MINI = "ensemble-broker-env/mini-op-password"
+
+
+class TwoDaemonsTest(Base):
+    """A remote target beside the local Docker Desktop, whose MINI workers stay local."""
+
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": REMOTE, "local_secrets": [MINI]}, f)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.remote = FakeDocker(REMOTE, self.order)
+        self.remote.daemons = {REMOTE: REMOTE_DAEMON}
+        self.docker.others[REMOTE] = self.remote
+
+    def worker(self, docker, name, *, kind="tui"):
+        docker.ps.append(f"ensemble-{name}-{GEN}\t{name}\t{GEN}\trunning")
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "sid": "s1", "client": "agent", "kind": kind}, f)
+
+    def test_ls_lists_workers_on_both_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rows = self.host.rows()
+        self.assertEqual(([row.name for row in rows], err.getvalue()), (["mini", "w"], ""))
+        self.assertEqual(self.host.list(), ["mini", "w"])
+
+    def test_ls_names_an_unreachable_daemon_and_lists_the_other(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rows = self.host.rows()
+        self.assertEqual([row.name for row in rows], ["mini"])
+        self.assertIn(f"{REMOTE} unreachable; its workers are not listed", err.getvalue())
+        self.assertEqual(self.host.list(), ["mini"])
+
+    def test_admission_counts_reachable_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        self.assertEqual([row.name for row in self.host._capacity_rows()], ["mini"])
+
+    def test_admission_fails_when_no_daemon_answers(self):
+        self.remote.down = self.docker.down = True
+        with self.assertRaisesRegex(SessionError, "inventory unavailable") as caught:
+            self.host._capacity_rows()
+        self.assertIn(REMOTE, str(caught.exception))
+        self.assertIn(self.ep, str(caught.exception))
+
+    def test_sweep_closes_free_rows_on_both_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.host.sweep("other")
+        self.assertEqual(
+            sorted(zip(self.broker.closed, self.broker.close_hosts, strict=True)),
+            [(f"ensemble-mini-{GEN}", self.ep), (f"ensemble-w-{GEN}", REMOTE)],
+        )
+
+    def test_sweep_leaves_an_unreachable_daemon_alone(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        self.host.sweep("other")
+        self.assertEqual(
+            (self.broker.closed, self.broker.close_hosts), ([f"ensemble-mini-{GEN}"], [self.ep])
+        )
+        self.assertFalse([call for call in self.remote.calls if call[0][0] != "ps"])
+        self.remote.down = False
+        self.assertIn("w", self.host.list())
+
+    def test_a_local_row_s_liveness_and_display_use_the_local_daemon(self):
+        self.worker(self.docker, "mini")
+        self.host.attach_target("mini")
+        view = self.host.attach_target("mini")
+        self.assertEqual(view.argv[view.argv.index(DOCKER) + 2], self.ep)
+        self.host._row_liveness("mini", GEN)
+        self.assertTrue(self.docker.execs())
+        self.assertFalse([c for c in self.remote.calls if c[0][0] == "exec"])
 
 
 class RemoteAttachTargetTest(Base):
