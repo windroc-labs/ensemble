@@ -646,10 +646,24 @@
             },
             {
               "$ref": "#/$defs/container"
+            },
+            {
+              "const": "--daemon"
+            },
+            {
+              "const": "local"
             }
           ],
           "items": false,
-          "minItems": 3
+          "minItems": 3,
+          "anyOf": [
+            {
+              "maxItems": 3
+            },
+            {
+              "minItems": 5
+            }
+          ]
         }
       },
       "required": [
@@ -692,9 +706,22 @@
               "$ref": "#/$defs/volume"
             },
             {
-              "const": "--force"
+              "enum": [
+                "--force",
+                "--daemon"
+              ]
+            },
+            {
+              "enum": [
+                "--daemon",
+                "local"
+              ]
+            },
+            {
+              "const": "local"
             }
           ],
+          "$comment": "Then an optional --force, then an optional --daemon local; the broker checks the order (usage).",
           "items": false,
           "minItems": 3
         }

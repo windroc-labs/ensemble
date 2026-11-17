@@ -7,6 +7,7 @@ import os
 import tempfile
 from unittest import mock
 
+from ensemble.session.engine import daemon
 from ensemble.session.engine.daemon import DAEMON
 from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker import broker
@@ -37,8 +38,11 @@ CALLS = {
     "build_output": ("build", lambda b: b.build("/opt/ensemble")),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
     "maintain_output": ("maintain", lambda b: b.maintain(CONTAINER, MANIFEST)),
-    "close_output": ("close", lambda b: b.close(CONTAINER)),
-    "workspace_rm_output": ("workspace-rm", lambda b: b.workspace_rm(VOLUME)),
+    "close_output": ("close", lambda b: b.close(CONTAINER, host=daemon.local_endpoint())),
+    "workspace_rm_output": (
+        "workspace-rm",
+        lambda b: b.workspace_rm(VOLUME, host=daemon.local_endpoint()),
+    ),
 }
 COMMANDS = {
     "version": CALLS["version_output"],
@@ -66,6 +70,32 @@ class PluginRootTest(Case):
 
 
 class ResponseTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.account = os.path.realpath(self.home)
+        patcher = mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_dir=self.account))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_close_and_workspace_rm_name_the_local_docker_desktop_beside_a_remote_target(self):
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": "ssh://u@pc", "local_secrets": []}, f)
+        local = FakeBroker(success("close-output"))
+        Broker(local).close(CONTAINER, host=daemon.local_endpoint())
+        target = FakeBroker(success("close-output"))
+        Broker(target).close(CONTAINER, host="ssh://u@pc")
+        self.assertEqual(
+            (local.calls, target.calls),
+            ([[BROKER, *data("close-input-local")["argv"]]], [argv("close")]),
+        )
+        forced = FakeBroker(success("workspace-rm-output"))
+        Broker(forced).workspace_rm(VOLUME, force=True, host=daemon.local_endpoint())
+        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-local")["argv"]]])
+        with self.assertRaisesRegex(SessionError, "is not the local Docker Desktop"):
+            Broker(FakeBroker(success("close-output"))).close(CONTAINER, host="ssh://u@other")
+
     def test_start_environment_is_a_generic_string_map(self):
         response = data("start-output")
         response["env"] = {"FUTURE_KIND_IDENTITY": "opaque", "GIT_AUTHOR_NAME": "app[bot]"}
@@ -87,7 +117,7 @@ class ResponseTest(Case):
         self.addCleanup(logger.removeHandler, handler)
         response = {**data("close-output"), "audit_warning": "audit_write_failed"}
         result = Broker(FakeBroker((0, json.dumps(response), "")), warning=unavailable).close(
-            CONTAINER
+            CONTAINER, host=daemon.local_endpoint()
         )
         self.assertIs(result, response["removed"])
         self.assertIn("audit_write_failed", output.getvalue())
@@ -314,15 +344,29 @@ class ResponseTest(Case):
                 deadline=None,
             ),
         )
-        self.assertFalse(Broker(FakeBroker(success("close-absent"))).close(CONTAINER))
-        self.assertTrue(Broker(FakeBroker(success("workspace-rm-output"))).workspace_rm(VOLUME))
-        self.assertFalse(Broker(FakeBroker(success("workspace-rm-absent"))).workspace_rm(VOLUME))
+        self.assertFalse(
+            Broker(FakeBroker(success("close-absent"))).close(
+                CONTAINER, host=daemon.local_endpoint()
+            )
+        )
+        self.assertTrue(
+            Broker(FakeBroker(success("workspace-rm-output"))).workspace_rm(
+                VOLUME, host=daemon.local_endpoint()
+            )
+        )
+        self.assertFalse(
+            Broker(FakeBroker(success("workspace-rm-absent"))).workspace_rm(
+                VOLUME, host=daemon.local_endpoint()
+            )
+        )
         forced = FakeBroker(success("workspace-rm-output"))
-        self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True))
+        self.assertTrue(
+            Broker(forced).workspace_rm(VOLUME, force=True, host=daemon.local_endpoint())
+        )
         self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force")["argv"]]])
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
-            Broker(FakeBroker(other)).workspace_rm(VOLUME)
+            Broker(FakeBroker(other)).workspace_rm(VOLUME, host=daemon.local_endpoint())
 
     def test_broker_env_adds_only_a_set_ssh_agent_socket(self):
         for sock, env in (
@@ -331,7 +375,7 @@ class ResponseTest(Case):
         ):
             fake = FakeBroker(success("close-absent"))
             with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": sock, "SSH_AGENT_PID": "1"}):
-                Broker(fake).close(CONTAINER)
+                Broker(fake).close(CONTAINER, host=daemon.local_endpoint())
             self.assertEqual(fake.kwargs[0]["env"], env)
 
     def test_endpoint_pattern_is_the_schemas(self):

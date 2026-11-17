@@ -113,3 +113,29 @@ func TestCloseRemovesWhenReadFails(t *testing.T) {
 		}
 	}
 }
+
+func TestCloseOnLocalDaemon(t *testing.T) {
+	remote := &fakeDocker{}
+	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(container + "\n"), nil }}
+	h := Host{Docker: remote, Endpoint: "ssh://u@pc", Local: &Daemon{Docker: local, Endpoint: "unix:///Users/example/.docker/run/docker.sock"},
+		Linear: &fakeLinear{}, GitHub: &fakeTokens{}}
+	got, err := h.OnLocal().Close(context.Background(), container)
+	if err != nil || !got.Removed || len(remote.calls) != 0 || !slices.ContainsFunc(local.calls, func(c []string) bool { return c[0] == "rm" }) {
+		t.Fatalf("%+v %v; remote %q local %q", got, err, remote.calls, local.calls)
+	}
+	if one := (Host{Docker: remote}); one.OnLocal().Docker != remote {
+		t.Fatal("a local target is not its own local daemon")
+	}
+}
+
+func TestCloseOnUnreachableDaemon(t *testing.T) {
+	remote := &fakeDocker{}
+	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
+	h := Host{Docker: remote, Local: &Daemon{Docker: local}, Linear: &fakeLinear{}, GitHub: &fakeTokens{}}
+	if _, err := h.OnLocal().Close(context.Background(), container); protoErr(t, err).Code != protocol.DockerUnreachable {
+		t.Fatal(err)
+	}
+	if len(remote.calls) != 0 {
+		t.Fatalf("closed on the other daemon: %q", remote.calls)
+	}
+}

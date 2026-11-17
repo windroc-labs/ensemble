@@ -41,7 +41,7 @@ class Broker:
             raise result
         return result
 
-    def close(self, container):
+    def close(self, container, *, host):
         self.calls.append(("close", container))
         if self.closes and isinstance(error := self.closes.pop(0), BaseException):
             raise error
@@ -56,7 +56,7 @@ class TickTest(Case):
     def make(self, broker, *, close=None):
         def closing():
             self.closed += 1
-            broker.close(f"ensemble-worker_1-{GEN}")
+            broker.close(f"ensemble-worker_1-{GEN}", host="unix:///docker.sock")
 
         return maintenance.Maintenance(
             "worker_1",

@@ -582,7 +582,7 @@ class DockerHost(Host):
         anchor, removed = os.path.realpath(cwd), []
         for volume in sorted(v for v, a in rows if a == anchor):
             try:
-                if self.broker.workspace_rm(volume, force=True):
+                if self.broker.workspace_rm(volume, force=True, host=endpoint()):
                     removed.append(volume)
             except SessionError as error:
                 raise SessionError(f"docker workspace {volume} kept: {error}") from None
@@ -618,7 +618,7 @@ class DockerHost(Host):
                 if _held(marker):
                     continue
                 try:
-                    self.broker.workspace_rm(volume)
+                    self.broker.workspace_rm(volume, host=endpoint())
                 except BrokerError as error:
                     save(marker, "dirty" if error.code == "workspace_dirty" else "failed")
                     LOG.warning("docker workspace %s kept: %s", volume, error.message)
@@ -633,7 +633,7 @@ class DockerHost(Host):
         if _damaged_record(row.name):
             return
         if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
-            self.broker.close(row.container)
+            self.broker.close(row.container, host=endpoint())
 
     def _client_context(self) -> ClientContext:
         return replace(
@@ -851,7 +851,7 @@ class DockerHost(Host):
         if anchor == cwd:
             return
         try:
-            self.broker.workspace_rm(volume)
+            self.broker.workspace_rm(volume, host=endpoint())
         except BrokerError as error:
             if error.code == "workspace_dirty":
                 raise ConfigError(
@@ -988,7 +988,7 @@ class DockerHost(Host):
                 raise SessionBusy(environment.lock, _holder_text(error.holder)) from error
             if error.cleanup == "failed" and error.container:
                 with contextlib.suppress(SessionError):
-                    self.broker.close(error.container)
+                    self.broker.close(error.container, host=endpoint())
             raise
         except (SessionError, OSError) as error:
             cleanup = self._roll_back(container)
@@ -1066,7 +1066,7 @@ class DockerHost(Host):
                 if row.name == name and _guarded(name, row.generation):
                     if self._row_liveness(name, row.generation) != Liveness.ABSENT:
                         raise SessionBusy(name, BUSY)
-                    self.broker.close(row.container)
+                    self.broker.close(row.container, host=endpoint())
             with _Stops() as stops:
                 handle = self._guard(
                     name,
@@ -1199,7 +1199,7 @@ class DockerHost(Host):
         return handle
 
     def _remove(self, container: str) -> None:
-        self.broker.close(container)
+        self.broker.close(container, host=endpoint())
         self._spawn_reclaim()
 
     def _reporter(self, name: str, events: str | None):
@@ -1318,7 +1318,7 @@ class DockerHost(Host):
 
     def _roll_back(self, container: str) -> str:
         try:
-            self.broker.close(container)
+            self.broker.close(container, host=endpoint())
         except SessionError as error:
             return f"; close {container}: {error}"
         return ""

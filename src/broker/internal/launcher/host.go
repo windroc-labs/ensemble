@@ -123,6 +123,16 @@ func (h Host) place(secrets []string) Host {
 	return h
 }
 
+// OnLocal is h working on the local Docker Desktop: Local, or the target when that is the local Docker Desktop.
+func (h Host) OnLocal() Host {
+	if h.Local == nil {
+		return h
+	}
+	h.Docker, h.Endpoint = h.Local.Docker, h.Local.Endpoint
+	h.Local, h.daemon, h.images = nil, "", ""
+	return h
+}
+
 // secretItems are secrets' keychain items.
 func secretItems(secrets []Secret) []string {
 	items := make([]string, len(secrets))

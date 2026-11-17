@@ -65,5 +65,42 @@
         "-v"
       ]
     }
+  },
+  {
+    "name": "workspace-rm-input-local",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "workspace-rm",
+        "--volume",
+        "ensemble-ws-worker_1",
+        "--force",
+        "--daemon",
+        "local"
+      ]
+    }
+  },
+  {
+    "name": "workspace-rm-input-daemon-target",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "workspace-rm",
+        "--volume",
+        "ensemble-ws-worker_1",
+        "--daemon",
+        "target"
+      ]
+    }
   }
 ]

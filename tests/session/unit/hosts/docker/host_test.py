@@ -160,6 +160,7 @@ class FakeBroker:
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
         self.failing, self.refreshed = {}, threading.Event()
+        self.close_hosts, self.rm_hosts = [], []
 
     def version(self):
         self.order.append("version")
@@ -186,12 +187,14 @@ class FakeBroker:
             raise self.failing["maintain"]
         return Maintained([], None, self.started.deadline)
 
-    def close(self, container):
+    def close(self, container, *, host):
         self.order.append(("close", container))
         self.closed.append(container)
+        self.close_hosts.append(host)
         return True
 
-    def workspace_rm(self, volume, *, force=False):
+    def workspace_rm(self, volume, *, force=False, host):
+        self.rm_hosts.append(host)
         self.order.append(
             ("workspace_rm", volume, "--force") if force else ("workspace_rm", volume)
         )
@@ -1260,7 +1263,7 @@ class StartTest(StartBase):
             ),
         ):
             self.start()
-        self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
+        self.broker.close.assert_called_once_with(f"ensemble-w-{old}", host=self.docker.ep)
 
     def test_an_unrecognised_container_of_the_name_refuses_start_naming_it(self):
         self.docker.ps = [f"ensemble-w-{GEN.upper()}\tw\t{GEN.upper()}\trunning"]
@@ -1969,7 +1972,7 @@ class SweepTest(Base):
         self.docker.ps = [self.row("a"), self.row("b")]
         closes = iter([SessionError("broker: boom"), True])
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             found = next(closes)
             if isinstance(found, BaseException):
@@ -2046,7 +2049,7 @@ class ReclaimTest(Base):
                 self.order.clear()
                 self.broker.failing = {}
 
-                def remove(volume, code=code):
+                def remove(volume, code=code, **_):
                     self.order.append(("workspace_rm", volume))
                     if volume == self.GONE:
                         raise BrokerError(12, code, "kept", "not_needed", None)
@@ -2713,7 +2716,7 @@ class WorkerLivenessTest(StartBase):
         self.record()
         self.listed("w")
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             self.docker.ps = []
             return True
@@ -2768,7 +2771,7 @@ class WorkerLivenessTest(StartBase):
         self.docker.ps = []
         self.listed("w", gen=old)
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             self.docker.ps = []
             return True
@@ -3060,8 +3063,8 @@ class HeadlessWorkerTest(StartBase):
         expired = threading.Event()
         original = self.broker.close
 
-        def close(container):
-            result = original(container)
+        def close(container, *, host):
+            result = original(container, host=host)
             expired.set()
             return result
 
