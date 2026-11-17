@@ -115,10 +115,12 @@ class LocalHome:
 
 
 class VolumeHome:
-    """A Docker session's client home in its state volume; a path's root is not read."""
+    """A Docker session's client home in its state volume; a path's root is not read. `image`:
+    its reader's image in place of the session's (a resume's check before its start).
+    """
 
-    def __init__(self, session: str, client: str):
-        self.session, self.client = session, client
+    def __init__(self, session: str, client: str, *, image: str | None = None):
+        self.session, self.client, self.image = session, client, image
 
     def read(
         self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
@@ -126,17 +128,17 @@ class VolumeHome:
         """At most READ_MAX bytes from `offset`; `tail`: the last `limit`."""
         cap = READ_MAX if limit is None else min(limit, READ_MAX)
         request = {"op": "read", "offset": offset, "limit": cap, "tail": tail}
-        found = _ask(self._file(path), request, cap)
+        found = _ask(self._file(path), request, cap, self.image)
         return None if found is None else found[1]
 
     def stat(self, path: HomePath) -> StateStat | None:
-        found = _ask(self._file(path), {"op": "stat"}, 0)
+        found = _ask(self._file(path), {"op": "stat"}, 0, self.image)
         return None if found is None else StateStat(found[0]["size"], found[0]["mtime"])
 
     def entries(self, path: HomePath, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
         """A dir's entries, by lstat; EFBIG past `limit`."""
         file = self._file(path)
-        found = _ask(file, {"op": "entries", "limit": limit}, 0)
+        found = _ask(file, {"op": "entries", "limit": limit}, 0, self.image)
         if found is None:
             return None
         listed = []
@@ -170,7 +172,10 @@ class VolumeHome:
         names = [file, *(file._replace(rel=file.rel + suffix) for suffix in siblings)]
         paths = [_path(name) for name in names]
         found = _ask(
-            file, {"op": "snapshot", "paths": paths, "limit": limit}, limit + ARCHIVE_SLACK
+            file,
+            {"op": "snapshot", "paths": paths, "limit": limit},
+            limit + ARCHIVE_SLACK,
+            self.image,
         )
         folder = tempfile.mkdtemp(prefix="ensemble-state-")
         try:
@@ -297,12 +302,14 @@ def _unpack(file: StateFile, payload: bytes, bases: list[str], limit: int, folde
         raise _broken(file, f"archive: {error}") from None
 
 
-def _ask(file: StateFile, request: dict, bound: int) -> tuple[dict, bytes] | None:
+def _ask(
+    file: StateFile, request: dict, bound: int, image: str | None
+) -> tuple[dict, bytes] | None:
     """The reply to `request`, payload at most `bound` bytes; None: absent."""
     if request["op"] != "snapshot":
         request = {**request, "path": _path(file)}
     try:
-        header, payload = _reader(file.session).ask(request, bound)
+        header, payload = _reader(file.session, image).ask(request, bound)
     except FileNotFoundError:
         return None
     code = header["errno"]
@@ -330,21 +337,23 @@ def _count(value) -> bool:
 
 
 def _broken(file: StateFile, why: str) -> OSError:
-    reader = _reader(file.session)
-    with reader.lock:
-        reader.close()
+    with _READERS_LOCK:
+        readers = [r for (session, _), r in _READERS.items() if session == file.session]
+    for reader in readers:
+        with reader.lock:
+            reader.close()
     return OSError(errno.EPROTO, f"state reader reply: {why}", file.rel)
 
 
-_READERS: dict[str, "_Reader"] = {}
+_READERS: dict[tuple[str, str | None], "_Reader"] = {}
 _READERS_LOCK = threading.Lock()
 
 
-def _reader(session: str) -> "_Reader":
+def _reader(session: str, image: str | None) -> "_Reader":
     with _READERS_LOCK:
-        found = _READERS.get(session)
+        found = _READERS.get((session, image))
         if found is None:
-            found = _READERS[session] = _Reader(session)
+            found = _READERS[session, image] = _Reader(session, image)
         return found
 
 
@@ -360,8 +369,8 @@ atexit.register(_close_readers)
 class _Reader:
     """A session's reader container, started on first use; one exchange at a time."""
 
-    def __init__(self, session: str):
-        self.session = session
+    def __init__(self, session: str, image: str | None):
+        self.session, self.image = session, image
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
         self.buffer = bytearray()
@@ -417,12 +426,14 @@ class _Reader:
         user = found.get(daemon.STATE_OWNER_LABEL)
         if not isinstance(user, str) or not OWNER.fullmatch(user):
             raise OSError(errno.EIO, "state volume has no owner", volume)
-        listed = self._run(
-            recorded,
-            *("image", "ls", "--filter", "reference=ensemble-worker"),
-            *("--format", "{{.Repository}}:{{.Tag}}"),
-        )
-        image = next((ref for ref in listed.split() if IMAGE.fullmatch(ref)), None)
+        image = self.image
+        if image is None:
+            listed = self._run(
+                recorded,
+                *("image", "ls", "--filter", "reference=ensemble-worker"),
+                *("--format", "{{.Repository}}:{{.Tag}}"),
+            )
+            image = next((ref for ref in listed.split() if IMAGE.fullmatch(ref)), None)
         if image is None:
             raise OSError(errno.EIO, "no worker image on the Docker target")
         with open(READER, encoding="utf-8") as f:

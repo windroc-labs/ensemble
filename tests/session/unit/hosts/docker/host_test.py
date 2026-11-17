@@ -618,12 +618,15 @@ class StartBase(Base):
         self.launch = replace(self.launch, transcript=transcript)
         return stored
 
-    def refused_untouched(self, error, pattern):
-        """start(resume="1") fails with `pattern`, before any broker call, file or supervisor."""
+    def refused_before_start(self, error, pattern):
+        """start(resume="1") fails with `pattern`, after its build, before its start, manifest or
+        supervisor.
+        """
         self.order.clear()
         with self.assertRaisesRegex(error, pattern):
             self.start(resume="1")
-        self.assertNotIn("version", self.order)
+        self.assertIn(("build", REPO), self.order)
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
         self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
         self.assertEqual(self.spawned(), [])
 
@@ -858,6 +861,12 @@ class StartTest(StartBase):
         self.assertEqual(self.order, [])
         self.assertIsNone(load_record("w"))
 
+    def test_a_resume_checks_history_with_the_built_image_after_the_build(self):
+        self.history()
+        self.start(resume="1")
+        (run,) = [c for c in self.state_volumes.calls if c[3] == "run"]
+        self.assertIn(DIGEST, run)
+
     def test_a_resume_keeps_the_state_volume(self):
         self.history()
         self.start(resume="1")
@@ -1040,7 +1049,7 @@ class StartTest(StartBase):
                 self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
                 self.popen_mock.assert_not_called()
 
-    def test_resume_without_native_history_fails_before_the_broker(self):
+    def test_resume_without_native_history_fails_before_the_start(self):
         missing = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
         outside = os.path.join(self.cwd, "s1.jsonl")
         with open(outside, "w") as f:
@@ -1057,7 +1066,7 @@ class StartTest(StartBase):
                     with open(os.path.join(self.volume_dir, "keep"), "w"):
                         pass
                 self.launch = replace(self.launch, transcript=transcript)
-                self.refused_untouched(
+                self.refused_before_start(
                     ConfigError, f"docker session w: no native history to resume in {self.home_dir}"
                 )
                 if keep:
@@ -1066,7 +1075,7 @@ class StartTest(StartBase):
     def test_a_resume_check_docker_cannot_answer_names_its_reason(self):
         self.history()
         self.state_volumes.error = "error during connect: ssh: connect to host pc: refused"
-        self.refused_untouched(
+        self.refused_before_start(
             ConfigError,
             f"^docker session w: no native history to resume in {re.escape(self.home_dir)}: "
             "docker volume ls: error during connect: ssh: connect to host pc: refused$",
@@ -1078,19 +1087,19 @@ class StartTest(StartBase):
         with open(other, "w") as f:
             f.write("{}\n")
         self.launch = replace(self.launch, transcript=other)
-        self.refused_untouched(
+        self.refused_before_start(
             ConfigError,
             f"^docker session w: no native history to resume in {re.escape(self.home_dir)}$",
         )
 
-    def test_resume_through_a_link_fails_before_the_broker(self):
+    def test_resume_through_a_link_fails_before_the_start(self):
         secret = os.path.join(self.account, "secret.jsonl")
         with open(secret, "w") as f:
             f.write("host only\n")
         transcript = self.history()
         os.remove(transcript)
         os.symlink(secret, transcript)
-        self.refused_untouched(ConfigError, "no native history")
+        self.refused_before_start(ConfigError, "no native history")
         project = os.path.dirname(transcript)
         os.remove(transcript)
         os.rmdir(project)
@@ -1098,7 +1107,7 @@ class StartTest(StartBase):
         os.makedirs(elsewhere)
         os.symlink(secret, os.path.join(elsewhere, "s1.jsonl"))
         os.symlink(elsewhere, project)
-        self.refused_untouched(ConfigError, "no native history")
+        self.refused_before_start(ConfigError, "no native history")
 
     def test_a_missing_or_bad_resume_flag_is_refused_untouched(self):
         os.makedirs(self.volume_dir)

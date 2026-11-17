@@ -233,15 +233,16 @@ def _state_file(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
 
 
-def _check_history(name: str, home: str, client: str, transcript: str) -> None:
-    """A resume's history in the state volume."""
+def _check_history(name: str, home: str, client: str, transcript: str, image: str) -> None:
+    """A resume's history, read with the image it built."""
     missing = f"docker session {name}: no native history to resume in {home}"
     try:
         path = client_state.home_path(home, os.path.join(home, transcript))
     except OSError:
         raise ConfigError(missing) from None
     try:
-        present = client_state.VolumeHome(name, client).read(path, limit=0) is not None
+        store = client_state.VolumeHome(name, client, image=image)
+        present = store.read(path, limit=0) is not None
     except OSError as error:
         raise ConfigError(f"{missing}: {error.strerror or error}") from None
     if not present:
@@ -988,10 +989,10 @@ class DockerHost(Host):
                 save_record(name, DaemonRecord(daemon, self.docker))
             except OSError as error:
                 raise SessionError(f"docker session {name}: daemon record: {error}") from None
-        if resume == "1":
-            _check_history(name, home, home_dir, launch.transcript)
         laps("checks")
         hook, root, (image, digest) = self._image(name, environment, daemon=daemon)
+        if resume == "1":
+            _check_history(name, home, home_dir, launch.transcript, digest)
         volume = workspace_volume(name)
         cwd = os.path.realpath(launch.cwd)
         persistent = json.loads(metadata.get("home_persistent") or "null")

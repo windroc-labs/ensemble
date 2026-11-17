@@ -394,6 +394,16 @@ class ReaderTest(StateCase):
         with open(client_state.READER, encoding="utf-8") as f:
             self.assertEqual(run[run.index(IMAGE) + 3], f.read())
 
+    def test_a_store_with_an_image_runs_its_reader_on_that_image(self):
+        self.put("a/t", b"abc")
+        image = "sha256:" + "e" * 64
+        store = client_state.VolumeHome(STORE.session, STORE.client, image=image)
+        self.assertEqual(store.read(at("a/t")), b"abc")
+        (run,) = [c for c in self.volumes.calls if c[3] == "run"]
+        self.assertIn(image, run)
+        self.assertFalse([c for c in self.volumes.calls if c[3] == "image"])
+        self.assertNotIn("image", store.persisted())
+
     def test_two_threads_each_get_their_own_reply(self):
         self.put("a/x", b"x" * 300000)
         self.put("a/y", b"y" * 300000)
