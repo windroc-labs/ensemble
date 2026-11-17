@@ -164,7 +164,9 @@ class Install(Case):
         self.assertEqual(
             calls[1], f"sudo install -o root -g wheel -m 0755 {source} {TARGET}/ensemble-broker"
         )
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[2], f"sudo install -d -o root -g wheel -m 0755 {TARGET}/ssh")
+        self.assertEqual(calls[3], f"sudo ln -sfn ../ensemble-broker {TARGET}/ssh/ssh")
+        self.assertEqual(len(calls), 4)
 
     def assert_nothing_installed(self, result):
         self.assertEqual(result.returncode, 1)
