@@ -22,7 +22,7 @@ class PathsTest(Case):
             self.assertEqual(daemon.endpoint(), "unix:///Users/acct/.docker/run/docker.sock")
             env = {"DOCKER_HOST": "tcp://x", "DOCKER_CONTEXT": "c", "DOCKER_CONFIG": "/c", "K": "v"}
             with mock.patch.dict(os.environ, env):
-                argv, called = daemon.docker_call("/bin/docker", "ps", "-a")
+                argv, called = daemon.docker_call("/bin/docker", "ps", "-a", host=daemon.endpoint())
         self.assertEqual(
             argv,
             ["/bin/docker", "--host", "unix:///Users/acct/.docker/run/docker.sock", "ps", "-a"],

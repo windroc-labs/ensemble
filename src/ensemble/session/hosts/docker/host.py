@@ -469,7 +469,7 @@ class DockerHost(Host):
 
     def _listed(self, *args: str) -> list[list[str]] | None:
         """Tab-separated rows; None without a reachable daemon or a CLI; Unanswered on failure."""
-        argv, env = docker_call(self.docker, *args)
+        argv, env = docker_call(self.docker, *args, host=endpoint())
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
         except FileNotFoundError:
@@ -833,7 +833,7 @@ class DockerHost(Host):
         self._state_call(why, "volume", "rm", state_volume(name), absent_ok=True)
 
     def _state_call(self, why: str, *args: str, absent_ok: bool = False) -> str:
-        argv, env = docker_call(self.docker, *args)
+        argv, env = docker_call(self.docker, *args, host=endpoint())
         try:
             result = self.run(argv, env, timeout=RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -1138,7 +1138,9 @@ class DockerHost(Host):
                 "generation": generation,
                 "size": "{}x{}".format(*self.tui_settings().hidden_size),
             }
-            argv, docker_env = docker_call(self.docker, "attach", "--sig-proxy=false", container)
+            argv, docker_env = docker_call(
+                self.docker, "attach", "--sig-proxy=false", container, host=endpoint()
+            )
             proc = subprocess.Popen(
                 argv,
                 env=docker_env,
@@ -1260,6 +1262,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
             *("--probe", guard.run_paths(row.generation)["dir"]),
+            host=endpoint(),
         )
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -1285,6 +1288,7 @@ class DockerHost(Host):
             "-I",
             "/opt/ensemble/lib/bootstrap.py",
             "runtime-files",
+            host=endpoint(),
         )
         try:
             result = self.run(argv, env, input=files, timeout=RUN_TIMEOUT)
@@ -1305,6 +1309,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-i", "--user", "agent", container),
             *(IMAGE_PYTHON, "-I", "-c", FILES_STAGE),
+            host=endpoint(),
         )
         try:
             result = self.run(argv, env, input=files, timeout=RUN_TIMEOUT)
@@ -1395,6 +1400,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
             *("--attach", display),
+            host=endpoint(),
         )[0]
         return CommandView(
             printed=shlex.join(argv),

@@ -2645,7 +2645,7 @@ class GuardedStartTest(StartBase):
         self.assertEqual(
             argv, [DOCKER, "--host", self.ep, "attach", "--sig-proxy=false", CONTAINER]
         )
-        self.assertEqual(kw["env"], docker_call(DOCKER)[1])
+        self.assertEqual(kw["env"], docker_call(DOCKER, host=self.docker.ep)[1])
         self.assertEqual(
             proc.handoff,
             {

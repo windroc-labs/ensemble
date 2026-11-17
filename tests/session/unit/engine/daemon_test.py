@@ -83,7 +83,7 @@ class TargetTest(Case):
         local = f"unix://{self.account}/.docker/run/docker.sock"
         self.assertEqual(daemon.endpoint(), local)
         with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}):
-            argv, env = daemon.docker_call("/bin/docker", "ps")
+            argv, env = daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
         self.assertEqual((argv, env["PATH"]), (["/bin/docker", "--host", local, "ps"], "/usr/bin"))
 
     def test_remote_target_ignores_hostile_docker_environment(self):
@@ -95,7 +95,7 @@ class TargetTest(Case):
             "PATH": "/usr/bin",
         }
         with mock.patch.dict(os.environ, hostile):
-            argv, env = daemon.docker_call("/bin/docker", "ps")
+            argv, env = daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
         self.assertEqual(argv, ["/bin/docker", "--host", "ssh://u@pc:2222", "ps"])
         self.assertFalse(set(daemon.CLEARED) & set(env))
         self.assertEqual(env["PATH"], f"{daemon.SSH_DIR}{os.pathsep}/usr/bin")
@@ -122,7 +122,7 @@ class TargetTest(Case):
             with self.subTest(content=content[:40]):
                 path = self.target(content)
                 with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
-                    daemon.docker_call("/bin/docker", "ps")
+                    daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
 
     def test_target_files_shared_with_the_broker(self):
         with open(
@@ -194,7 +194,7 @@ class TargetTest(Case):
                 SessionError, f"ssh wrapper unavailable: {re.escape(wrapper)}; reinstall the broker"
             ),
         ):
-            daemon.docker_call("/bin/docker", "ps")
+            daemon.docker_call("/bin/docker", "ps", host=daemon.endpoint())
 
     def test_ssh_agent_passes_only_a_set_socket(self):
         with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/private/agent.sock"}):

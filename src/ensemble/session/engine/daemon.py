@@ -227,11 +227,8 @@ def container_name(name: str, generation: str) -> str:
     return f"ensemble-{name}-{generation}"
 
 
-def docker_call(
-    docker: str, *args: str, host: str | None = None
-) -> tuple[list[str], dict[str, str]]:
-    """argv and env for `docker <args>` against `host`, else endpoint()."""
-    host = endpoint() if host is None else host
+def docker_call(docker: str, *args: str, host: str) -> tuple[list[str], dict[str, str]]:
+    """argv and env for `docker <args>` against daemon `host`."""
     env = {k: v for k, v in os.environ.items() if k not in CLEARED}
     if host.startswith("ssh://"):
         env["PATH"] = os.pathsep.join((ssh_dir(host), env.get("PATH", os.defpath)))
