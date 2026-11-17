@@ -4,11 +4,12 @@ import os
 import re
 import signal
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, NamedTuple, Self
+from typing import ClassVar, NamedTuple, Protocol, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -214,6 +215,43 @@ class StateEntry(NamedTuple):
     mtime: float
 
 
+class HomePath(NamedTuple):
+    """A file in a client home: `root` the home as the client's env names it, `rel` the POSIX path
+    below it.
+    """
+
+    root: str
+    rel: str
+
+
+class HomeStore(Protocol):
+    """A session's client home, picked once by its Host. Absent: None; refused: OSError (ELOOP a
+    link below the root, EINVAL a wrong type or path, EFBIG past a limit).
+    """
+
+    def read(
+        self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
+    ) -> bytes | None:
+        """At most its cap from `offset`; `tail`: the last `limit` bytes."""
+        ...
+
+    def stat(self, path: HomePath) -> StateStat | None: ...
+
+    def entries(self, path: HomePath, *, limit: int = ...) -> tuple[StateEntry, ...] | None:
+        """A dir's entries by lstat, sorted; EFBIG past `limit`."""
+        ...
+
+    def snapshot(
+        self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
+    ) -> AbstractContextManager[str | None]:
+        """A path to read `path` and its present `siblings` from while the context lasts."""
+        ...
+
+    def persisted(self) -> dict[str, str]:
+        """The fields that rebuild it in another process."""
+        ...
+
+
 @dataclass(frozen=True)
 class ClientHome:
     """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
@@ -251,6 +289,7 @@ class ClientContext:
     host_address: str
     permission: Permission
     container: Container | None = None
+    home: HomeStore | None = None  # set by the mode from its Host's pick
 
 
 LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)

@@ -1,6 +1,7 @@
-"""Reads of a Docker session's client home in its state volume, through its reader container
-(state_reader.py): no link followed, bounded. Absent: None; refused: OSError (ELOOP a link, EINVAL
-a wrong type or name, EPROTO a broken reply).
+"""A client home's reads, picked once per session: LocalHome on this machine, VolumeHome in a Docker
+session's state volume through its reader container (state_reader.py). No link followed below the
+home, bounded. Absent: None; refused: OSError (ELOOP a link, EINVAL a wrong type or name, EPROTO a
+broken reply).
 """
 
 import atexit
@@ -14,16 +15,20 @@ import re
 import secrets
 import select
 import shutil
+import stat as stat_module
 import subprocess
 import tarfile
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 from ensemble.session.engine import daemon
 from ensemble.session.engine.types import (
+    SESSION_NAME,
     DockerAccess,
+    HomePath,
+    HomeStore,
     StateEntry,
     StateFile,
     StateKind,
@@ -42,6 +47,180 @@ OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
 ARCHIVE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE)
+
+
+LOCAL_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+LOCAL_FILE_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+class LocalHome:
+    """A client home on this machine, read below its root part by part with no link followed."""
+
+    def read(
+        self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
+    ) -> bytes | None:
+        cap = READ_MAX if limit is None else min(limit, READ_MAX)
+        fd = _open_local(path)
+        if fd is None:
+            return None
+        with os.fdopen(fd, "rb") as f:
+            f.seek(offset)
+            if tail:
+                f.seek(max(f.seek(0, os.SEEK_END) - cap, offset))
+            return f.read(cap)
+
+    def stat(self, path: HomePath) -> StateStat | None:
+        fd = _open_local(path)
+        if fd is None:
+            return None
+        try:
+            info = os.fstat(fd)
+        finally:
+            os.close(fd)
+        return StateStat(info.st_size, info.st_mtime)
+
+    def entries(self, path: HomePath, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
+        fd = _open_local(path, directory=True)
+        if fd is None:
+            return None
+        listed = []
+        try:
+            with os.scandir(fd) as found:
+                for entry in found:
+                    if len(listed) == limit:
+                        raise OSError(errno.EFBIG, f"over {limit} entries", path.rel)
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    listed.append(
+                        StateEntry(entry.name, _kind(info.st_mode), info.st_size, info.st_mtime)
+                    )
+        finally:
+            os.close(fd)
+        return tuple(sorted(listed))
+
+    @contextlib.contextmanager
+    def snapshot(
+        self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
+    ) -> Iterator[str | None]:
+        """The file itself: its siblings beside it."""
+        fd = _open_local(path)
+        if fd is not None:
+            os.close(fd)
+        yield None if fd is None else os.path.join(path.root, *path.rel.split("/"))
+
+    def persisted(self) -> dict[str, str]:
+        return {"kind": "local"}
+
+
+class VolumeHome:
+    """A Docker session's client home in its state volume; a path's root is not read."""
+
+    def __init__(self, session: str, client: str):
+        self.session, self.client = session, client
+
+    def read(
+        self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
+    ) -> bytes | None:
+        return read(self._file(path), offset=offset, limit=limit, tail=tail)
+
+    def stat(self, path: HomePath) -> StateStat | None:
+        return stat(self._file(path))
+
+    def entries(self, path: HomePath, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
+        return entries(self._file(path), limit=limit)
+
+    def snapshot(
+        self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
+    ) -> contextlib.AbstractContextManager[str | None]:
+        return snapshot(self._file(path), limit=limit, siblings=siblings)
+
+    def persisted(self) -> dict[str, str]:
+        return {"kind": "volume", "session": self.session, "client": self.client}
+
+    def _file(self, path: HomePath) -> StateFile:
+        return StateFile(self.session, self.client, path.rel)
+
+
+def home_path(root: str, path: str) -> HomePath:
+    """`path` below `root`, by text alone; EXDEV: not below it."""
+    root = os.path.normpath(root)
+    found = os.path.normpath(path)
+    prefix = root.rstrip(os.sep) + os.sep
+    if not (os.path.isabs(root) and found.startswith(prefix) and len(found) > len(prefix)):
+        raise OSError(errno.EXDEV, "not below the client home", path)
+    return HomePath(root, found[len(prefix) :].replace(os.sep, "/"))
+
+
+def home_store(fields) -> HomeStore:
+    """persisted()'s inverse; ValueError: anything else."""
+    if fields == {"kind": "local"}:
+        return LocalHome()
+    if (
+        isinstance(fields, Mapping)
+        and set(fields) == {"kind", "session", "client"}
+        and fields["kind"] == "volume"
+        and all(
+            isinstance(fields[key], str) and _part(fields[key]) for key in ("session", "client")
+        )
+    ):
+        return VolumeHome(fields["session"], fields["client"])
+    raise ValueError("not a client home store")
+
+
+def recorded_home(name: str | None, client: str) -> HomeStore:
+    """The store a Docker Host picked for session `name` when it recorded the session's state
+    access at start, else local; OSError: a malformed record.
+    """
+    if name is None or not SESSION_NAME.fullmatch(name) or daemon.load_access(name) is None:
+        return LocalHome()
+    return VolumeHome(name, client)
+
+
+def _open_local(path: HomePath, *, directory: bool = False) -> int | None:
+    """An fd of `path` (`directory`: a dir), opened part by part below its root; None: absent."""
+    parts = path.rel.split("/")
+    if not all(_part(part) for part in parts):
+        raise OSError(errno.EINVAL, "invalid client home path", path.rel)
+    try:
+        fd = os.open(path.root, LOCAL_DIR_FLAGS)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    try:
+        for part in parts[:-1]:
+            _check_local(os.lstat(part, dir_fd=fd).st_mode, directory=True)
+            child = os.open(part, LOCAL_DIR_FLAGS | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        _check_local(os.lstat(parts[-1], dir_fd=fd).st_mode, directory=directory)
+        flags = LOCAL_FILE_FLAGS | (os.O_DIRECTORY if directory else 0)
+        opened = os.open(parts[-1], flags, dir_fd=fd)
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        _check_local(os.fstat(opened).st_mode, directory=directory)
+    except BaseException:
+        os.close(opened)
+        raise
+    return opened
+
+
+def _check_local(mode: int, *, directory: bool) -> None:
+    if stat_module.S_ISLNK(mode):
+        raise OSError(errno.ELOOP, "a link")
+    if directory and not stat_module.S_ISDIR(mode):
+        raise OSError(errno.ENOTDIR, "not a directory")
+    if not directory and not stat_module.S_ISREG(mode):
+        raise OSError(errno.EINVAL, "not a regular file")
+
+
+def _kind(mode: int) -> StateKind:
+    if stat_module.S_ISDIR(mode):
+        return StateKind.DIR
+    return StateKind.FILE if stat_module.S_ISREG(mode) else StateKind.OTHER
 
 
 def locate(path: str) -> StateFile | None:

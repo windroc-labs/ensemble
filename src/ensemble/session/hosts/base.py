@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 from typing import ClassVar
 
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     HIDDEN_SIZE,
     LOCAL_CONTEXT,
@@ -23,6 +24,7 @@ from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
     ConfigError,
+    HomeStore,
     Hosts,
     Key,
     KeyPress,
@@ -386,6 +388,10 @@ class Host(ABC):
     ) -> Mapping[str, str]:
         """ConfigError: `client` cannot run on this Host."""
         return {}
+
+    def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
+        """Where session `name`'s client reads its home, picked once at its start."""
+        return LocalHome()
 
     def _resume_argv(self, name: str) -> tuple[str, ...] | None:
         """None: the client's."""

@@ -424,6 +424,14 @@ class ClientEnvTest(Base):
         self.assertFalse(os.path.exists(self.state))
         self.assertFalse(self.host._inherit_env)
 
+    def test_home_store_is_the_sessions_state_volume(self):
+        self.assertEqual(
+            self.host._home_store("w", HOME).persisted(),
+            {"kind": "volume", "session": "w", "client": "agent"},
+        )
+        with self.assertRaisesRegex(ConfigError, "not supported on the Docker Host yet"):
+            self.host._home_store("w", None)
+
     def test_resume_argv_names_the_session(self):
         self.assertEqual(self.host._resume_argv("w"), ("ensemble-session", "resume", "w"))
         self.assertIsNone(Host._resume_argv(self.host, "w"))

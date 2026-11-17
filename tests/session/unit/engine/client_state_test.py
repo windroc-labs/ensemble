@@ -16,7 +16,14 @@ import time
 from unittest import mock
 
 from ensemble.session.engine import client_state, daemon
-from ensemble.session.engine.types import DockerAccess, StateEntry, StateFile, StateKind, StateStat
+from ensemble.session.engine.types import (
+    DockerAccess,
+    HomePath,
+    StateEntry,
+    StateFile,
+    StateKind,
+    StateStat,
+)
 from tests.session.case import Case
 from tests.session.state_volumes import DOCKER, HOST, IMAGE, record, serve
 from tests.session.unit.hosts.docker.support import ssh_wrapper
@@ -637,3 +644,237 @@ class BrokenReplyTest(StateCase):
                 self.assertEqual(caught.exception.errno, errno.EPROTO)
         self.assertFalse(os.path.lexists(os.path.join(self.home, "x.db")))
         self.assertEqual(sorted(os.listdir(tempfile.gettempdir())), before)
+
+
+class LocalHomeTest(Case):
+    """LocalHome: a home on this machine, read below its root with no link followed."""
+
+    def setUp(self):
+        self.root = os.path.join(self.home, "client-home")
+        os.makedirs(os.path.join(self.root, "a"))
+        self.store = client_state.LocalHome()
+
+    def put(self, rel: str, data: bytes = b"") -> HomePath:
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return HomePath(self.root, rel)
+
+    def refused(self, call) -> OSError:
+        with self.assertRaises(OSError) as caught:
+            call()
+        self.assertNotIsInstance(caught.exception, FileNotFoundError)
+        return caught.exception
+
+    def test_reads_whole_offset_limit_and_tail(self):
+        path = self.put("a/t.jsonl", b"0123456789")
+        self.assertEqual(self.store.read(path), b"0123456789")
+        self.assertEqual(self.store.read(path, offset=4), b"456789")
+        self.assertEqual(self.store.read(path, limit=3), b"012")
+        self.assertEqual(self.store.read(path, limit=3, tail=True), b"789")
+        self.assertEqual(self.store.read(path, offset=8, limit=5, tail=True), b"89")
+
+    def test_a_one_part_path_reads(self):
+        self.assertEqual(self.store.read(self.put("t", b"x")), b"x")
+
+    def test_stat_gives_size_and_mtime(self):
+        path = self.put("a/t", b"abc")
+        os.utime(os.path.join(self.root, "a/t"), (100, 200))
+        self.assertEqual(self.store.stat(path), StateStat(3, 200))
+
+    def test_entries_list_kinds_by_lstat_sorted(self):
+        self.put("a/f", b"12")
+        os.mkdir(os.path.join(self.root, "a", "d"))
+        os.symlink(os.path.join(self.root, "a", "d"), os.path.join(self.root, "a", "l"))
+        listed = self.store.entries(HomePath(self.root, "a"))
+        assert listed is not None
+        self.assertEqual(
+            [(e.name, e.kind) for e in listed],
+            [("d", StateKind.DIR), ("f", StateKind.FILE), ("l", StateKind.OTHER)],
+        )
+        self.assertEqual(listed[1].size, 2)
+
+    def test_entries_past_the_limit_are_refused(self):
+        for name in "abc":
+            self.put(f"a/{name}")
+        error = self.refused(lambda: self.store.entries(HomePath(self.root, "a"), limit=2))
+        self.assertEqual(error.errno, errno.EFBIG)
+
+    def test_snapshot_yields_the_file_itself_and_none_when_absent(self):
+        path = self.put("a/db", b"rows")
+        with self.store.snapshot(path, limit=10, siblings=("-wal",)) as found:
+            self.assertEqual(found, os.path.join(self.root, "a", "db"))
+        with self.store.snapshot(HomePath(self.root, "a/none"), limit=10) as found:
+            self.assertIsNone(found)
+
+    def test_absent_is_none(self):
+        missing = HomePath(self.root, "a/none")
+        self.assertIsNone(self.store.read(missing))
+        self.assertIsNone(self.store.stat(missing))
+        self.assertIsNone(self.store.entries(HomePath(self.root, "none")))
+        self.assertIsNone(self.store.read(HomePath(os.path.join(self.home, "no-home"), "a/t")))
+
+    def test_a_wrong_type_is_refused(self):
+        self.put("a/f")
+        for call in (
+            lambda: self.store.read(HomePath(self.root, "a")),
+            lambda: self.store.stat(HomePath(self.root, "a")),
+            lambda: self.store.entries(HomePath(self.root, "a/f")),
+        ):
+            self.refused(call)
+
+    def test_an_invalid_rel_is_refused_before_opening(self):
+        for rel in ("", "a/../t", "./t", "a//t", "/etc/hosts", "a/\0"):
+            with self.subTest(rel=rel), mock.patch("os.open", side_effect=AssertionError):
+                error = self.refused(lambda rel=rel: self.store.read(HomePath(self.root, rel)))
+                self.assertEqual(error.errno, errno.EINVAL)
+
+    def test_a_linked_file_or_middle_dir_is_refused(self):
+        secret = os.path.join(self.home, "secret")
+        os.makedirs(os.path.join(secret, "d"))
+        with open(os.path.join(secret, "d", "t"), "wb") as f:
+            f.write(b"SECRET")
+        os.symlink(os.path.join(secret, "d", "t"), os.path.join(self.root, "a", "t"))
+        os.symlink(os.path.join(secret, "d"), os.path.join(self.root, "m"))
+        for call in (
+            lambda: self.store.read(HomePath(self.root, "a/t")),
+            lambda: self.store.stat(HomePath(self.root, "a/t")),
+            lambda: self.store.read(HomePath(self.root, "m/t")),
+            lambda: self.store.entries(HomePath(self.root, "m")),
+        ):
+            self.assertEqual(self.refused(call).errno, errno.ELOOP)
+        with (
+            self.assertRaises(OSError) as caught,
+            self.store.snapshot(HomePath(self.root, "a/t"), limit=10),
+        ):
+            pass
+        self.assertEqual(caught.exception.errno, errno.ELOOP)
+
+    def test_a_linked_root_is_followed(self):
+        self.put("a/t", b"ok")
+        linked = os.path.join(self.home, "linked-home")
+        os.symlink(self.root, linked)
+        self.assertEqual(self.store.read(HomePath(linked, "a/t")), b"ok")
+
+    def test_persists_as_local(self):
+        self.assertEqual(self.store.persisted(), {"kind": "local"})
+        self.assertIsInstance(client_state.home_store({"kind": "local"}), client_state.LocalHome)
+
+
+class VolumeHomeTest(StateCase):
+    """VolumeHome: a Docker session's client home in its state volume; the root is not read."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = client_state.VolumeHome("s1", HOME_DIR)
+        self.root = "/nowhere/home"
+
+    def test_reads_through_the_reader_with_no_mac_file_opened(self):
+        self.put("a/t", b"0123456789")
+        os.utime(os.path.join(self.client, "a", "t"), (100, 200))
+        path = HomePath(self.root, "a/t")
+        self.assertEqual(self.store.read(path, offset=2, limit=3), b"234")
+        self.assertEqual(self.store.read(path, limit=2, tail=True), b"89")
+        self.assertEqual(self.store.stat(path), StateStat(10, 200))
+        listed = self.store.entries(HomePath(self.root, "a")) or ()
+        self.assertEqual([(e.name, e.kind) for e in listed], [("t", StateKind.FILE)])
+        with self.store.snapshot(path, limit=100) as copy:
+            assert copy is not None
+            with open(copy, "rb") as f:
+                self.assertEqual(f.read(), b"0123456789")
+        self.assertIsNone(self.store.read(HomePath(self.root, "a/none")))
+
+    def test_a_session_record_linked_to_etc_hosts_is_refused_and_writes_nothing(self):
+        hosts = os.path.join(self.home, "etc", "hosts")  # /etc/hosts, inside the test sandbox
+        os.makedirs(os.path.dirname(hosts))
+        with open(hosts, "wb") as f:
+            f.write(b"127.0.0.1 localhost\n")
+        os.symlink(hosts, os.path.join(self.client, "a", "s.jsonl"))
+        temp = os.path.join(self.home, "tmp")
+        os.mkdir(temp)
+        before = sorted(os.listdir(self.home))
+        path = HomePath(self.root, "a/s.jsonl")
+        with mock.patch.object(tempfile, "tempdir", temp):
+            for call in (
+                lambda: self.store.read(path),
+                lambda: self.store.stat(path),
+                lambda: self.store.snapshot(path, limit=1 << 20).__enter__(),
+            ):
+                with self.assertRaises(OSError) as caught:
+                    call()
+                self.assertEqual(caught.exception.errno, errno.ELOOP)
+        self.assertEqual(sorted(os.listdir(self.home)), before)
+        self.assertEqual(os.listdir(temp), [])
+
+    def test_persists_its_session_and_client(self):
+        fields = self.store.persisted()
+        self.assertEqual(fields, {"kind": "volume", "session": "s1", "client": HOME_DIR})
+        self.assertEqual(client_state.home_store(fields).persisted(), fields)
+
+
+class HomePathTest(Case):
+    def test_a_path_below_the_root_is_its_rel(self):
+        with (
+            mock.patch("os.stat", side_effect=AssertionError),
+            mock.patch("os.lstat", side_effect=AssertionError),
+        ):
+            found = client_state.home_path("/h/claude", "/h/claude/projects/p/s.jsonl")
+            self.assertEqual(found, HomePath("/h/claude", "projects/p/s.jsonl"))
+            self.assertEqual(
+                client_state.home_path("/h/claude/", "/h/claude/./a//b"),
+                HomePath("/h/claude", "a/b"),
+            )
+
+    def test_outside_the_root_is_refused(self):
+        for path in ("/h/claude", "/h/claude2/x", "/h/claude/../x", "/elsewhere/x", "rel/x"):
+            with self.subTest(path=path), self.assertRaises(OSError) as caught:
+                client_state.home_path("/h/claude", path)
+            self.assertEqual(caught.exception.errno, errno.EXDEV)
+
+
+class HomeStoreFieldsTest(Case):
+    def test_anything_but_a_persisted_store_is_refused(self):
+        for fields in (
+            None,
+            [],
+            {},
+            {"kind": "other"},
+            {"kind": "local", "extra": "x"},
+            {"kind": "volume", "session": "s1"},
+            {"kind": "volume", "session": "s1", "client": "a/b"},
+            {"kind": "volume", "session": "..", "client": "claude"},
+            {"kind": "volume", "session": 1, "client": "claude"},
+        ):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                client_state.home_store(fields)
+
+
+class RecordedHomeTest(Case):
+    def test_a_docker_access_record_gives_the_sessions_volume(self):
+        daemon.save_access("s1", DockerAccess(DOCKER, HOST, "daemon-a"))
+        found = client_state.recorded_home("s1", "claude")
+        self.assertEqual(found.persisted(), {"kind": "volume", "session": "s1", "client": "claude"})
+
+    def test_no_record_or_no_name_is_local(self):
+        for name in ("s2", None):
+            with self.subTest(name=name):
+                found = client_state.recorded_home(name, "claude")
+                self.assertEqual(found.persisted(), {"kind": "local"})
+
+    def test_an_invalid_name_is_local_even_with_a_record_at_its_path(self):
+        os.makedirs(os.path.join(self.ensemble, "docker-state", "a"))
+        for name in ("../x", "a/b"):
+            daemon.save_access(name, DockerAccess(DOCKER, HOST, "daemon-a"))
+        for name in ("../x", "", "a/b"):
+            with self.subTest(name=name):
+                found = client_state.recorded_home(name, "c")
+                self.assertEqual(found.persisted(), {"kind": "local"})
+
+    def test_a_malformed_record_is_refused(self):
+        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.ACCESS_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{")
+        with self.assertRaises(OSError):
+            client_state.recorded_home("s1", "claude")
