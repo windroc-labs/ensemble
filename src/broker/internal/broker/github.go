@@ -145,8 +145,9 @@ func loginError(app string) *protocol.Error {
 
 // writeError is the protocol's account of a token file write that failed, never Docker's stderr.
 func writeError(err error) error {
-	if errors.Is(err, docker.ErrUnreachable) {
-		return fmt.Errorf("GitHub token injection: %w", docker.ErrUnreachable)
+	var u *docker.Unreachable
+	if errors.As(err, &u) {
+		return fmt.Errorf("GitHub token injection: %w", u)
 	}
 	return errors.New("writing a GitHub token into the container failed")
 }
@@ -456,8 +457,9 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 	stdin := []byte(token)
 	defer erase(stdin)
 	if err := run([]string{"/bin/sh", "-c", cloneScript, "sh", repo, ref, dir}, stdin); err != nil {
-		if errors.Is(err, docker.ErrUnreachable) {
-			return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
+		var u *docker.Unreachable
+		if errors.As(err, &u) {
+			return protocol.New(protocol.DockerUnreachable, u.Error())
 		}
 		failed := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
 		failed.Cause = github.Redact(docker.Diagnostic(err), token)

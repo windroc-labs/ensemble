@@ -79,16 +79,17 @@ func (c Codex) deliver(ctx context.Context, failed protocol.Code, exec func([]st
 }
 
 // codexError is the protocol's account of a Codex delivery error: a protocol error as it is, an unreachable Docker
-// daemon wrapped, anything else opaque.
+// target wrapped, anything else opaque.
 func codexError(err error) error {
 	var e *protocol.Error
+	var u *docker.Unreachable
 	switch {
 	case err == nil:
 		return nil
 	case errors.As(err, &e):
 		return e
-	case errors.Is(err, docker.ErrUnreachable):
-		return fmt.Errorf("Codex credential injection: %w", docker.ErrUnreachable)
+	case errors.As(err, &u):
+		return fmt.Errorf("Codex credential injection: %w", u)
 	}
 	return err
 }
@@ -204,8 +205,9 @@ func (s *codexSession) carry(auth codexAuthDocument) error {
 // write gives the container the carrier read got, through bootstrap.py's codex-auth writer.
 func (s *codexSession) write(exec func([]string, []byte) error) error {
 	err := exec([]string{launcher.Python, "-I", launcher.Bootstrap, "codex-auth"}, s.carrier)
-	if errors.Is(err, docker.ErrUnreachable) {
-		return docker.ErrUnreachable
+	var u *docker.Unreachable
+	if errors.As(err, &u) {
+		return u
 	}
 	if err != nil {
 		e := protocol.New(s.failed, "Writing Codex credentials into the container failed")

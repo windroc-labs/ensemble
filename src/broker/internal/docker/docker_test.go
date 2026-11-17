@@ -61,8 +61,11 @@ func TestUnreachable(t *testing.T) {
 		"Cannot connect to the Docker daemon at unix:///Users/x/.docker/run/docker.sock. Is the docker daemon running?",
 		"error during connect: dial unix /Users/x/.docker/run/docker.sock: connect: no such file or directory",
 	} {
-		_, err := fakeDocker(t, "echo '"+msg+"' >&2; exit 1").Run(context.Background(), nil, nil)
-		if !errors.Is(err, ErrUnreachable) {
+		c := fakeDocker(t, "echo '"+msg+"' >&2; exit 1")
+		_, err := c.Run(context.Background(), nil, nil)
+		var u *Unreachable
+		if !errors.Is(err, ErrUnreachable) || !errors.As(err, &u) || u.Endpoint != c.Endpoint() ||
+			err.Error() != "Cannot reach Docker target "+c.Endpoint()+": Docker daemon not running; start Docker Desktop and retry." {
 			t.Fatalf("%q: %v", msg, err)
 		}
 	}
@@ -72,7 +75,9 @@ func TestMissingExecutableIsUnreachable(t *testing.T) {
 	present := fakeDocker(t, "touch ran").path
 	for _, c := range []*CLI{{path: "/nonexistent/docker", buildx: present}, {path: present, buildx: "/nonexistent/docker-buildx"}} {
 		_, err := c.Run(context.Background(), []string{"ps"}, nil)
-		if !errors.Is(err, ErrUnreachable) || !strings.Contains(err.Error(), "executable unavailable: /nonexistent/") {
+		var u *Unreachable
+		if !errors.As(err, &u) || !strings.HasPrefix(u.Reason, "Docker Desktop executable unavailable: /nonexistent/") ||
+			!strings.HasSuffix(err.Error(), "; start Docker Desktop and retry.") {
 			t.Fatalf("%q: %v", c.path, err)
 		}
 	}

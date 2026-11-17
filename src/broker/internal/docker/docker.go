@@ -34,7 +34,21 @@ type Runner interface {
 	Run(ctx context.Context, args []string, stdin []byte) ([]byte, error)
 }
 
-var ErrUnreachable = errors.New("Docker Desktop daemon unreachable")
+var ErrUnreachable = errors.New("Docker target unreachable")
+
+// Unreachable is the only error for a Docker target the CLI cannot reach: the target and why, never a container's
+// output. It matches ErrUnreachable.
+type Unreachable struct {
+	Endpoint, Reason string
+}
+
+func (e *Unreachable) Error() string {
+	return "Cannot reach Docker target " + e.Endpoint + ": " + e.Reason + "."
+}
+
+func (e *Unreachable) Is(target error) bool { return target == ErrUnreachable }
+
+const startDesktop = "; start Docker Desktop and retry"
 
 // networkNotFound is the daemon's answer for a missing network, as newer CLIs pass it through.
 var networkNotFound = regexp.MustCompile(`network \S+ not found`)
@@ -135,7 +149,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	for _, path := range []string{c.path, c.buildx} {
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-			return nil, fmt.Errorf("%w: Docker Desktop executable unavailable: %s", ErrUnreachable, path)
+			return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker Desktop executable unavailable: " + path + startDesktop}
 		}
 	}
 	path, argv, env := c.Command(args)
@@ -159,7 +173,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	}
 	text := string(stderr.data)
 	if strings.Contains(text, "Cannot connect to the Docker daemon") || strings.Contains(text, "docker.sock: connect:") {
-		return nil, fmt.Errorf("%w: %s", ErrUnreachable, strings.TrimSpace(text))
+		return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker daemon not running" + startDesktop}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && ctx.Err() == nil {

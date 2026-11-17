@@ -19,7 +19,7 @@ func TestClose(t *testing.T) {
 		"removed":       {container + "\n", nil, true, ""},
 		"absent":        {"", &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}, false, ""},
 		"absent exit 0": {"", nil, false, ""},
-		"unreachable":   {"", docker.ErrUnreachable, false, protocol.DockerUnreachable},
+		"unreachable":   {"", unreachableErr, false, protocol.DockerUnreachable},
 		"failed":        {"", &docker.CommandError{Exit: 1, Stderr: "removal of container in progress"}, false, protocol.CloseFailed},
 	} {
 		t.Run(name, func(t *testing.T) {

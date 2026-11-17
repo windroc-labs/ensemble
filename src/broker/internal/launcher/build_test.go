@@ -545,7 +545,7 @@ func TestBuildFailures(t *testing.T) {
 	})
 	t.Run("unreachable", func(t *testing.T) {
 		e := newBuildEnv(t)
-		e.fake.respond = func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }
+		e.fake.respond = func([]string, []byte) ([]byte, error) { return nil, unreachableErr }
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.DockerUnreachable {
 			t.Fatal(err)
 		}
@@ -790,7 +790,7 @@ func TestAFailedRefreshKeepsTheImage(t *testing.T) {
 	inner := e.fake.respond
 	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" {
-			return nil, docker.ErrUnreachable
+			return nil, unreachableErr
 		}
 		return inner(args, stdin)
 	}

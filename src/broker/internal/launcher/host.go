@@ -206,10 +206,11 @@ func clientKind(client string) string {
 	return ""
 }
 
-// failure classifies a Docker error: unreachable daemon, else code.
+// failure classifies a Docker error: an unreachable target, named with its reason, else code.
 func failure(err error, code protocol.Code, message string) *protocol.Error {
-	if errors.Is(err, docker.ErrUnreachable) {
-		return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
+	var u *docker.Unreachable
+	if errors.As(err, &u) {
+		return protocol.New(protocol.DockerUnreachable, u.Error())
 	}
 	return protocol.New(code, message)
 }
