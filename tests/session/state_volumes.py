@@ -12,12 +12,13 @@ import threading
 from unittest import mock
 
 from ensemble.session.engine import client_state, daemon, state_reader
-from ensemble.session.engine.types import DockerAccess
+from ensemble.session.engine.types import Daemon, DaemonRecord
 from ensemble.utils import DOCKER_STATE
 from tests.session.unit.hosts.docker.support import FakeProc
 
 DOCKER = "/usr/local/bin/docker"
 HOST = "unix:///var/run/docker.sock"
+LOCAL = Daemon("local", HOST, remote=False, path="/usr/bin:/bin:/usr/sbin:/sbin", id="daemon-a")
 IMAGE = "ensemble-worker:" + "a" * 64
 OWNER = "1001:1002"
 
@@ -92,14 +93,14 @@ class _Stdin:
 
 
 class Volumes:
-    """`volumes`: sessions with a volume (default: each dir); `images`: image ls output."""
+    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr."""
 
     def __init__(self):
         self.calls, self.readers = [], []
         self.volumes: set[str] | None = None
         self.images = IMAGE + "\n"
         self.reply: bytes | None = None
-        self.hang, self.inspect_error, self.owner = False, "", OWNER
+        self.hang, self.error, self.owner = False, "", OWNER
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -112,10 +113,14 @@ class Volumes:
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
         args = argv[3:]
+        if self.error and args[:1] != ["run"]:
+            return FakeProc(argv, b"", self.error.encode(), 1)
+        if args[:2] == ["volume", "ls"]:
+            volume = args[args.index("--filter") + 1].removeprefix("name=")
+            session = volume.removeprefix("ensemble-state-")
+            return FakeProc(argv, f"{volume}\n".encode() if self.exists(session) else b"")
         if args[:2] == ["volume", "inspect"]:
             session = args[-1].removeprefix("ensemble-state-")
-            if self.inspect_error:
-                return FakeProc(argv, b"", self.inspect_error.encode(), 1)
             if not self.exists(session):
                 return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
             labels = {"ensemble.state": session, "ensemble.state-owner": self.owner}
@@ -131,13 +136,13 @@ class Volumes:
         raise AssertionError(f"unexpected docker call {argv}")
 
 
-def record(session):
-    daemon.save_access(session, DockerAccess(DOCKER, HOST, "daemon-a"))
+def record(session, found=LOCAL):
+    daemon.save_record(session, DaemonRecord(found, DOCKER))
 
 
 @contextlib.contextmanager
 def serve(sessions=("s1", "v", "w")):
-    """Volumes as docker; each of `sessions` gets an access record."""
+    """Volumes as docker; each of `sessions` gets a daemon record."""
     volumes = Volumes()
     for session in sessions:
         record(session)

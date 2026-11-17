@@ -434,6 +434,7 @@ class Environments(Harnessed):
                 "plugins": ["dummy-plugin"],
                 "lock": "dummy-lock",
                 "prefetch": {"repo": "acme/app", "ref": "release/1"},
+                "daemon": None,
             },
         )
         self.assertFalse(os.path.exists(self.work))
@@ -471,6 +472,7 @@ class Verifier(Harnessed):
                 "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
+                "daemon": "local",
             },
         )
         self.assertIn("`mini-op` skill", shown["prompt"])

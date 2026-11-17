@@ -1,0 +1,31 @@
+[
+  {
+    "name": "target-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "target"
+      ]
+    }
+  },
+  {
+    "name": "target-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "target",
+        "--all"
+      ]
+    }
+  }
+]

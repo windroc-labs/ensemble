@@ -150,7 +150,7 @@ func TestLocalTargetNeverProbes(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls, _ := os.ReadFile("calls")
-	if strings.Contains(string(calls), "version") {
+	if strings.Contains(string(calls), "info") {
 		t.Fatalf("probed a local target: %q", calls)
 	}
 }
@@ -243,7 +243,7 @@ func TestProbeReasons(t *testing.T) {
 		"daemon down": {`echo '` + connect + `Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?' >&2; exit 1`,
 			"Docker daemon not running (Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?)"},
 		"other failure":  {`echo 'Error response from daemon: boom' >&2; exit 1`, "connection failed (Error response from daemon: boom)"},
-		"engine 25":      {`echo 25.0.5`, "Docker Engine 25.0.5 is older than 26"},
+		"engine 25":      {`echo '{"id":"A","version":"25.0.5"}'`, "Docker Engine 25.0.5 is older than 26"},
 		"no version":     {`echo dev`, "unrecognized Docker Engine version dev"},
 		"strange output": {`printf '\033[31mred\n'`, "unrecognized Docker Engine version"},
 	} {
@@ -258,7 +258,7 @@ func TestProbeReasons(t *testing.T) {
 		}
 	}
 	for _, version := range []string{"26.0.0-rc1", "26.1.4", "27.5.1"} {
-		c := remoteDocker(t, `if [ "$5 $6 $7" = "version --format {{.Server.Version}}" ]; then echo `+version+`; else echo listed; fi`)
+		c := remoteDocker(t, `if [ "$5 $6 $7" = '`+probeFormat+`' ]; then echo '{"id":"A","version":"`+version+`"}'; else echo listed; fi`)
 		if out, err := c.Run(context.Background(), []string{"ps"}, nil); err != nil || string(out) != "listed\n" {
 			t.Errorf("%s: %q %v", version, out, err)
 		}
@@ -274,19 +274,19 @@ func TestFailedProbeRunsNoFurtherDocker(t *testing.T) {
 		}
 	}
 	calls, _ := os.ReadFile("calls")
-	if string(calls) != "version --format\n" {
+	if string(calls) != "info --format\n" {
 		t.Fatalf("docker ran after the failed probe: %q", calls)
 	}
 }
 
 func TestRemoteCommandLosingTheTarget(t *testing.T) {
-	c := remoteDocker(t, `if [ "$5" = version ]; then echo 27.5.1; exit 0; fi; echo 'error during connect: stderr=container says Permission denied' >&2; exit 1`)
+	c := remoteDocker(t, `if [ "$5" = info ]; then echo '{"id":"A","version":"27.5.1"}'; exit 0; fi; echo 'error during connect: stderr=container says Permission denied' >&2; exit 1`)
 	_, err := c.Run(context.Background(), []string{"exec", "c", "sh"}, nil)
 	var u *Unreachable
 	if !errors.As(err, &u) || u.Reason != "authentication failed" {
 		t.Fatalf("%v", err)
 	}
-	ok := remoteDocker(t, `if [ "$5" = version ]; then echo 27.5.1; exit 0; fi; echo 'cat: x: No such file' >&2; exit 2`)
+	ok := remoteDocker(t, `if [ "$5" = info ]; then echo '{"id":"A","version":"27.5.1"}'; exit 0; fi; echo 'cat: x: No such file' >&2; exit 2`)
 	_, err = ok.Run(context.Background(), []string{"exec", "c", "cat", "x"}, nil)
 	var ce *CommandError
 	if !errors.As(err, &ce) || errors.Is(err, ErrUnreachable) {
@@ -330,7 +330,7 @@ func TestLocalBesideARemoteTargetNeverProbes(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls, _ := os.ReadFile("calls")
-	if strings.Contains(string(calls), "version") || !strings.Contains(string(calls), "--host unix://") {
+	if strings.Contains(string(calls), "info") || !strings.Contains(string(calls), "--host unix://") {
 		t.Fatalf("local CLI calls %q", calls)
 	}
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 41",
+  "title": "Docker broker protocol 43",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -222,6 +222,9 @@
         "generation": {
           "$ref": "#/$defs/generation"
         },
+        "daemon": {
+          "$ref": "#/$defs/daemon"
+        },
         "image": {
           "$ref": "#/$defs/image"
         },
@@ -316,6 +319,7 @@
       "required": [
         "name",
         "generation",
+        "daemon",
         "image",
         "cwd",
         "workspace",
@@ -450,7 +454,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "42"
+          "const": "43"
         }
       },
       "required": [
@@ -462,7 +466,7 @@
       "type": "object",
       "properties": {
         "argv": {
-          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then at most 16 --secret ITEM pairs (environment secret items: they choose the daemon), then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
+          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
           "type": "array",
           "prefixItems": [
             {
@@ -473,6 +477,12 @@
             },
             {
               "$ref": "#/$defs/path"
+            },
+            {
+              "const": "--daemon"
+            },
+            {
+              "$ref": "#/$defs/daemon"
             }
           ],
           "items": {
@@ -482,13 +492,8 @@
                   "--base-image",
                   "--plugin",
                   "--image-plugin",
-                  "--secret",
                   "--max-age"
                 ]
-              },
-              {
-                "type": "string",
-                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
               },
               {
                 "$ref": "#/$defs/plugin"
@@ -505,13 +510,13 @@
               }
             ]
           },
-          "minItems": 3,
+          "minItems": 5,
           "anyOf": [
             {
-              "maxItems": 3
+              "maxItems": 5
             },
             {
-              "minItems": 5
+              "minItems": 7
             }
           ]
         }
@@ -651,19 +656,12 @@
               "const": "--daemon"
             },
             {
-              "const": "local"
+              "$ref": "#/$defs/daemon"
             }
           ],
           "items": false,
-          "minItems": 3,
-          "anyOf": [
-            {
-              "maxItems": 3
-            },
-            {
-              "minItems": 5
-            }
-          ]
+          "minItems": 5,
+          "maxItems": 5
         }
       },
       "required": [
@@ -712,18 +710,23 @@
               ]
             },
             {
-              "enum": [
-                "--daemon",
-                "local"
+              "anyOf": [
+                {
+                  "const": "--daemon"
+                },
+                {
+                  "$ref": "#/$defs/daemon"
+                }
               ]
             },
             {
-              "const": "local"
+              "$ref": "#/$defs/daemon"
             }
           ],
-          "$comment": "Then an optional --force, then an optional --daemon local; the broker checks the order (usage).",
+          "$comment": "Then an optional --force, then --daemon ID; the broker checks the order (usage).",
           "items": false,
-          "minItems": 3
+          "minItems": 5,
+          "maxItems": 6
         }
       },
       "required": [
@@ -989,7 +992,8 @@
                 "workspace-rm",
                 "unknown",
                 "probe-provider",
-                "check-clients"
+                "check-clients",
+                "target"
               ]
             },
             "code": {
@@ -1147,7 +1151,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "check-clients"
+                    "check-clients",
+                    "target"
                   ]
                 }
               }
@@ -1247,8 +1252,10 @@
                   "enum": [
                     "build",
                     "start",
+                    "maintain",
                     "close",
-                    "workspace-rm"
+                    "workspace-rm",
+                    "target"
                   ]
                 }
               }
@@ -1451,7 +1458,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "check-clients"
+                    "check-clients",
+                    "target"
                   ]
                 }
               }
@@ -1772,6 +1780,92 @@
       },
       "required": [
         "rebuilt"
+      ],
+      "additionalProperties": false
+    },
+    "target_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "target"
+            }
+          ],
+          "items": false,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "target_output": {
+      "$comment": "The configured Docker daemons, the default first: local, the Mac's Docker Desktop, always; remote, the target setting's host, when set. A daemon the broker reached has its id; one it could not reach has why instead.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "enum": [
+            "local",
+            "remote"
+          ]
+        },
+        "daemons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "endpoint": {
+                "$ref": "#/$defs/endpoint"
+              },
+              "remote": {
+                "type": "boolean"
+              },
+              "path": {
+                "$ref": "#/$defs/text"
+              },
+              "id": {
+                "$ref": "#/$defs/daemon"
+              },
+              "unreachable": {
+                "$ref": "#/$defs/text"
+              }
+            },
+            "required": [
+              "name",
+              "endpoint",
+              "remote",
+              "path"
+            ],
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "required": [
+                  "id"
+                ]
+              },
+              {
+                "required": [
+                  "unreachable"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "default",
+        "daemons"
       ],
       "additionalProperties": false
     },

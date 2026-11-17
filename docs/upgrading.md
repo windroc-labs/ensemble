@@ -1,55 +1,23 @@
 # Upgrading
 
-## Broker protocol 42: mini-op workers stay on the Mac
+## Broker protocol 43: remote Docker target
 
-Upgrade the plugin and broker together with `scripts/install.sh --docker`. A `~/.ensemble/docker/target.json` now
-also lists the environment secrets whose workers run on the local Docker Desktop, whatever the target is. Add the
-key to an existing file; a file without it fails every start `docker_unreachable` ("invalid target setting"):
+Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer also creates
+`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A `docker_unreachable` error names the Docker
+target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock: Docker
+daemon not running; start Docker Desktop and retry.`
+
+With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
+machine the target, write exactly this there, with `:port` when it is not 22:
 
 ```json
 {"host": "ssh://user@host", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
 ```
 
-- The list holds up to 16 distinct `ensemble-broker-env/<name>` items; `[]` sends every worker to the target. Only
-  this file sets it: a manifest or a session argument cannot change the list or where a worker runs.
-- A worker given any listed secret (today the verifier, and any role whose manifest asks for the mini-op
-  credentials) is built and started on the local Docker Desktop, with the Mac's egress proxy. Its start never falls
-  back to the target: with the local Docker Desktop down, it fails `docker_unreachable`.
-- With a remote target, `ensemble-session ls` and sweep cover both daemons. A daemon that does not answer is named on
-  stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
-  `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
-  cannot be asked.
-- `close` and `workspace-rm` take `--daemon local` for the local Docker Desktop beside a remote target, and `build`
-  takes the worker's `--secret` items.
-
-## Broker protocol 41: a Docker target is its daemon
-
-Upgrade the plugin and broker together with `scripts/install.sh --docker`. A Docker target is identified by its
-daemon's ID (`docker info`), not its address: a LAN address and a Tailscale address of one machine are one target.
-
-- Each session records the daemon its state is on in `~/.ensemble/docker-state/<name>/state-access.json`. Resuming
-  it while the target is another daemon fails before any volume is made, naming the session's target; set the target
-  back to it first. Reclaiming its workdir removes the current target's workspaces of it, then fails the same way
-  while the session's own daemon still holds its workspace, or cannot be asked. A session with no record belongs to the local Docker Desktop. A record from
-  protocol 40 has no daemon and fails as malformed: if that session was made on the local Docker Desktop, delete the
-  file; otherwise give it a new start.
-- The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`, so the first build after
-  a switch builds on the new target. The old files directly in `~/.ensemble/docker/images/` and
-  `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer read; delete them:
-  `find ~/.ensemble/docker/images -maxdepth 1 -type f -delete; rm -f ~/.ensemble/docker/clients-check.json ~/.ensemble/docker/clients-check.reported`.
-
-## Broker protocol 40: Docker target
-
-Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer now also creates
-`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A `docker_unreachable` error now names the
-Docker target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock:
-Docker daemon not running; start Docker Desktop and retry.`
-
-With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
-machine the target, write `{"host": "ssh://user@host"}` there, with `:port` when it is not 22. Protocol 42 adds a
-required `local_secrets` key ([Broker protocol 42](#broker-protocol-42-mini-op-workers-stay-on-the-mac)); nothing else
-may be in the file. The broker and the session then send every docker call there, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or
-`DOCKER_CONFIG` say:
+Any other key, or a file without both, fails every Docker command `docker_unreachable` ("invalid target setting").
+Only the broker reads the file: `ensemble-broker target` prints the configured daemons (`local`, and `remote` when
+`host` is set), the default one, and each daemon's ID or why it cannot be reached. The broker and the session send
+every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say:
 
 - SSH ignores `~/.ssh/config`, so the address carries the user and port. Authentication is key-only: the default key
   files or the agent at `SSH_AUTH_SOCK`. Agent, X11 and port forwarding are off.
@@ -58,6 +26,30 @@ may be in the file. The broker and the session then send every docker call there
 - Before any build or credential write, each broker command checks the target once. Start fails `docker_unreachable`
   with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
   running, or an Engine older than 26.
+
+Where a worker runs:
+
+- A new session takes its environment's `daemon` key: `"local"` runs it on the Mac's Docker Desktop whatever the
+  target is; unset takes the target when `host` is set, else the local Docker Desktop. The packaged mini-op
+  environment (the verifier's) sets `daemon = "local"`. Only `config.toml` and `config.local.toml` set it.
+- The session records that daemon by its ID (`docker info`) in `~/.ensemble/docker-state/<name>/daemon.json`, once,
+  and every later command of the session (maintain, close, resume, reclaim) uses it, whatever the settings say then:
+  a LAN address and a Tailscale address of one machine are one daemon. A session with no record belongs to the local
+  Docker Desktop. Resuming a session whose daemon no longer has a configured address fails before any volume is made,
+  naming the session's target: set the target back to it first.
+- `local_secrets` only refuses: the broker rejects a start on the remote daemon whose environment secrets include a
+  listed item (`manifest_rejected`), so those credentials never leave the Mac. It never moves a worker. A role that
+  asks for the mini-op credentials outside the mini-op environment fails that way.
+- With a remote target, `ensemble-session ls` and sweep cover both daemons. A daemon that does not answer is named on
+  stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
+  `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
+  cannot be asked.
+- `build`, `close` and `workspace-rm` take `--daemon <ID>`; a start's manifest names its `daemon`. A daemon ID no
+  configured daemon has fails `docker_unreachable`, naming it and the configured daemons.
+- The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`. The old files directly in
+  `~/.ensemble/docker/images/` and `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer
+  read; delete them:
+  `find ~/.ensemble/docker/images -maxdepth 1 -type f -delete; rm -f ~/.ensemble/docker/clients-check.json ~/.ensemble/docker/clients-check.reported`.
 
 A worker's client state (Claude config dir, Codex `sessions` and `config`, OpenCode data) now lives in its state
 volume `ensemble-state-<name>` on the Docker target, local or remote, never in a Mac directory; reclaiming a session

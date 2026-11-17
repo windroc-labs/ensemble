@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	stateLabel      = "ensemble.state"        // a state volume's session
-	stateOwnerLabel = "ensemble.state-owner"  // its client dirs' uid:gid, which its readers run as
-	readerLabel     = "ensemble.state-reader" // a session's state reader containers, which mount its state volume
+	stateLabel      = "ensemble.state"
+	stateOwnerLabel = "ensemble.state-owner" // its client dirs' uid:gid, which its readers run as
+	readerLabel     = "ensemble.state-reader"
 )
 
 var (
@@ -32,12 +32,10 @@ var (
 		"/var/run", "/var/lock", "/home/agent"}
 )
 
-// inside reports whether path p is base or below it, by components.
 func inside(p, base string) bool {
 	return p == base || base == "/" || strings.HasPrefix(p, base+"/")
 }
 
-// checkTree applies the mount-point rules a clean absolute container path can be judged on alone, failing with code.
 func checkTree(p string, code protocol.Code) error {
 	for _, c := range covered {
 		if inside(c, p) {
@@ -76,7 +74,6 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// checkMounts applies the mount rules to container paths: cwd and the client dir are mount points of volumes.
 func (h Host) checkMounts(m Manifest) error {
 	reject := func(format string, args ...any) error {
 		return protocol.Newf(protocol.MountRejected, format, args...)
@@ -112,7 +109,7 @@ func (h Host) checkMounts(m Manifest) error {
 	return nil
 }
 
-// mountSpec renders a --mount value; Docker parses it as one CSV record.
+// mountSpec: Docker parses a --mount value as one CSV record.
 func mountSpec(fields ...string) string {
 	var b strings.Builder
 	w := csv.NewWriter(&b)
@@ -121,18 +118,16 @@ func mountSpec(fields ...string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// stateMount mounts subpath of a client state volume at target; Docker requires the subpath to exist in the volume.
+// stateMount: Docker requires the subpath to exist in the volume.
 func stateMount(volume, subpath, target string) string {
 	return mountSpec("type=volume", "source="+volume, "target="+target, "volume-subpath="+subpath, "volume-nocopy")
 }
 
-// stateVolume is session name's client state volume, kept across its restarts and resumes: <client>/ holds the client's
-// home (Codex: only its kept dirs).
 func stateVolume(name string) string {
 	return "ensemble-state-" + name
 }
 
-// stateDirs are the dirs of m's client in its state volume, parents first: the subpaths its mounts name.
+// stateDirs are the subpaths m's mounts name, parents first.
 func stateDirs(m Manifest) []string {
 	if m.Client != "codex" {
 		return []string{m.Client}
@@ -144,8 +139,8 @@ func stateDirs(m Manifest) []string {
 	return dirs
 }
 
-// volumeMount mounts a workspace volume with volume-nocopy: without it, a container created on the still-empty volume
-// copies its mount point (the --workdir Docker made as root) onto the volume root, undoing ensureVolume's chown.
+// volumeMount uses volume-nocopy: otherwise a container on the empty volume copies its root-made mount point onto the
+// volume root, undoing ensureVolume's chown.
 func volumeMount(volume, target string, readonly bool) string {
 	fields := []string{"type=volume", "source=" + volume, "target=" + target}
 	if readonly {
@@ -154,7 +149,6 @@ func volumeMount(volume, target string, readonly bool) string {
 	return mountSpec(append(fields, "volume-nocopy")...)
 }
 
-// workspaceMount is volumeMount's value with its audit record, both from the same readonly.
 func workspaceMount(volume, target string, readonly bool) (string, audit.Mount) {
 	mode := "rw"
 	if readonly {
@@ -163,7 +157,6 @@ func workspaceMount(volume, target string, readonly bool) (string, audit.Mount) 
 	return volumeMount(volume, target, readonly), audit.Mount{Type: "volume", Source: volume, Target: target, Mode: mode}
 }
 
-// volumeLabels reads a volume's labels; an absent volume is an error docker.Absent recognizes.
 func (h Host) volumeLabels(ctx context.Context, d Daemon, volume string) (map[string]string, error) {
 	out, err := d.Runner.Run(ctx, []string{"volume", "inspect", "--format", "{{json .Labels}}", volume}, nil)
 	if err != nil {
@@ -176,15 +169,13 @@ func (h Host) volumeLabels(ctx context.Context, d Daemon, volume string) (map[st
 	return labels, nil
 }
 
-// randomHex is 16 random bytes in hex: a throwaway name or nonce.
 func randomHex() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// removeVolume removes volume v, which this start created, on a context of its own; a failed removal adds the command
-// to e.
+// removeVolume runs on a context of its own; a failed removal adds the command to e.
 func (h Host) removeVolume(ctx context.Context, d Daemon, v string, e *protocol.Error) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -193,9 +184,8 @@ func (h Host) removeVolume(ctx context.Context, d Daemon, v string, e *protocol.
 	}
 }
 
-// ensureVolume gives m its workspace volume: created with its labels and an agent-owned root, or an
-// existing one whose labels match and that no container mounts. created: this start made it, which a prefetching
-// start knows by its own nonceLabel value.
+// ensureVolume: an existing workspace must match its labels and have no container mounting it; a prefetching start
+// knows it created the volume by its own nonce.
 func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
 	v := m.Workspace
 	labels, err := h.volumeLabels(ctx, d, v)
@@ -216,15 +206,8 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 			created = labels[nonceLabel] == nonce
 		}
 	}
-	// Until its root is the agent's, a volume this start created is removed on failure: a later start would skip the chown.
-	undo := func(e *protocol.Error) (bool, error) {
-		if created {
-			h.removeVolume(ctx, d, v, e)
-		}
-		return false, e
-	}
 	if err != nil {
-		return undo(failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
 	}
 	if labels[kindLabel] != kind || labels[workspaceLabel] != m.CWD {
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
@@ -232,7 +215,7 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	}
 	out, err := d.Runner.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
 	if err != nil {
-		return undo(failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
 	}
 	if users := strings.Fields(string(out)); len(users) > 0 {
 		return false, protocol.Newf(protocol.MountRejected, "Workspace volume %s is mounted by running container %s; close it first.", v, users[0])
@@ -244,13 +227,11 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	chown := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--user", "0:0",
 		"--mount", volumeMount(v, "/workspace", false), "--entrypoint", "/bin/chown", info.ID, l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"], "/workspace"}
 	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
-		return undo(failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
 	}
 	return true, nil
 }
 
-// ensureStateVolume gives m its client state volume: created with its label, its root the agent's and its client's
-// dirs made by the agent, or an existing one labelled for m. created: this start made it.
 func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
 	v := stateVolume(m.Name)
 	labels, err := h.volumeLabels(ctx, d, v)
@@ -264,14 +245,8 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 		}
 		labels, err = h.volumeLabels(ctx, d, v)
 	}
-	undo := func(e *protocol.Error) (bool, error) {
-		if created {
-			h.removeVolume(ctx, d, v, e)
-		}
-		return false, e
-	}
 	if err != nil {
-		return undo(failure(err, protocol.StartFailed, "Cannot inspect state volume "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot inspect state volume "+v+"."))
 	}
 	if labels[stateLabel] != m.Name {
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the client state of %s (%s %q).", v, m.Name, stateLabel, labels[stateLabel])
@@ -283,7 +258,7 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 	chown := append(slices.Clone(helper), "--cap-add", "CHOWN", "--user", "0:0", "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/chown",
 		info.ID, owner, "/state")
 	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
-		return undo(failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
 	}
 	mkdir := append(slices.Clone(helper), "--user", owner, "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/mkdir",
 		info.ID, "-p", "-m", "0700")
@@ -291,12 +266,12 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 		mkdir = append(mkdir, "/state/"+dir)
 	}
 	if _, err := d.Runner.Run(ctx, mkdir, nil); err != nil {
-		return undo(failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
 	}
 	return true, nil
 }
 
-// removeStateVolume removes session name's reader containers, then its state volume; an absent volume is success.
+// removeStateVolume removes the readers first: they mount the volume.
 func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string) error {
 	v := stateVolume(name)
 	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)

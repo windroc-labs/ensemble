@@ -36,14 +36,12 @@ func atEndpoint(h Host, endpoint string) Host {
 	return h
 }
 
-// onTwo is h with a remote target run by remote, its default, beside the local Docker Desktop run by local, placing
-// a worker given miniPassword on local.
+// onTwo is h with a remote target run by remote, its default, beside the local Docker Desktop run by local.
 func onTwo(h Host, remote, local docker.Runner) Host {
 	h.Daemons = []Daemon{
 		{Name: DaemonRemote, Endpoint: remoteEndpoint, Remote: true, Runner: remote},
 		{Name: DaemonLocal, Endpoint: localEndpoint, Runner: local},
 	}
-	h.Place = Placement(h.Daemons, []string{miniPassword})
 	return h
 }
 

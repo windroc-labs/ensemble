@@ -149,7 +149,7 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newBuildEnv(t)
-			first := e.builtImage(t, e.pkg, BuildSpec{})
+			first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 			e.releases.latest[tc.pkg] = tc.version
 			start := time.Now()
 			got, err := e.host().CheckClients(ctx)
@@ -163,7 +163,7 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 			if at, failure := e.checkState(t); at.Before(start.Add(-time.Second)) || failure != "" {
 				t.Fatalf("%v %q", at, failure)
 			}
-			again, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+			again, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 			if err != nil || again.Rebuilt || again.Image != first.Image || again.Digest == first.Digest {
 				t.Fatalf("%+v %v", again, err)
 			}
@@ -171,7 +171,7 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 	}
 	t.Run("a check rebuild keeps the variant's last use", func(t *testing.T) {
 		e := newBuildEnv(t)
-		first := e.builtImage(t, e.pkg, BuildSpec{})
+		first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 		record := e.leasePath(strings.TrimPrefix(first.Image, "ensemble-worker:")) + ".json"
 		used := time.Now().Add(-variantLease + time.Hour)
 		if err := os.Chtimes(record, used, used); err != nil {
@@ -187,7 +187,7 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 	})
 	t.Run("a base image and in-image plugins", func(t *testing.T) {
 		e := newBaseEnv(t)
-		spec := BuildSpec{BaseImage: baseRef, Plugins: []string{"x@owner/repo#" + strings.Repeat("a", 40)}, ImagePlugins: []string{"beta", "alpha"}}
+		spec := BuildSpec{Daemon: testDaemon, BaseImage: baseRef, Plugins: []string{"x@owner/repo#" + strings.Repeat("a", 40)}, ImagePlugins: []string{"beta", "alpha"}}
 		first := e.builtImage(t, e.pkg, spec)
 		e.releases.latest["opencode-ai"] = "1.20.2"
 		calls := len(e.fake.calls)
@@ -215,7 +215,7 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 
 func TestCheckClientsCurrentRebuildsNothing(t *testing.T) {
 	e := newBuildEnv(t)
-	e.builtImage(t, e.pkg, BuildSpec{})
+	e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 	e.writeCheckState(t, time.Now().Add(-2*time.Hour), "ensemble-worker:x: Building the ensemble image stage failed.")
 	calls := len(e.fake.calls)
 	got, err := e.host().CheckClients(context.Background())
@@ -249,7 +249,7 @@ func TestCheckClientsRegistryDown(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newBuildEnv(t)
-			e.builtImage(t, e.pkg, BuildSpec{})
+			e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 			tc.mutate(e.releases)
 			calls := len(e.fake.calls)
 			_, err := e.host().CheckClients(context.Background())
@@ -269,7 +269,7 @@ func TestCheckClientsRegistryDown(t *testing.T) {
 
 func TestCheckClientsRebuildFailureKeepsImage(t *testing.T) {
 	e := newBuildEnv(t)
-	images := []string{e.builtImage(t, e.pkg, BuildSpec{}).Image, e.builtImage(t, otherPackage(t), BuildSpec{}).Image}
+	images := []string{e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon}).Image, e.builtImage(t, otherPackage(t), BuildSpec{Daemon: testDaemon}).Image}
 	slices.Sort(images)
 	failing, next := images[0], images[1]
 	before := e.built[failing]
@@ -303,7 +303,7 @@ func TestCheckClientsRebuildFailureKeepsImage(t *testing.T) {
 
 func TestCheckClientsSingleFlight(t *testing.T) {
 	e := newBuildEnv(t)
-	e.builtImage(t, e.pkg, BuildSpec{})
+	e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 	path := filepath.Join(e.home, ".ensemble/docker/clients-check.lock")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -346,19 +346,19 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 			return key
 		}},
 		"prepare fails": {setup: func(t *testing.T, e *buildEnv) string {
-			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{}).Image, "ensemble-worker:")
+			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon}).Image, "ensemble-worker:")
 			if err := os.RemoveAll(filepath.Join(e.pkg, "src/ensemble/session")); err != nil {
 				t.Fatal(err)
 			}
 			return key
 		}},
 		"another key": {setup: func(t *testing.T, e *buildEnv) string {
-			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{}).Image, "ensemble-worker:")
+			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon}).Image, "ensemble-worker:")
 			putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "changed")
 			return key
 		}},
 		"unused": {kept: true, setup: func(t *testing.T, e *buildEnv) string {
-			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{}).Image, "ensemble-worker:")
+			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon}).Image, "ensemble-worker:")
 			stale := time.Now().Add(-variantLease - time.Minute)
 			if err := os.Chtimes(record(e, key), stale, stale); err != nil {
 				t.Fatal(err)
@@ -386,7 +386,7 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 func TestCheckClientsIteratesDaemons(t *testing.T) {
 	for _, localUp := range []bool{true, false} {
 		e := newBuildEnv(t)
-		first := e.builtImage(t, e.pkg, BuildSpec{})
+		first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 		e.releases.latest["@openai/codex"] = "0.171.0"
 		down := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
 		h := onTwo(e.lookupHost(), e.fake, down)

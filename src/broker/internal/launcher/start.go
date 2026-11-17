@@ -65,12 +65,18 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
-	d := h.placed(secretItems(m.Secrets))
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
 	h.Audit.Begin(c, facts)
 	if err := h.checkMounts(m); err != nil {
+		return StartResult{}, err
+	}
+	d, r, err := h.find(ctx, m.Daemon, protocol.StartFailed)
+	if err != nil {
+		return StartResult{}, err
+	}
+	if err := h.localOnly(d, m); err != nil {
 		return StartResult{}, err
 	}
 	px, err := h.checkProxy(ctx, d, m.Gateway)
@@ -140,11 +146,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		return StartResult{}, taken(c)
 	}
-	// The reply names the daemon the volumes are on, which the caller checks.
-	d, r, err := h.identify(ctx, d, protocol.StartFailed)
-	if err != nil {
-		return StartResult{}, err
-	}
 	lostName := false
 	created, err := h.ensureVolume(ctx, d, m, info)
 	if err != nil {
@@ -213,12 +214,9 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	return result, nil
 }
 
-// codexKept are the dirs of a Codex home's tmpfs mounted from its state volume, so they outlive the container: its
-// history and its own config copy, which CODEX_HOME/config.toml links to. The session's Codex ClientHome.persistent
-// names the same dirs.
+// codexKept outlive the container on its state volume; the session's Codex ClientHome.persistent names the same dirs.
 var codexKept = []string{"sessions", "config"}
 
-// mounts are create's --mount and --tmpfs flags and, for the audit, what each one mounts.
 func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	var flags []string
 	var list []audit.Mount
@@ -254,8 +252,7 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	return flags, list
 }
 
-// holding is the credentials a container being started holds: its client's, the environment secrets written, and
-// github, the revocation of the GitHub tokens issued (nil: none).
+// holding's github revokes the GitHub tokens issued (nil: none).
 type holding struct {
 	client  bool
 	secrets []string
@@ -451,7 +448,6 @@ func (h Host) create(ctx context.Context, d Daemon, c string, m Manifest, info i
 		held, nil
 }
 
-// startTokens records the expiries a start delivered.
 func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry, linearExpiry string) error {
 	var err error
 	if codexExpiry != nil {
@@ -481,7 +477,6 @@ func injected(err error, code protocol.Code, message string) *protocol.Error {
 	return protocol.New(code, message)
 }
 
-// agentExec runs argv as agent in container c with stdin, for secret injection.
 func (h Host) agentExec(ctx context.Context, d Daemon, c string) func(argv []string, stdin []byte) error {
 	return func(argv []string, stdin []byte) error {
 		_, err := d.Runner.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)

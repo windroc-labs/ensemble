@@ -64,7 +64,10 @@ __all__ = [
     "SessionRow",
     "SessionStatus",
     "Spec",
-    "DockerAccess",
+    "Daemon",
+    "DaemonName",
+    "DaemonRecord",
+    "Target",
     "StateEntry",
     "StateFile",
     "StateKind",
@@ -183,12 +186,30 @@ def _no_files() -> Mapping[str, str]:
     return {}
 
 
-class DockerAccess(NamedTuple):
-    """A session's docker CLI and daemon."""
+class DaemonName(StrEnum):
+    LOCAL = "local"
+    REMOTE = "remote"
 
+
+class Daemon(NamedTuple):
+    """One of the broker's target daemons: its ID once reached, else why not."""
+
+    name: str
+    endpoint: str
+    remote: bool
+    path: str
+    id: str | None = None
+    unreachable: str | None = None
+
+
+class Target(NamedTuple):
+    default: str
+    daemons: tuple[Daemon, ...]
+
+
+class DaemonRecord(NamedTuple):
+    daemon: Daemon
     docker: str
-    host: str
-    daemon: str
 
 
 class StateFile(NamedTuple):
@@ -386,6 +407,7 @@ class EnvironmentSpec:
     plugins: tuple[str, ...] = ()
     lock: str | None = None
     prefetch: Mapping[str, str] | None = None
+    daemon: str | None = None
 
     def __post_init__(self):
         plugins = self.plugins
@@ -404,6 +426,7 @@ class EnvironmentSpec:
             or isinstance(self.lock, str)
             and bool(LOCK_NAME.fullmatch(self.lock)),
             "prefetch": self.prefetch is None or _prefetch(self.prefetch),
+            "daemon": self.daemon is None or self.daemon == "local",
         }
         if bad := next((name for name, ok in checks.items() if not ok), None):
             raise ConfigError(f"environment {bad}: {getattr(self, bad)!r:.120} is not valid")
@@ -417,6 +440,7 @@ class EnvironmentSpec:
             "plugins": list(self.plugins),
             "lock": self.lock,
             "prefetch": None if self.prefetch is None else dict(self.prefetch),
+            "daemon": self.daemon,
         }
 
     @classmethod

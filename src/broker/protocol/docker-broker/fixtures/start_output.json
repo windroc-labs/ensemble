@@ -75,7 +75,7 @@
     "name": "start-output-hostile-endpoint",
     "valid": false,
     "expected": {
-      "stage": "response",
+      "stage": "schema",
       "exit_code": null,
       "error_code": null
     },
@@ -147,7 +147,7 @@
     "name": "start-output-endpoint-option",
     "valid": false,
     "expected": {
-      "stage": "response",
+      "stage": "schema",
       "exit_code": null,
       "error_code": null
     },
@@ -169,7 +169,7 @@
     "name": "start-output-endpoint-path",
     "valid": false,
     "expected": {
-      "stage": "response",
+      "stage": "schema",
       "exit_code": null,
       "error_code": null
     },

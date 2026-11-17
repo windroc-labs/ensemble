@@ -1,15 +1,15 @@
-"""scripts/install-target-egress.sh run with a fake gh, docker and egress-install, in a temporary home and root."""
+"""scripts/install-target-egress.sh run with a fake broker, gh, docker and egress-install, in a temporary home and
+root.
+"""
 
 import json
 import os
-import pwd
 import re
 import shutil
 import stat
 import subprocess
 from pathlib import Path
 
-from ensemble.session.engine.daemon import TARGET
 from tests.case import REPO, Case
 
 SCRIPT = os.path.join(REPO, "scripts", "install-target-egress.sh")
@@ -32,6 +32,7 @@ FAKE_INSTALL = """#!/bin/bash
   printf 'PATH=%s\\n' "$PATH"
   printf 'DOCKER_HOST=%s\\n' "${DOCKER_HOST-unset}"
   printf 'DOCKER_CONTEXT=%s\\n' "${DOCKER_CONTEXT-unset}"
+  printf 'DOCKER_CONFIG=%s\\n' "${DOCKER_CONFIG-unset}"
 } >"$FAKES/install.log"
 exit "${EGRESS_EXIT:-0}"
 """
@@ -43,6 +44,21 @@ printf '%s\\n' "$*" >>"$FAKES/gh.log"
 [ -e "$FAKES/gh_empty" ] && exit 0
 cat "$FAKES/egress-install"
 """
+
+
+# The broker answers `target` from $FAKES/target.out (exit 0), else $FAKES/target.err (exit 7); it logs its argv.
+FAKE_BROKER = """#!/bin/bash
+printf '%s\\n' "$*" >>"$FAKES/broker.log"
+if [ -e "$FAKES/target.err" ]; then cat "$FAKES/target.err" >&2; exit 7; fi
+cat "$FAKES/target.out"
+"""
+LOCAL = {
+    "name": "local",
+    "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+    "remote": False,
+    "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+    "id": "L1",
+}
 
 
 def executable(path, text):
@@ -59,7 +75,8 @@ class InstallTargetEgressTest(Case):
         self.tmp = Path(self.home, "tmp")
         self.tmp.mkdir()
         self.wrapper = self.root / "usr/local/libexec/ensemble/ssh"
-        executable(self.wrapper / "ssh", "#!/bin/sh\nexit 255\n")
+        self.path = f"{self.wrapper}:/usr/bin:/bin:/usr/sbin:/sbin"
+        executable(self.root / "usr/local/libexec/ensemble/ensemble-broker", FAKE_BROKER)
         executable(self.bin / "gh", FAKE_GH)
         executable(self.bin / "docker", "#!/bin/sh\nexit 0\n")
         executable(self.fakes / "egress-install", FAKE_INSTALL)
@@ -67,12 +84,23 @@ class InstallTargetEgressTest(Case):
         self.system = self.fakes / "system"
         for tool in ("bash", "python3", "mktemp", "rm", "env", "cat"):
             executable(self.system / tool, f'#!/bin/sh\nexec {shutil.which(tool)} "$@"\n')
-        account = pwd.getpwuid(os.getuid()).pw_dir.lstrip("/")
-        self.target_file = self.root / account / ".ensemble/docker/target.json"
+        self.target(None)
 
-    def target(self, text):
-        self.target_file.parent.mkdir(parents=True, exist_ok=True)
-        self.target_file.write_text(text)
+    def target(self, endpoint, *, unreachable=None):
+        """The broker's target output: local, beside a remote daemon at `endpoint` (None: none)."""
+        daemons = [LOCAL]
+        if endpoint is not None:
+            remote = {"name": "remote", "endpoint": endpoint, "remote": True, "path": self.path}
+            remote.update({"unreachable": unreachable} if unreachable else {"id": "R1"})
+            daemons.insert(0, remote)
+        default = "local" if endpoint is None else "remote"
+        found = {"default": default, "daemons": daemons}
+        (self.fakes / "target.out").write_text(json.dumps(found) + "\n")
+
+    def target_error(self, message):
+        error = {"command": "target", "code": "docker_unreachable", "message": message}
+        found = {"exit_code": 7, "error": {**error, "cleanup": "not_needed"}}
+        (self.fakes / "target.err").write_text(json.dumps(found) + "\n")
 
     def run_script(self, *args, **env):
         base = {
@@ -83,6 +111,7 @@ class InstallTargetEgressTest(Case):
             "ENSEMBLE_INSTALL_ROOT": str(self.root),
             "DOCKER_HOST": "tcp://hostile:1234",
             "DOCKER_CONTEXT": "hostile",
+            "DOCKER_CONFIG": "/hostile",
         }
         return subprocess.run(
             [shutil.which("bash"), SCRIPT, *args],
@@ -101,8 +130,8 @@ class InstallTargetEgressTest(Case):
         log = self.fakes / "install.log"
         return log.read_text().splitlines() if log.exists() else None
 
-    def test_runs_egress_install_against_the_target(self):
-        self.target('{"host": "ssh://me@pc:2222", "local_secrets": []}')
+    def test_runs_egress_install_against_the_brokers_target(self):
+        self.target("ssh://me@pc:2222")
         for code in (0, 11):
             with self.subTest(code=code):
                 done = self.run_script(
@@ -128,54 +157,65 @@ class InstallTargetEgressTest(Case):
                         "ssh://me@pc:2222",
                     ],
                 )
-                self.assertEqual(lines[8], f"PATH={self.wrapper}:{self.bin}:{self.system}")
-                self.assertEqual(lines[9:], ["DOCKER_HOST=unset", "DOCKER_CONTEXT=unset"])
+                self.assertEqual(lines[8], f"PATH={self.path}:{self.bin}:{self.system}")
+                self.assertEqual(
+                    lines[9:], ["DOCKER_HOST=unset", "DOCKER_CONTEXT=unset", "DOCKER_CONFIG=unset"]
+                )
                 if code:
                     self.assertIn("egress-install exited 11", done.stderr)
                 else:
                     self.assertIn("ssh://me@pc:2222", done.stderr)
                     self.assertIn(
-                        f"PATH={self.wrapper}:$PATH {self.home}/.egress-target/start.sh",
+                        f"PATH={self.path}:$PATH {self.home}/.egress-target/start.sh",
                         done.stderr,
                     )
                 self.assertEqual(list(self.tmp.iterdir()), [])
 
-    def test_no_target_file_exits_2_without_fetching(self):
+    def test_no_remote_daemon_exits_2_without_fetching(self):
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("no remote Docker target is set", done.stderr)
         self.assertIn("scripts/install.sh --docker", done.stderr)
         self.assertEqual(self.gh_calls(), [])
 
-    def test_invalid_target_files_exit_2(self):
-        for text in (
-            '{"host": "ssh://pc", "local_secrets": [], "extra": 1}',
-            '{"host": "ssh://pc"}',
-            '{"host": "ssh://pc", "local_secrets": "x"}',
-            '{"host": "ssh://pc:0"}',
-            '{"host": "ssh://pc:70000"}',
-            "not json",
-            '{"host": 22}',
-            '{"host": "tcp://pc:2375"}',
-            "[]",
-        ):
-            with self.subTest(text=text):
-                self.target(text)
-                done = self.run_script("--version", VERSION, "--digest", DIGEST)
-                self.assertEqual(done.returncode, 2, done.stderr)
-                self.assertIn(str(self.target_file), done.stderr)
-                self.assertEqual(self.gh_calls(), [])
-
-    def test_missing_ssh_wrapper_exits_1(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
-        (self.wrapper / "ssh").unlink()
+    def test_an_invalid_target_setting_exits_2_with_the_brokers_reason(self):
+        message = "Cannot reach Docker target /Users/u/.ensemble/docker/target.json: invalid target setting (no host)."
+        self.target_error(message)
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
-        self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("reinstall the broker with scripts/install.sh --docker", done.stderr)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn(message, done.stderr)
+        self.assertIn("invalid Docker target setting; fix it, then rerun", done.stderr)
         self.assertEqual(self.gh_calls(), [])
 
+    def test_an_unreachable_remote_exits_1_before_egress_install(self):
+        reason = f"ssh wrapper unavailable: {self.wrapper}/ssh; reinstall the broker"
+        self.target("ssh://pc", unreachable=reason)
+        done = self.run_script("--version", VERSION, "--digest", DIGEST)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn(f"cannot reach the remote Docker target ssh://pc: {reason}", done.stderr)
+        self.assertEqual(self.gh_calls(), [])
+        self.assertIsNone(self.installed())
+
+    def test_a_failing_broker_exits_1(self):
+        (self.root / "usr/local/libexec/ensemble/ensemble-broker").unlink()
+        done = self.run_script("--version", VERSION, "--digest", DIGEST)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("install or upgrade the broker with scripts/install.sh --docker", done.stderr)
+        self.assertEqual(self.gh_calls(), [])
+
+    def test_the_target_comes_from_the_broker_only(self):
+        self.target("ssh://u@pc:2222")
+        target_file = Path(self.home, ".ensemble/docker/target.json")
+        target_file.parent.mkdir(parents=True)
+        target_file.write_text('{"host": "ssh://other@elsewhere", "local_secrets": []}')
+        done = self.run_script("--version", VERSION, "--digest", DIGEST)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.installed()[6:8], ["--docker-host", "ssh://u@pc:2222"])
+        self.assertTrue(self.installed()[8].startswith(f"PATH={self.path}:"))
+        self.assertEqual((self.fakes / "broker.log").read_text().splitlines(), ["target"])
+
     def test_without_flags_installs_the_pin_or_exits_2_while_unpinned(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
+        self.target("ssh://pc")
         version, digest = pinned("egress_version"), pinned("egress_digest")
         done = self.run_script()
         if version:
@@ -190,13 +230,13 @@ class InstallTargetEgressTest(Case):
     def test_accepted_target_hosts(self):
         for host in ("ssh://pc", "ssh://u@h:65535", "ssh://me@pc.tailnet.ts.net"):
             with self.subTest(host=host):
-                self.target(json.dumps({"host": host, "local_secrets": []}))
+                self.target(host)
                 done = self.run_script("--version", VERSION, "--digest", DIGEST)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual(self.installed()[7], host)
 
     def test_missing_tools_exit_1_without_fetching(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
+        self.target("ssh://pc")
         for tool in ("gh", "docker"):
             with self.subTest(tool=tool):
                 hidden = self.bin / tool
@@ -208,7 +248,7 @@ class InstallTargetEgressTest(Case):
                 self.assertEqual(self.gh_calls(), [])
 
     def test_missing_python3_is_not_blamed_on_the_target(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
+        self.target("ssh://pc")
         (self.system / "python3").unlink()
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 1, done.stderr)
@@ -217,7 +257,7 @@ class InstallTargetEgressTest(Case):
         self.assertEqual(self.gh_calls(), [])
 
     def test_version_and_digest_validation(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
+        self.target("ssh://pc")
         for args in (
             ("--version", VERSION),
             ("--digest", DIGEST),
@@ -239,7 +279,7 @@ class InstallTargetEgressTest(Case):
         self.assertIn("usage: install-target-egress.sh", done.stdout)
 
     def test_fetch_failure_exits_1_and_cleans_up(self):
-        self.target('{"host": "ssh://pc", "local_secrets": []}')
+        self.target("ssh://pc")
         for marker in ("gh_fails", "gh_empty"):
             with self.subTest(marker=marker):
                 (self.fakes / marker).write_text("")
@@ -249,9 +289,3 @@ class InstallTargetEgressTest(Case):
                 self.assertIn(PINNED_REF, done.stderr)
                 self.assertIsNone(self.installed())
                 self.assertEqual(list(self.tmp.iterdir()), [])
-
-    def test_target_rule_is_the_sessions(self):
-        script = Path(SCRIPT).read_text()
-        (found,) = re.findall(r'pattern = re\.compile\(r"(.*?)"\)', script)
-        self.assertEqual(found, TARGET.pattern)
-        self.assertIn("1 <= int(match[2][1:]) <= 65535", script)

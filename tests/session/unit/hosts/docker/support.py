@@ -1,12 +1,9 @@
 """The broker protocol's shared fixtures and a fake broker runner."""
 
-import contextlib
 import json
 import os
 from types import SimpleNamespace
-from unittest import mock
 
-from ensemble.session.engine.daemon import SSH_DIR
 from tests.session.case import PLUGIN_BIN, REPO
 
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-broker", "fixtures")
@@ -112,15 +109,11 @@ class FakePopen:
         return self.procs[-1]
 
 
-@contextlib.contextmanager
-def ssh_wrapper(*, present=True):
-    wrapper = os.path.join(SSH_DIR, "ssh")
-    isfile, access = os.path.isfile, os.access
-
-    def found(path, mode=None, **kw):
-        if path == wrapper:
-            return present
-        return isfile(path) if mode is None else access(path, mode, **kw)
-
-    with mock.patch("os.path.isfile", found), mock.patch("os.access", found):
-        yield wrapper
+def ssh_dir(root):
+    directory = os.path.join(root, "broker-ssh")
+    os.makedirs(directory, exist_ok=True)
+    wrapper = os.path.join(directory, "ssh")
+    with open(wrapper, "w"):
+        pass
+    os.chmod(wrapper, 0o755)
+    return directory

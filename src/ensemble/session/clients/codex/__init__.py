@@ -63,9 +63,6 @@ class CodexClient(Client):
     def session_metadata(self, info: SessionInfo, *, home: HomeStore):
         return self.common.session_metadata(info, home)
 
-    def resume_main(self, argv):
-        return self.common.resume_main(argv)
-
     def session_status(
         self,
         info: SessionInfo,
@@ -74,6 +71,9 @@ class CodexClient(Client):
         home: HomeStore,
     ):
         return self.common.session_status(info.sid, info.cwd, transcript=info.transcript, home=home)
+
+    def resume_main(self, argv):
+        return self.common.resume_main(argv)
 
     def writable_dirs(self, spec: Spec):
         return self.common.writable_dirs(spec)

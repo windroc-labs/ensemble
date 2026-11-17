@@ -115,7 +115,7 @@ class ClaudeClient(Client):
         home: HomeStore,
     ):
         return self.common.session_status(
-            info.sid, info.cwd, transcript=info.transcript, env=env, home=home
+            info.sid, info.cwd, env=env, transcript=info.transcript, home=home
         )
 
     def writable_dirs(self, spec: Spec):

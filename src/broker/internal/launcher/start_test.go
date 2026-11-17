@@ -534,7 +534,7 @@ func TestStartOrder(t *testing.T) {
 		}
 		steps = append(steps, step)
 	}
-	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "info --format", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
+	wantSteps := []string{"info --format", "ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
 		"volume inspect", "volume create", "volume inspect", "run --rm", "run --rm", "run --detach", "bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
@@ -737,7 +737,7 @@ func TestManifestUnreadable(t *testing.T) {
 }
 
 func TestHookUnderUncleanCWD(t *testing.T) {
-	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` + imageKey +
+	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","daemon":"` + testDaemon + `","image":"ensemble-worker:` + imageKey +
 		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))

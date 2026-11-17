@@ -237,7 +237,7 @@ func TestWorkspaceRmFailed(t *testing.T) {
 
 func TestWorkspaceRmSameNameOnBothDaemons(t *testing.T) {
 	remote, local := clean().docker(), clean().docker()
-	h := onTwo(Host{}, remote, local)
+	h := onTwo(Host{}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
 	got, err := h.WorkspaceRm(context.Background(), h.Daemons[1], volume, true)
 	if err != nil || !got.Removed || len(remote.calls) != 0 {
 		t.Fatalf("%+v %v; remote %q", got, err, remote.calls)

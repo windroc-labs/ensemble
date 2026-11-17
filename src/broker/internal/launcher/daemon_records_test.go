@@ -21,7 +21,7 @@ func exists(path string) bool {
 
 func TestBuildRecordsUnderItsDaemon(t *testing.T) {
 	e := newBuildEnv(t)
-	got, err := e.lookupHost().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	got, err := e.lookupHost().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func TestBuildRecordsUnderItsDaemon(t *testing.T) {
 
 func TestBuildOnAnotherDaemonRebuildsThere(t *testing.T) {
 	e := newBuildEnv(t)
-	first := e.builtImage(t, e.pkg, BuildSpec{})
+	first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 	key := strings.TrimPrefix(first.Image, "ensemble-worker:")
 	firstRecord := filepath.Join(e.imagesDir(), key+".json")
 	e.daemon, e.built = otherDaemon, map[string]map[string]string{}
-	second := e.builtImage(t, e.pkg, BuildSpec{})
+	second := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 	if second.Image != first.Image || !second.Rebuilt {
 		t.Fatalf("%+v, want %s rebuilt on the other daemon", second, first.Image)
 	}
@@ -54,7 +54,7 @@ func TestBuildOnAnotherDaemonRebuildsThere(t *testing.T) {
 
 func TestCheckClientsLeavesAnotherDaemonsRecords(t *testing.T) {
 	e := newBuildEnv(t)
-	got := e.builtImage(t, e.pkg, BuildSpec{})
+	got := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
 	record := filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
 	e.daemon, e.built = otherDaemon, map[string]map[string]string{}
 	result, err := e.lookupHost().CheckClients(context.Background())
@@ -108,7 +108,7 @@ func TestBuildDaemonIDFailure(t *testing.T) {
 			if tc.info == "" && tc.err == nil {
 				e.info = " "
 			}
-			_, err := e.lookupHost().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+			_, err := e.lookupHost().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 			var pe *protocol.Error
 			if !errors.As(err, &pe) || pe.Code != tc.code {
 				t.Fatalf("%v, want %s", err, tc.code)
