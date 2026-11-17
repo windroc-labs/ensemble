@@ -186,6 +186,11 @@ def keep_fresh(
 
 
 def run_child(real: str, argv: list[str], state: str, broker: str, *, every: float, after: float):
+    # handlers run on the main thread, but a signal any thread gets, SIGCHLD included, ends its read
+    woken, wake = os.pipe()
+    os.set_blocking(wake, False)
+    signal.set_wakeup_fd(wake, warn_on_full_buffer=False)
+    signal.signal(signal.SIGCHLD, lambda *_: None)
     child = subprocess.Popen(["gh", *argv], executable=real)
     # after Popen, and no SIG_IGN, which exec would keep: the child gets default dispositions
     for signum in GROUP:
@@ -200,10 +205,12 @@ def run_child(real: str, argv: list[str], state: str, broker: str, *, every: flo
         daemon=True,
     )
     checker.start()
-    code = child.wait()
+    while (code := child.poll()) is None:
+        os.read(woken, 512)
     stop.set()
     if code < 0:
-        signal.signal(-code, signal.SIG_DFL)
+        if -code != signal.SIGKILL:  # SIGKILL's disposition is fixed: setting it raises
+            signal.signal(-code, signal.SIG_DFL)
         os.kill(os.getpid(), -code)
         sys.exit(128 - code)
     sys.exit(code)
