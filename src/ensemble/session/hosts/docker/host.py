@@ -85,6 +85,7 @@ from ensemble.session.hosts.docker.broker import (
     TIMEOUT,
     Broker,
     BrokerError,
+    BrokerMissing,
     client_keys,
     plugin_root,
     write_manifest,
@@ -520,7 +521,7 @@ class DockerHost(Host):
         """
         try:
             daemons = self._target().daemons
-        except SessionError as error:
+        except BrokerMissing as error:
             if required:
                 raise SessionError(f"host {self.name}: inventory unavailable ({error})") from None
             return [], ()

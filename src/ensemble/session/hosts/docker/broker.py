@@ -103,6 +103,10 @@ class BrokerError(SessionError):
         super().__init__(f"broker: {message}" + (f" ({cause})" if cause else ""))
 
 
+class BrokerMissing(SessionError):
+    """No broker executable to run."""
+
+
 class _Bad(Exception):
     pass
 
@@ -290,6 +294,8 @@ class Broker:
             raise SessionError(f"broker: {command} timed out after {TIMEOUT} s") from None
         except UnicodeDecodeError:
             raise SessionError(f"broker: bad response to {command}: not UTF-8") from None
+        except FileNotFoundError as error:
+            raise BrokerMissing(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         except OSError as error:
             raise SessionError(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         try:

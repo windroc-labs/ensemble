@@ -56,6 +56,7 @@ from ensemble.session.hosts.docker.broker import (
     BROKER,
     TIMEOUT,
     BrokerError,
+    BrokerMissing,
     client_keys,
 )
 from ensemble.session.hosts.docker.host import (
@@ -2468,17 +2469,21 @@ class LastLinesTest(Base):
 
 
 class ListTest(Base):
-    def test_without_a_broker_target_nothing_is_listed_and_admission_fails(self):
-        self.broker.failing["target"] = SessionError(
-            "broker /usr/local/libexec/ensemble/ensemble-broker: missing"
-        )
+    def test_without_a_broker_nothing_is_listed_and_admission_fails(self):
+        self.broker.failing["target"] = BrokerMissing("broker /usr/local/libexec/x: missing")
         self.assertEqual(self.host.list(), [])
         self.assertEqual(self.host.rows(), [])
-        with self.assertRaisesRegex(
-            SessionError, "inventory unavailable .*ensemble-broker: missing"
-        ):
+        with self.assertRaisesRegex(SessionError, "inventory unavailable .*x: missing"):
             self.host._capacity_rows()
         self.assertEqual(self.docker.order, [])
+
+    def test_a_failing_target_is_reported_not_hidden(self):
+        self.broker.failing["target"] = SessionError("broker: invalid target setting")
+        with self.assertRaisesRegex(SessionError, "invalid target setting"):
+            self.host.list()
+        with self.assertLogs("session", "WARNING") as logs:
+            self.assertEqual(self.host.rows(), [])
+        self.assertIn("docker rows: broker: invalid target setting", logs.output[0])
 
     def test_damaged_records_leave_healthy_inventory_available(self):
         self.listed("bad", "w")
