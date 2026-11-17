@@ -391,6 +391,26 @@ def _refusal(name: str, action: str, host: str, owner: str, current: DockerAcces
     )
 
 
+def _session_placement(name: str) -> str:
+    """The daemon session `name`'s latest manifest places it on; none readable: the target."""
+    generation = _record(name).get("generation")
+    if not isinstance(generation, str) or not GEN.fullmatch(generation):
+        return endpoint()
+    try:
+        with open(os.path.join(state_dir(name), f"{generation}.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return endpoint()
+    if not isinstance(manifest, dict):
+        return endpoint()
+    return placement(env_items({k: v for k, v in manifest.items() if isinstance(v, str)}))
+
+
+def _kept_marker(host: str, volume: str) -> str:
+    """A kept volume's marker name: the target's by its name, the local Docker Desktop's apart."""
+    return volume if host == endpoint() else f"local-{volume}"
+
+
 def _sessions_at(anchor: str) -> list[str]:
     """The sessions whose latest generation's manifest has cwd `anchor`."""
     root = os.path.expanduser(DOCKER_STATE)
@@ -610,36 +630,51 @@ class DockerHost(Host):
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
     def remove_workspaces(self, cwd: str) -> list[str]:
-        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
-        Then a session at cwd whose workspace another daemon still holds, or may hold, refuses.
+        """Every volume labelled realpath(cwd) on the target, and on the local Docker Desktop
+        beside it each one of a session placed there, unsaved work included; at a refusal, the
+        rest kept. Then a session at cwd whose workspace another daemon than its placement's still
+        holds, or may hold, refuses.
         """
-        rows = self._workspaces(endpoint())
-        if rows is None:
-            raise SessionError(
-                f"host {self.name}: workspaces unknown ({_no_daemon((endpoint(),))})"
+        anchor, target = os.path.realpath(cwd), endpoint()
+        found: list[tuple[str, str]] = []
+        for host in daemons():
+            rows = self._workspaces(host)
+            if rows is None:
+                raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon((host,))})")
+            found.extend(
+                (host, volume)
+                for volume, at in rows
+                if at == anchor
+                and (
+                    host == target
+                    or _session_placement(volume.removeprefix(workspace_volume(""))) == host
+                )
             )
-        anchor, removed = os.path.realpath(cwd), []
-        for volume in sorted(v for v, a in rows if a == anchor):
+        removed = []
+        for host, volume in sorted(found):
             try:
-                if self.broker.workspace_rm(volume, force=True, host=endpoint()):
+                if self.broker.workspace_rm(volume, force=True, host=host):
                     removed.append(volume)
             except SessionError as error:
                 raise SessionError(f"docker workspace {volume} kept: {error}") from None
-        if sessions := _sessions_at(anchor):
-            current = self._current(f"host {self.name}", endpoint())
-            for name in sessions:
-                if (owner := self._owner(name, current)) and (
-                    held := self._held(name, *owner)
-                ) is not None:
-                    raise SessionError(_refusal(name, "reclaim", *owner, current) + held)
+        current: dict[str, DockerAccess] = {}
+        for name in _sessions_at(anchor):
+            host = _session_placement(name)
+            if host not in current:
+                current[host] = self._current(f"host {self.name}", host)
+            if (owner := self._owner(name, current[host])) and (
+                held := self._held(name, *owner)
+            ) is not None:
+                raise SessionError(_refusal(name, "reclaim", *owner, current[host]) + held)
         return removed
 
     def _reclaim(self) -> None:
-        rows = self._workspaces(endpoint())
-        if rows is None:
-            return
+        """Each daemon that answers; an unreachable one's volumes and markers stay as they are."""
+        hosts = daemons()
+        listed = {host: rows for host in hosts if (rows := self._workspaces(host)) is not None}
         gone = [
-            volume
+            (host, volume)
+            for host, rows in listed.items()
             for volume, anchor in rows
             if os.path.isabs(anchor) and not os.path.lexists(anchor)
         ]
@@ -650,14 +685,16 @@ class DockerHost(Host):
         with inode_lock(os.path.join(kept, KEPT_LOCK), wait=False) as held:
             if not held:
                 return
-            for marker in set(os.listdir(kept)) - {row[0] for row in rows} - {KEPT_LOCK}:
-                os.unlink(os.path.join(kept, marker))
-            for volume in gone:
-                marker = os.path.join(kept, volume)
+            if len(listed) == len(hosts):
+                markers = {_kept_marker(h, row[0]) for h, rows in listed.items() for row in rows}
+                for marker in set(os.listdir(kept)) - markers - {KEPT_LOCK}:
+                    os.unlink(os.path.join(kept, marker))
+            for host, volume in gone:
+                marker = os.path.join(kept, _kept_marker(host, volume))
                 if _held(marker):
                     continue
                 try:
-                    self.broker.workspace_rm(volume, host=endpoint())
+                    self.broker.workspace_rm(volume, host=host)
                 except BrokerError as error:
                     save(marker, "dirty" if error.code == "workspace_dirty" else "failed")
                     LOG.warning("docker workspace %s kept: %s", volume, error.message)

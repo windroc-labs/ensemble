@@ -115,13 +115,13 @@ class FakeDocker:
 
     def __call__(self, argv, env, *, input=None, timeout):
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
+        if argv[:2] == [DOCKER, "--host"] and argv[2] in self.others:
+            return self.others[argv[2]](argv, env, input=input, timeout=timeout)
         if argv[:2] == [DOCKER, "--host"] and argv[3:] == ["info", "--format", "{{json .ID}}"]:
             self.infos.append(argv[2])
             if argv[2] not in self.daemons or self.down and argv[2] == self.ep:
                 return done(1, "", f"Cannot connect to the Docker daemon at {argv[2]}.\n")
             return done(0, json.dumps(self.daemons[argv[2]]) + "\n")
-        if argv[:2] == [DOCKER, "--host"] and argv[2] in self.others:
-            return self.others[argv[2]](argv, env, input=input, timeout=timeout)
         if (
             argv[:2] == [DOCKER, "--host"]
             and argv[2] != self.ep
@@ -2754,6 +2754,106 @@ class LocalPlacementTest(StartBase):
         with self.assertRaisesRegex(SessionError, "want ensemble-w-.* on daemon"):
             self.start(environment_credentials=MINI_CREDENTIALS)
         self.assertEqual(self.broker.close_hosts, [REMOTE])
+
+
+class TwoDaemonWorkspacesTest(Base):
+    """Workspaces on a remote target and on the local Docker Desktop beside it."""
+
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": REMOTE, "local_secrets": [MINI]}, f)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.remote = FakeDocker(REMOTE, self.order)
+        self.remote.daemons = {REMOTE: REMOTE_DAEMON}
+        self.docker.others[REMOTE] = self.remote
+        self.agent = os.path.join(self.account, "work", "TASK-1", "agent")
+        os.makedirs(self.agent)
+        self.kept = os.path.join(self.home, ".ensemble", "docker-state", ".kept")
+
+    def session(self, name, access, credentials=None):
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "kind": "tui"}, f)
+        manifest = {"name": name, "generation": GEN, "cwd": self.agent}
+        if credentials is not None:
+            manifest["environment_credentials"] = credentials
+        with open(os.path.join(state, f"{GEN}.json"), "w") as f:
+            json.dump(manifest, f)
+        daemon.save_access(name, access)
+
+    def removals(self):
+        return list(
+            zip(
+                [step[1] for step in self.order if step[:1] == ("workspace_rm",)],
+                self.broker.rm_hosts,
+                strict=True,
+            )
+        )
+
+    def test_removes_a_local_placed_session_s_volume_with_a_remote_target(self):
+        self.session("mini-a", DockerAccess(DOCKER, self.ep, LOCAL_DAEMON), MINI_CREDENTIALS)
+        self.session("pm-b", DockerAccess(DOCKER, REMOTE, REMOTE_DAEMON))
+        self.docker.volumes = [f"ensemble-ws-mini-a\t{self.agent}"]
+        self.remote.volumes = [f"ensemble-ws-pm-b\t{self.agent}"]
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(sorted(removed), ["ensemble-ws-mini-a", "ensemble-ws-pm-b"])
+        self.assertEqual(
+            sorted(self.removals()),
+            [("ensemble-ws-mini-a", self.ep), ("ensemble-ws-pm-b", REMOTE)],
+        )
+
+    def test_keeps_a_target_placed_session_s_volume_on_the_local_docker_desktop(self):
+        self.session("pm-c", DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
+        self.docker.volumes = [f"ensemble-ws-pm-c\t{self.agent}"]
+        with self.assertRaisesRegex(SessionError, "^docker session pm-c: cannot reclaim it here"):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_an_unreachable_daemon_s_workspaces_are_unknown(self):
+        self.remote.down = True
+        with self.assertRaisesRegex(SessionError, f"workspaces unknown .*{REMOTE} unreachable"):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_reclaim_leaves_an_unreachable_daemon_s_volumes_and_markers(self):
+        gone = os.path.join(self.account, "gone")
+        self.docker.volumes = [f"ensemble-ws-local-gone\t{gone}"]
+        self.remote.volumes = [f"ensemble-ws-remote-gone\t{gone}"]
+        os.makedirs(self.kept)
+        with open(os.path.join(self.kept, "ensemble-ws-remote-kept"), "w") as f:
+            f.write("dirty")
+        self.remote.down = True
+        self.host.reclaim_volumes()
+        self.assertEqual(self.removals(), [("ensemble-ws-local-gone", self.ep)])
+        self.assertTrue(os.path.exists(os.path.join(self.kept, "ensemble-ws-remote-kept")))
+        self.remote.down = False
+        self.order.clear()
+        self.broker.rm_hosts.clear()
+        self.host.reclaim_volumes()
+        self.assertEqual(
+            sorted(self.removals()),
+            [("ensemble-ws-local-gone", self.ep), ("ensemble-ws-remote-gone", REMOTE)],
+        )
+        self.assertFalse(os.path.exists(os.path.join(self.kept, "ensemble-ws-remote-kept")))
+
+    def test_a_kept_local_volume_s_marker_is_its_own(self):
+        gone = os.path.join(self.account, "gone")
+        self.docker.volumes = [f"ensemble-ws-same\t{gone}"]
+        self.remote.volumes = [f"ensemble-ws-same\t{gone}"]
+        self.broker.failing = {
+            "workspace_rm": BrokerError(13, "workspace_dirty", "unsaved", "not_needed", None)
+        }
+        with self.assertLogs("session", "WARNING"):
+            self.host.reclaim_volumes()
+        self.assertEqual(
+            sorted(os.listdir(self.kept)), [".lock", "ensemble-ws-same", "local-ensemble-ws-same"]
+        )
 
 
 class RemoteAttachTargetTest(Base):
