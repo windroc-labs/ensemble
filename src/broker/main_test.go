@@ -615,6 +615,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002","ensemble.claude-version":"2.1.0","ensemble.codex-version":"0.163.0","ensemble.opencode-version":"1.19.3"}}}]`), nil
+	case strings.HasPrefix(joined, "volume inspect") && strings.HasPrefix(args[len(args)-1], "ensemble-state-"):
+		return []byte(`{"ensemble.state":"` + strings.TrimPrefix(args[len(args)-1], "ensemble-state-") + `"}`), nil
 	case strings.HasPrefix(joined, "volume inspect"):
 		return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/Users/example/src/project"}`), nil
 	case strings.HasPrefix(joined, "container inspect"):

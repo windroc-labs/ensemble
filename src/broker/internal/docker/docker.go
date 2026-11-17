@@ -95,8 +95,8 @@ func Conflict(err error) bool {
 	return errors.As(err, &ce) && strings.Contains(ce.Stderr, "Conflict. The container name")
 }
 
-// TempDir makes a private directory under <home>/.ensemble/docker/tmp, never TMPDIR or /tmp: a worker's only bind
-// source is its own state dir under ~/.ensemble/docker-state, so no worker can rewrite the contents.
+// TempDir makes a private directory under <home>/.ensemble/docker/tmp, never TMPDIR or /tmp, which no container
+// mounts, so no worker can rewrite the contents.
 func TempDir(home, pattern string) (string, error) {
 	base := filepath.Join(home, ".ensemble/docker/tmp")
 	if err := os.MkdirAll(base, 0o700); err != nil {

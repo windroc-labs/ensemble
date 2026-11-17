@@ -70,9 +70,6 @@ func TestMountRules(t *testing.T) {
 		"/bin", "/sbin/x", "/lib/x", "/lib32", "/lib64/x", "/libx32", "/var/run/ensemble", "/var/lock", "/home/agent", "/home/agent/.npm-global"} {
 		cases = append(cases, tc{"inside " + p, ok, cwd(p), "inside"})
 	}
-	unsafe := mountHost()
-	unsafe.Safe = func(string) error { return errors.New("symlink component") }
-	cases = append(cases, tc{"claude dir symlink", unsafe, nil, "claude_dir"})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := baseManifest()
@@ -94,7 +91,7 @@ func TestMountRules(t *testing.T) {
 }
 
 func TestMountCSVQuoting(t *testing.T) {
-	if got := bindMount("/a,b", `/c"d`); got != `type=bind,"source=/a,b","target=/c""d"` {
+	if got := stateMount("ensemble-state-w", "claude", `/c"d`); got != `type=volume,source=ensemble-state-w,"target=/c""d",volume-subpath=claude,volume-nocopy` {
 		t.Fatal(got)
 	}
 	if got := volumeMount("ensemble-ws-w", "/a,b", true); got != `type=volume,source=ensemble-ws-w,"target=/a,b",readonly,volume-nocopy` {

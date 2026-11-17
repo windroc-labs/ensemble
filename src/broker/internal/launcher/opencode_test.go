@@ -203,8 +203,6 @@ func TestCheckMountsOpencode(t *testing.T) {
 	if err := mountHost().checkMounts(m); err != nil {
 		t.Fatal(err)
 	}
-	symlinked := mountHost()
-	symlinked.Safe = func(string) error { return errors.New("symlink component") }
 	wrong, inside := m, m
 	wrong.OpencodeDir = home + "/.ensemble/docker-state/w/claude"
 	inside.CWD = m.OpencodeDir + "/work"
@@ -214,7 +212,6 @@ func TestCheckMountsOpencode(t *testing.T) {
 		reason string
 	}{
 		"wrong dir":  {mountHost(), wrong, "opencode_dir must be " + m.OpencodeDir},
-		"symlinked":  {symlinked, m, "opencode_dir " + m.OpencodeDir + " must be an existing directory without symlinks"},
 		"cwd inside": {mountHost(), inside, "overlaps opencode_dir"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -254,7 +251,7 @@ func TestStartOpencode(t *testing.T) {
 		run := strings.Join(detached(d), " ")
 		for _, needle := range []string{
 			"--env XDG_DATA_HOME=" + opencodeDir, "--env OPENCODE_DISABLE_AUTOUPDATE=1", "--env OPENCODE_DISABLE_LSP_DOWNLOAD=1",
-			"--label ensemble.client=opencode", "--mount type=bind,source=" + opencodeDir + ",target=" + opencodeDir,
+			"--label ensemble.client=opencode", "--mount type=volume,source=ensemble-state-worker_1,target=" + opencodeDir + ",volume-subpath=opencode,volume-nocopy",
 			"--tmpfs /run/ensemble/secrets:rw,noexec,nosuid,nodev,size=65536,mode=0700,uid=1001,gid=1002",
 		} {
 			if !strings.Contains(run, needle) {

@@ -250,7 +250,7 @@ func TestMaintainWritesNoRefreshLineWhenNothingIsDue(t *testing.T) {
 func TestMaintainRejects(t *testing.T) {
 	for name, want := range map[string]protocol.Code{
 		"other container": protocol.ManifestRejected, "missing": protocol.ManifestRejected,
-		"directory": protocol.MountRejected, "symlink": protocol.MountRejected,
+		"directory": protocol.MountRejected,
 	} {
 		t.Run(name, func(t *testing.T) {
 			h, manifest, tokens, creds := maintainHost(t, true, nil)
@@ -262,8 +262,6 @@ func TestMaintainRejects(t *testing.T) {
 				manifest = filepath.Join(t.TempDir(), "missing.json")
 			case "directory":
 				h.Home = "/arbitrary"
-			case "symlink":
-				h.Safe = func(string) error { return errors.New("link") }
 			}
 			_, err := h.Maintain(context.Background(), c, manifest, false)
 			if code(t, err) != want || creds.injected != 0 || len(tokens.calls) != 0 {

@@ -9,12 +9,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
+)
+
+const (
+	stateLabel  = "ensemble.state"        // a state volume's session
+	readerLabel = "ensemble.state-reader" // a session's state reader containers, which mount its state volume
 )
 
 var (
@@ -69,7 +75,7 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// checkMounts applies the mount rules; cwd is a mount point, never a bind source.
+// checkMounts applies the mount rules to container paths: cwd and the client dir are mount points of volumes.
 func (h Host) checkMounts(m Manifest) error {
 	reject := func(format string, args ...any) error {
 		return protocol.Newf(protocol.MountRejected, format, args...)
@@ -83,16 +89,6 @@ func (h Host) checkMounts(m Manifest) error {
 	dir := m.StateDir()
 	if want := filepath.Join(h.Home, ".ensemble/docker-state", m.Name, m.Client); dir != want {
 		return reject("%s_dir must be %s.", m.Client, want)
-	}
-	if err := h.Safe(dir); err != nil {
-		return reject("%s_dir %s must be an existing directory without symlinks: %v.", m.Client, dir, err)
-	}
-	if m.Client == "codex" {
-		for _, kept := range codexKept {
-			if err := h.Safe(filepath.Join(dir, kept)); err != nil {
-				return reject("codex %s must be an existing directory without symlinks.", kept)
-			}
-		}
 	}
 	if inside(m.CWD, dir) || inside(dir, m.CWD) {
 		return reject("Workspace %s overlaps %s_dir %s.", m.CWD, m.Client, dir)
@@ -124,8 +120,27 @@ func mountSpec(fields ...string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func bindMount(source, target string) string {
-	return mountSpec("type=bind", "source="+source, "target="+target)
+// stateMount mounts subpath of a client state volume at target; Docker requires the subpath to exist in the volume.
+func stateMount(volume, subpath, target string) string {
+	return mountSpec("type=volume", "source="+volume, "target="+target, "volume-subpath="+subpath, "volume-nocopy")
+}
+
+// stateVolume is session name's client state volume, kept across its restarts and resumes: <client>/ holds the client's
+// home (Codex: only its kept dirs).
+func stateVolume(name string) string {
+	return "ensemble-state-" + name
+}
+
+// stateDirs are the dirs of m's client in its state volume, parents first: the subpaths its mounts name.
+func stateDirs(m Manifest) []string {
+	if m.Client != "codex" {
+		return []string{m.Client}
+	}
+	dirs := []string{m.Client}
+	for _, kept := range codexKept {
+		dirs = append(dirs, m.Client+"/"+kept)
+	}
+	return dirs
 }
 
 // volumeMount mounts a workspace volume with volume-nocopy: without it, a container created on the still-empty volume
@@ -229,6 +244,52 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 		"--mount", volumeMount(v, "/workspace", false), "--entrypoint", "/bin/chown", info.ID, l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"], "/workspace"}
 	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
 		return undo(failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
+	}
+	return true, nil
+}
+
+// ensureStateVolume gives m its client state volume: created with its label, its root the agent's and its client's
+// dirs made by the agent, or an existing one labelled for m. created: this start made it.
+func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo) (created bool, _ error) {
+	v := stateVolume(m.Name)
+	labels, err := h.volumeLabels(ctx, v)
+	created = docker.Absent(err)
+	if created {
+		if _, err := h.Docker.Run(ctx, []string{"volume", "create", "--label", stateLabel + "=" + m.Name, v}, nil); err != nil {
+			return false, failure(err, protocol.StartFailed, "Creating state volume "+v+" failed.")
+		}
+		labels, err = h.volumeLabels(ctx, v)
+	}
+	undo := func(e *protocol.Error) (bool, error) {
+		if created {
+			h.removeVolume(ctx, v, e)
+		}
+		return false, e
+	}
+	if err != nil {
+		return undo(failure(err, protocol.StartFailed, "Cannot inspect state volume "+v+"."))
+	}
+	if labels[stateLabel] != m.Name {
+		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the client state of %s (%s %q).", v, m.Name, stateLabel, labels[stateLabel])
+	}
+	if !created {
+		return false, nil
+	}
+	l := info.Config.Labels
+	owner := l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"]
+	helper := []string{"run", "--rm", "--log-driver", "none", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
+	chown := append(slices.Clone(helper), "--cap-add", "CHOWN", "--user", "0:0", "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/chown",
+		info.ID, owner, "/state")
+	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
+		return undo(failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
+	}
+	mkdir := append(slices.Clone(helper), "--user", owner, "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/mkdir",
+		info.ID, "-p", "-m", "0700")
+	for _, dir := range stateDirs(m) {
+		mkdir = append(mkdir, "/state/"+dir)
+	}
+	if _, err := h.Docker.Run(ctx, mkdir, nil); err != nil {
+		return undo(failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
 	}
 	return true, nil
 }
