@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -31,6 +32,12 @@ const (
 	LinearDir = SecretsDir + "/linear"
 	EnvDir    = SecretsDir + "/env"
 )
+
+// InfoID asks for the daemon's ID; a remote CLI answers it from its probe, so identifying a remote target opens no
+// second ssh connection.
+var InfoID = []string{"info", "--format", "{{json .ID}}"}
+
+var probeArgs = []string{"info", "--format", `{"id":{{json .ID}},"version":{{json .ServerVersion}}}`}
 
 type Runner interface {
 	Run(ctx context.Context, args []string, stdin []byte) ([]byte, error)
@@ -114,6 +121,7 @@ type CLI struct {
 	mu                         sync.Mutex
 	probed                     bool
 	probeErr                   error
+	probedID                   string
 }
 
 // New writes a private CLI config that ignores ~/.docker and reads the Docker target; Run checks Docker Desktop's
@@ -157,15 +165,19 @@ func (c *CLI) Endpoint() string {
 // ssh agent's socket, the one variable added for ssh.
 func (c *CLI) Command(args []string) (string, []string, []string) {
 	argv := append([]string{"--config", c.config, "--host", c.Endpoint()}, args...)
-	path := systemPath
-	if c.target.Remote() {
-		path = c.sshDir + ":" + systemPath
-	}
-	env := []string{"PATH=" + path, "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
+	env := []string{"PATH=" + c.Path(), "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
 	if sock := os.Getenv("SSH_AUTH_SOCK"); c.target.Remote() && sock != "" {
 		env = append(env, "SSH_AUTH_SOCK="+sock)
 	}
 	return c.path, argv, env
+}
+
+// Path is the PATH docker runs with: a remote target's puts the ssh wrapper first.
+func (c *CLI) Path() string {
+	if c.target.Remote() {
+		return c.sshDir + ":" + systemPath
+	}
+	return systemPath
 }
 
 // capped keeps the last capture bytes: a long build's error comes last.
@@ -202,6 +214,10 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 		if err := c.probe(ctx); err != nil {
 			return nil, err
 		}
+		if c.probedID != "" && slices.Equal(args, InfoID) {
+			id, _ := json.Marshal(c.probedID)
+			return append(id, '\n'), nil
+		}
 	}
 	out, stderr, err := c.exec(ctx, args, stdin)
 	if err == nil {
@@ -217,7 +233,8 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
 }
 
-// probe checks a remote target once per CLI; its diagnostic comes from docker version, never a container.
+// probe checks a remote target once per CLI, keeping its daemon's ID; its diagnostic comes from docker info, never a
+// container.
 func (c *CLI) probe(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -225,18 +242,29 @@ func (c *CLI) probe(ctx context.Context) error {
 		return c.probeErr
 	}
 	c.probed = true
-	out, stderr, err := c.exec(ctx, []string{"version", "--format", "{{.Server.Version}}"}, nil)
-	switch {
-	case err != nil:
+	out, stderr, err := c.exec(ctx, probeArgs, nil)
+	if err != nil {
 		u := c.unreachable(stderr, true)
 		if u == nil {
 			u = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (" + connectDetail(stderr) + ")"}
 		}
 		c.probeErr = u
-	case engine(out) != "":
-		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: engine(out)}
+		return c.probeErr
 	}
-	return c.probeErr
+	var info struct {
+		ID      string `json:"id"`
+		Version string `json:"version"`
+	}
+	version := string(out)
+	if json.Unmarshal(out, &info) == nil {
+		version = info.Version
+	}
+	if reason := engine([]byte(version)); reason != "" {
+		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: reason}
+		return c.probeErr
+	}
+	c.probedID = info.ID
+	return nil
 }
 
 // unreachable classifies a failed docker's stderr by target: nil when the daemon answered.
