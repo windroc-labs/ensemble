@@ -184,12 +184,8 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 		defer lock.Close()
-		holder, err := h.lockHolder(ctx, m.Lock, "")
-		if err != nil {
+		if err := h.lockBusy(ctx, m.Lock, ""); err != nil {
 			return StartResult{}, err
-		}
-		if holder != nil {
-			return StartResult{}, busy(holder)
 		}
 	}
 	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
@@ -341,12 +337,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	lap("create")
 	if m.Lock != "" {
-		holder, err := h.lockHolder(ctx, m.Lock, c)
-		if err != nil {
+		if err := h.lockBusy(ctx, m.Lock, c); err != nil {
 			return StartResult{}, held, err
-		}
-		if holder != nil {
-			return StartResult{}, held, busy(holder)
 		}
 	}
 	if err := h.bootstrap(ctx, c, m); err != nil {
