@@ -78,6 +78,7 @@ PYTHON = "/opt/ensemble/venv/bin/python"
 IMAGE = "ensemble-worker:" + "a" * 64
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 DIGEST = "sha256:" + "c" * 64
+LOCAL_DAEMON = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
 HOME = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
 BAD_RECORDS = {
     "deep json": "[" * 2000 + "0" + "]" * 2000,
@@ -98,17 +99,24 @@ def done(rc=0, out="", err=""):
 
 class FakeDocker:
     """The docker CLI: `ps` prints `ps`, `volume ls` prints `volumes`; an exec answers from `replies`, {command prefix: (rc, out,
-    err), an exception or a callable of the command}, the first matching prefix; else success.
+    err), an exception or a callable of the command}, the first matching prefix; else success. `info` answers the ID
+    `daemons` gives its host (none: unreachable), recorded in `infos`, not `order`.
     """
 
     def __init__(self, ep, order):
         self.ep, self.order, self.ps, self.replies, self.inputs = ep, order, [], {}, []
         self.volumes, self.down = [], False
         self.readers, self.volume_rm, self.calls = [], (0, "", ""), []
+        self.daemons, self.infos = {ep: LOCAL_DAEMON}, []
 
     def __call__(self, argv, env, *, input=None, timeout):
-        assert argv[:3] == [DOCKER, "--host", self.ep], argv
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
+        if argv[:2] == [DOCKER, "--host"] and argv[3:] == ["info", "--format", "{{json .ID}}"]:
+            self.infos.append(argv[2])
+            if argv[2] not in self.daemons or self.down and argv[2] == self.ep:
+                return done(1, "", f"Cannot connect to the Docker daemon at {argv[2]}.\n")
+            return done(0, json.dumps(self.daemons[argv[2]]) + "\n")
+        assert argv[:3] == [DOCKER, "--host", self.ep], argv
         self.order.append(argv[3:])
         self.inputs.append(input)
         self.calls.append((argv[3:], input))
@@ -772,7 +780,7 @@ class StartTest(StartBase):
     def test_no_daemon_fails_a_new_start_before_the_broker(self):
         self.docker.down = True
         with self.assertRaisesRegex(
-            SessionError, "^docker session w: cannot reset its client state: Cannot connect"
+            SessionError, "^docker session w: Docker target unix://.*: unreachable: Cannot connect"
         ):
             self.start()
         self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
@@ -788,7 +796,9 @@ class StartTest(StartBase):
                 if resume == "1":
                     self.history()
                 self.start(resume=resume)
-                self.assertEqual(daemon.load_access("w"), DockerAccess(DOCKER, self.ep))
+                self.assertEqual(
+                    daemon.load_access("w"), DockerAccess(DOCKER, self.ep, LOCAL_DAEMON)
+                )
 
     def kept(self, resume="0", files=None):
         return self.start(

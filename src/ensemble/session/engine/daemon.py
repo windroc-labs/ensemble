@@ -1,6 +1,7 @@
 """The account's Docker target (the broker's TARGET_FILE, not session config), the one docker
 command line that reaches it whatever DOCKER_HOST, DOCKER_CONTEXT or DOCKER_CONFIG say, a capped
-run of one whose output is untrusted, and the record of which daemon holds a session's state.
+run of one whose output is untrusted, a daemon's ID, and the record of which daemon holds a
+session's state.
 """
 
 import errno
@@ -28,6 +29,7 @@ UNREACHABLE = ("Cannot connect to the Docker daemon", "error during connect")
 STATE_READER_LABEL = "ensemble.state-reader"
 ACCESS_FILE = "state-access.json"
 ACCESS_MAX = 4096
+DAEMON = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
 class Overflow(OSError):
@@ -43,9 +45,8 @@ def _access_path(name: str) -> str:
 
 
 def save_access(name: str, access: DockerAccess) -> None:
-    save(
-        _access_path(name), json.dumps({"docker": access.docker, "host": access.host}), durable=True
-    )
+    record = {"docker": access.docker, "host": access.host, "daemon": access.daemon}
+    save(_access_path(name), json.dumps(record), durable=True)
 
 
 def load_access(name: str) -> DockerAccess | None:
@@ -60,12 +61,13 @@ def load_access(name: str) -> DockerAccess | None:
         found = None
     if (
         isinstance(found, dict)
-        and set(found) == {"docker", "host"}
+        and set(found) == {"docker", "host", "daemon"}
         and all(isinstance(v, str) for v in found.values())
         and os.path.isabs(found["docker"])
         and (_remote(found["host"]) or _local(found["host"]))
+        and DAEMON.fullmatch(found["daemon"])
     ):
-        return DockerAccess(found["docker"], found["host"])
+        return DockerAccess(**found)
     raise OSError(errno.EINVAL, "malformed Docker state access record", path)
 
 
@@ -79,6 +81,15 @@ def account_home() -> str:
     return pwd.getpwuid(os.getuid()).pw_dir
 
 
+def local_endpoint() -> str:
+    """The local Docker Desktop."""
+    return f"unix://{account_home()}/.docker/run/docker.sock"
+
+
+def describe(host: str) -> str:
+    return f"the local Docker Desktop ({host})" if host == local_endpoint() else host
+
+
 def endpoint() -> str:
     """TARGET_FILE's ssh:// host, else the local Docker Desktop."""
     path = os.path.join(account_home(), TARGET_FILE)
@@ -86,7 +97,7 @@ def endpoint() -> str:
         with open(path, "rb") as f:
             data = f.read(TARGET_MAX + 1)
     except FileNotFoundError:
-        return f"unix://{account_home()}/.docker/run/docker.sock"
+        return local_endpoint()
     except OSError as error:
         raise ConfigError(f"Docker target {path}: {error.strerror}") from None
     try:
@@ -112,6 +123,29 @@ def ssh_agent() -> dict[str, str]:
 
 def unreachable(stderr: str) -> bool:
     return any(words in stderr for words in UNREACHABLE)
+
+
+def daemon_id(docker: str, host: str, *, run=None) -> str:
+    """SessionError naming `host` when it has no usable one."""
+    argv, env = docker_call(docker, "info", "--format", "{{json .ID}}", host=host)
+    try:
+        done = (run or capped)(argv, env, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise SessionError(f"Docker target {host}: docker info timed out") from None
+    except OSError as error:
+        raise SessionError(f"Docker target {host}: {error}") from None
+    if done.returncode:
+        lines = done.stderr.strip().splitlines()
+        last = lines[-1] if lines else f"exit status {done.returncode}"
+        why = "unreachable: " if unreachable(done.stderr) else ""
+        raise SessionError(f"Docker target {host}: {why}{last}")
+    try:
+        found = json.loads(done.stdout)
+    except ValueError:
+        found = None
+    if not isinstance(found, str) or not DAEMON.fullmatch(found):
+        raise SessionError(f"Docker target {host}: no usable daemon ID in docker info")
+    return found
 
 
 def container_name(name: str, generation: str) -> str:

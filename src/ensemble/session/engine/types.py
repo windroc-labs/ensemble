@@ -187,6 +187,7 @@ class DockerAccess(NamedTuple):
 
     docker: str
     host: str
+    daemon: str
 
 
 class StateFile(NamedTuple):

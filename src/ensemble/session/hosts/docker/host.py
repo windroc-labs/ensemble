@@ -31,6 +31,7 @@ from ensemble.session.engine.daemon import (
     attach_env,
     capped,
     container_name,
+    daemon_id,
     docker_call,
     endpoint,
     save_access,
@@ -715,6 +716,11 @@ class DockerHost(Host):
             )
         return hook, root, built
 
+    def _current(self) -> DockerAccess:
+        """The current target and its daemon's ID, looked up now: an address may reach another daemon later."""
+        host = endpoint()
+        return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
+
     def _drop_state(self, name: str) -> None:
         """A new start's empty client home: its readers and state volume go; the broker makes it."""
         why = f"docker session {name}: cannot reset its client state"
@@ -793,7 +799,11 @@ class DockerHost(Host):
                 )
         home = docker_home(name, home_dir)
         try:
-            save_access(name, DockerAccess(self.docker, endpoint()))
+            current = self._current()
+        except SessionError as error:
+            raise SessionError(f"docker session {name}: {error}") from None
+        try:
+            save_access(name, current)
         except OSError as error:
             raise SessionError(f"docker session {name}: state access: {error}") from None
         if resume == "1":
