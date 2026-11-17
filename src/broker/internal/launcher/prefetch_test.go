@@ -19,8 +19,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 	t.Helper()
 	h, d, _, tokens, _, _, _ := credentialHost(w)
 	h.Home = t.TempDir()
-	h = onTestDaemon(h)
-	putFile(t, h.recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
+	putFile(t, testRecords(h.Home).recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
 	return h, d, tokens
 }
 
@@ -205,8 +204,8 @@ func TestPrefetchFailures(t *testing.T) {
 			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-broker-bot is not installed on acme/app")
 		}, protocol.GitHubFailed, "not installed on acme/app"},
 		{"no default image or run record", func(_ *world, h Host) {
-			_ = os.Remove(h.recordPath(imageKey))
-			_ = os.WriteFile(h.recordPath(strings.Repeat("c", 64)), []byte(`{"package":"/p","base_image":"dummy-env:test"}`), 0o600)
+			_ = os.Remove(testRecords(h.Home).recordPath(imageKey))
+			_ = os.WriteFile(testRecords(h.Home).recordPath(strings.Repeat("c", 64)), []byte(`{"package":"/p","base_image":"dummy-env:test"}`), 0o600)
 		}, protocol.StartFailed, "No default worker image to prefetch with, and no build record of ensemble-worker:" + imageKey + " to build one from; run ensemble-broker build without a base image."},
 		{"workers network missing", func(w *world, _ Host) {
 			w.proxy = labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })
@@ -239,8 +238,7 @@ func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv)
 	h, base, _ := prefetchHost(t, w)
 	e := newBuildEnv(t)
 	h.Home, h.Lock, h.Releases = e.home, e.lock, e.releases
-	h = onTestDaemon(h)
-	putFile(t, h.recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
+	putFile(t, testRecords(h.Home).recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
 	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" || args[0] == "tag" || args[0] == "container" && args[1] == "ls" ||
 			args[0] == "run" && slices.Contains(args, "none") && !slices.Contains(args, "CHOWN") ||
@@ -276,7 +274,7 @@ func TestPrefetchBuildsMissingDefaultImage(t *testing.T) {
 		t.Fatalf("built after the helper: %q", d.verbs())
 	}
 	// The build recorded a default variant, which the next prefetch finds without building.
-	if data, err := os.ReadFile(h.recordPath(e.key)); err != nil || !strings.Contains(string(data), `"base_image":""`) {
+	if data, err := os.ReadFile(testRecords(h.Home).recordPath(e.key)); err != nil || !strings.Contains(string(data), `"base_image":""`) {
 		t.Fatalf("record %s %v", data, err)
 	}
 	if detached(d) == nil {
@@ -449,13 +447,13 @@ func TestDefaultImageNewest(t *testing.T) {
 	w := &world{labels: goodLabels()}
 	h, _, _ := prefetchHost(t, w)
 	older := strings.Repeat("c", 64)
-	putFile(t, h.recordPath(older), `{"package":"/p","base_image":""}`)
+	putFile(t, testRecords(h.Home).recordPath(older), `{"package":"/p","base_image":""}`)
 	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(h.recordPath(older), past, past); err != nil {
+	if err := os.Chtimes(testRecords(h.Home).recordPath(older), past, past); err != nil {
 		t.Fatal(err)
 	}
 	// A newer variant on a base image never counts.
-	putFile(t, h.recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
+	putFile(t, testRecords(h.Home).recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
 	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
@@ -463,7 +461,7 @@ func TestDefaultImageNewest(t *testing.T) {
 		labels["ensemble.key"] = key
 		return inspectJSON("sha256:"+strings.Repeat(key[:1], 64), labels, time.Time{}), nil
 	}}
-	info, err := h.defaultImage(context.Background(), "ensemble-worker:"+imageKey)
+	info, err := h.defaultImage(context.Background(), testRecords(h.Home), "ensemble-worker:"+imageKey)
 	if err != nil || info.ID != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("%+v %v", info.ID, err)
 	}

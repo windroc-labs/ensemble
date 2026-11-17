@@ -141,7 +141,8 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		return StartResult{}, taken(c)
 	}
 	// The reply names the daemon the volumes are on, which the caller checks.
-	if h, err = h.onDaemon(ctx, protocol.StartFailed); err != nil {
+	daemon, r, err := h.identify(ctx, protocol.StartFailed)
+	if err != nil {
 		return StartResult{}, err
 	}
 	lostName := false
@@ -172,7 +173,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		if err := h.prefetch(ctx, c, m, info, px); err != nil {
+		if err := h.prefetch(ctx, r, c, m, info, px); err != nil {
 			return StartResult{}, err
 		}
 		lap("prefetch")
@@ -208,7 +209,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
-	result.Env = env
+	result.Env, result.Daemon = env, daemon
 	return result, nil
 }
 
@@ -444,7 +445,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, Daemon: h.daemon, ImageDigest: info.ID,
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID,
 			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
 			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil

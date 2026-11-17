@@ -103,8 +103,7 @@ type Host struct {
 	Local        *Daemon
 	LocalSecrets []string
 
-	daemon, images string  // the target daemon's ID and its image records' dir, set by onDaemon
-	peer           *Daemon // the configured daemon a placed command does not work on; nil: none
+	peer *Daemon // the configured daemon a placed command does not work on; nil: none
 }
 
 // place is h working on the daemon a worker given environment secret items secrets runs on: Local for any of
@@ -119,7 +118,7 @@ func (h Host) place(secrets []string) Host {
 	} else {
 		h.peer = h.Local
 	}
-	h.Local, h.daemon, h.images = nil, "", ""
+	h.Local = nil
 	return h
 }
 
@@ -129,7 +128,7 @@ func (h Host) OnLocal() Host {
 		return h
 	}
 	h.Docker, h.Endpoint = h.Local.Docker, h.Local.Endpoint
-	h.Local, h.daemon, h.images = nil, "", ""
+	h.Local = nil
 	return h
 }
 
