@@ -99,7 +99,7 @@ func TestEgressRefusals(t *testing.T) {
 					w.labels = goodLabels()
 					h, d, creds, tokens, codexCreds, keys, env := credentialHost(&w)
 					if at.endpoint != "" {
-						h.Endpoint = at.endpoint
+						h = atEndpoint(h, at.endpoint)
 					}
 					_, err := h.Start(context.Background(), credentialManifest(t, manifest))
 					e := protoErr(t, err)
@@ -157,7 +157,7 @@ func TestEgressCommandFailureHint(t *testing.T) {
 			w := world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}, labels: goodLabels()}
 			h, _, creds, _, _, _, _ := credentialHost(&w)
 			if at.endpoint != "" {
-				h.Endpoint = at.endpoint
+				h = atEndpoint(h, at.endpoint)
 			}
 			_, err := h.Start(context.Background(), validManifest(t))
 			e := protoErr(t, err)
@@ -345,5 +345,27 @@ func TestEgressRefusalsByKey(t *testing.T) {
 				t.Fatalf("docker calls %q, credential calls %q", got, creds.calls)
 			}
 		})
+	}
+}
+
+// The refusal hint follows whether the daemon is remote, never the shape of its endpoint.
+func TestEgressHintFollowsDaemonRemote(t *testing.T) {
+	const notSSH = "tcp://pc:2376"
+	for _, tc := range []struct {
+		endpoint string
+		remote   bool
+		hint     string
+	}{
+		{notSSH, true, " Install it on the Docker target " + notSSH + " by running bash <ensemble plugin directory>/scripts/install-target-egress.sh on this Mac, wait until it is healthy, then retry."},
+		{remoteTarget, false, localHint},
+	} {
+		none := ""
+		w := world{proxies: &none, labels: goodLabels()}
+		h, _, _, _, _, _, _ := credentialHost(&w)
+		h.Daemons = []Daemon{{Name: DaemonRemote, Endpoint: tc.endpoint, Remote: tc.remote, Runner: h.Daemons[0].Runner}}
+		_, err := h.Start(context.Background(), validManifest(t))
+		if e := protoErr(t, err); e.Code != protocol.EgressUnavailable || !strings.HasSuffix(e.Message, tc.hint) {
+			t.Errorf("%s remote %v: %+v", tc.endpoint, tc.remote, e)
+		}
 	}
 }

@@ -38,7 +38,7 @@ func TestLockHolder(t *testing.T) {
 				t.Fatalf("query mutated Docker: %q", args)
 				return nil, nil
 			}}
-			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
+			got, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,14 +75,14 @@ func TestLockHolderEmptyAndFailures(t *testing.T) {
 				}
 				return tc.inspect, tc.err
 			}}
-			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
+			got, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", "")
 			if code(t, err) != tc.want || got != nil {
 				t.Fatalf("%+v %v", got, err)
 			}
 		})
 	}
 	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	if _, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", ""); code(t, err) != protocol.DockerUnreachable {
+	if _, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", ""); code(t, err) != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
 }

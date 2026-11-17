@@ -77,11 +77,12 @@ func TestPruneKeepsAnotherDaemonsRecords(t *testing.T) {
 	putFile(t, lease+".json", `{"package":"/p"}`)
 	e.daemon = otherDaemon
 	e.images = "ensemble-worker:" + key + " sha256:" + strings.Repeat("c", 64)
-	h, err := e.lookupHost().onDaemon(context.Background(), protocol.BuildFailed)
+	h := e.lookupHost()
+	d, r, err := h.identify(context.Background(), h.Daemons[0], protocol.BuildFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.prune(context.Background(), "")
+	h.prune(context.Background(), d, r, "")
 	if removed := e.fake.removed(); len(removed) != 1 || removed[0] != "ensemble-worker:"+key {
 		t.Fatalf("removed %q, want the other daemon's unleased image", removed)
 	}
@@ -129,8 +130,7 @@ func TestBuildDaemonIDFailure(t *testing.T) {
 func TestDefaultImageIgnoresAnotherDaemon(t *testing.T) {
 	w := &world{labels: goodLabels()}
 	h, _, _ := prefetchHost(t, w)
-	other := h
-	other.daemon, other.images = otherDaemon, filepath.Join(h.Home, ".ensemble/docker/images", otherDaemon)
+	other := records{filepath.Join(h.Home, ".ensemble/docker/images", otherDaemon)}
 	key := strings.Repeat("c", 64)
 	putFile(t, other.recordPath(key), `{"package":"/p","base_image":""}`)
 	future := time.Now().Add(time.Hour)
@@ -138,14 +138,14 @@ func TestDefaultImageIgnoresAnotherDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	var inspected []string
-	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+	h = withRunner(h, &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		inspected = append(inspected, ref)
 		labels := goodLabels()
 		labels["ensemble.key"] = strings.TrimPrefix(ref, "ensemble-worker:")
 		return inspectJSON("sha256:"+strings.Repeat("a", 64), labels, time.Time{}), nil
-	}}
-	if _, err := h.defaultImage(context.Background(), "ensemble-worker:"+imageKey); err != nil {
+	}})
+	if _, err := h.defaultImage(context.Background(), h.Daemons[0], testRecords(h.Home), "ensemble-worker:"+imageKey); err != nil {
 		t.Fatal(err)
 	}
 	for _, ref := range inspected {

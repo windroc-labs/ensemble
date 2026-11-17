@@ -65,7 +65,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
-	h = h.place(secretItems(m.Secrets))
+	d := h.placed(secretItems(m.Secrets))
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
@@ -73,11 +73,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
-	px, err := h.checkProxy(ctx, m.Gateway)
+	px, err := h.checkProxy(ctx, d, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
-	route, err := h.caller(ctx, px, m.Gateway)
+	route, err := h.caller(ctx, d, px, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -128,24 +128,25 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	lap("preflight")
-	info, err := h.checkImage(ctx, m.Image)
+	info, err := h.checkImage(ctx, d, m.Image)
 	if err != nil {
 		return StartResult{}, err
 	}
 	lap("image")
 	facts.ImageDigest = info.ID
-	if _, err := h.Docker.Run(ctx, []string{"container", "inspect", c}, nil); !docker.Absent(err) {
+	if _, err := d.Runner.Run(ctx, []string{"container", "inspect", c}, nil); !docker.Absent(err) {
 		if err != nil {
 			return StartResult{}, failure(err, protocol.StartFailed, "Cannot check for container "+c+".")
 		}
 		return StartResult{}, taken(c)
 	}
 	// The reply names the daemon the volumes are on, which the caller checks.
-	if h, err = h.onDaemon(ctx, protocol.StartFailed); err != nil {
+	d, r, err := h.identify(ctx, d, protocol.StartFailed)
+	if err != nil {
 		return StartResult{}, err
 	}
 	lostName := false
-	created, err := h.ensureVolume(ctx, m, info)
+	created, err := h.ensureVolume(ctx, d, m, info)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -154,11 +155,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, m.Workspace, e)
+				h.removeVolume(ctx, d, m.Workspace, e)
 			}
 		}()
 	}
-	stateCreated, err := h.ensureStateVolume(ctx, m, info)
+	stateCreated, err := h.ensureStateVolume(ctx, d, m, info)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -166,13 +167,13 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, stateVolume(m.Name), e)
+				h.removeVolume(ctx, d, stateVolume(m.Name), e)
 			}
 		}()
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		if err := h.prefetch(ctx, c, m, info, px); err != nil {
+		if err := h.prefetch(ctx, d, r, c, m, info, px); err != nil {
 			return StartResult{}, err
 		}
 		lap("prefetch")
@@ -184,11 +185,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 		defer lock.Close()
-		if err := h.lockBusy(ctx, m.Lock, ""); err != nil {
+		if err := h.lockBusy(ctx, d, m.Lock, ""); err != nil {
 			return StartResult{}, err
 		}
 	}
-	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
+	result, held, err = h.create(ctx, d, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
 		lostName = true
 		return StartResult{}, taken(c)
@@ -199,7 +200,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		held.revokeTokens()
-		h.rollback(ctx, c, e)
+		h.rollback(ctx, d, c, e)
 		h.dropTokens(m)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
 			e.Code, e.Holder = protocol.StartFailed, nil
@@ -208,7 +209,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
-	result.Env = env
+	result.Env, result.Daemon = env, d.ID
 	return result, nil
 }
 
@@ -287,7 +288,7 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 
 // create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
 // container so far.
-func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
+func (h Host) create(ctx context.Context, d Daemon, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
 	lap func(phase string)) (_ StartResult, held holding, retErr error) {
 	labels := info.Config.Labels
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
@@ -329,7 +330,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	flags, list := mounts(m, labels)
 	facts.Mounts = list
 	args = append(append(args, flags...), "--entrypoint", "/usr/bin/tini", info.ID, "--", Python, "-I", Guard, "--serve")
-	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, args, nil); err != nil {
 		if docker.Conflict(err) {
 			return StartResult{}, held, errTaken
 		}
@@ -337,11 +338,11 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	lap("create")
 	if m.Lock != "" {
-		if err := h.lockBusy(ctx, m.Lock, c); err != nil {
+		if err := h.lockBusy(ctx, d, m.Lock, c); err != nil {
 			return StartResult{}, held, err
 		}
 	}
-	if err := h.bootstrap(ctx, c, m); err != nil {
+	if err := h.bootstrap(ctx, d, c, m); err != nil {
 		return StartResult{}, held, err
 	}
 	lap("bootstrap")
@@ -430,7 +431,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		batch.commands = append(batch.commands, writes...)
 		batch.step("Injecting the Linear credentials failed.", nil)
 	}
-	if err := h.deliverStart(ctx, c, &batch); err != nil {
+	if err := h.deliverStart(ctx, d, c, &batch); err != nil {
 		return StartResult{}, held, err
 	}
 	lap("credentials")
@@ -444,7 +445,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, Daemon: h.daemon, ImageDigest: info.ID,
+	return StartResult{Container: c, Endpoint: d.Endpoint, ImageDigest: info.ID,
 			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
 			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil
@@ -481,26 +482,26 @@ func injected(err error, code protocol.Code, message string) *protocol.Error {
 }
 
 // agentExec runs argv as agent in container c with stdin, for secret injection.
-func (h Host) agentExec(ctx context.Context, c string) func(argv []string, stdin []byte) error {
+func (h Host) agentExec(ctx context.Context, d Daemon, c string) func(argv []string, stdin []byte) error {
 	return func(argv []string, stdin []byte) error {
-		_, err := h.Docker.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)
+		_, err := d.Runner.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)
 		return err
 	}
 }
 
 // agentRead runs argv as agent in container c on the context it is given, returning its stdout: close's read of the
 // token files.
-func (h Host) agentRead(c string) func(ctx context.Context, argv []string) ([]byte, error) {
+func (h Host) agentRead(d Daemon, c string) func(ctx context.Context, argv []string) ([]byte, error) {
 	return func(ctx context.Context, argv []string) ([]byte, error) {
-		return h.Docker.Run(ctx, asAgent(c, argv...), nil)
+		return d.Runner.Run(ctx, asAgent(c, argv...), nil)
 	}
 }
 
 // rollback deletes c on a fresh context so a signal or cancelled caller still cleans up.
-func (h Host) rollback(ctx context.Context, c string, e *protocol.Error) {
+func (h Host) rollback(ctx context.Context, d Daemon, c string, e *protocol.Error) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	removed, err := h.remove(rctx, c)
+	removed, err := h.remove(rctx, d, c)
 	switch {
 	case err != nil:
 		e.Cleanup, e.CleanupError, e.Container = protocol.Failed, docker.Diagnostic(err), c
