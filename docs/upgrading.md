@@ -583,7 +583,8 @@ asks the login keychain password once and shows no dialog ([Broker installer](..
 
 A broker below protocol 30 cannot read the renamed items, so once a protocol 30 broker is installed,
 `scripts/install.sh` refuses a `--ref` (an older release or branch) whose broker speaks below 30, before it replaces
-the broker or `~/.egress/current`.
+the broker or `~/.egress/current`. It never touches the egress proxy of a remote Docker target, which
+`scripts/install-target-egress.sh` installs ([Remote Docker target](remote-docker-target.md)).
 
 ## Release changes
 
@@ -653,6 +654,10 @@ After updating the plugin, rerun `scripts/install.sh --docker`: it installs the 
 `windroc-labs/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
 proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Egress setup](upgrading.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress setup](upgrading.md#egress-proxy)).
+
+With a remote Docker target, workers use the egress proxy on the target instead. Install or upgrade it from the Mac
+with `scripts/install-target-egress.sh` ([Remote Docker target](remote-docker-target.md#egress-proxy-on-the-target));
+`scripts/install.sh --docker` keeps installing the Mac's own proxy, which mini-op workers use.
 
 The pinned proxy now builds the image as `egress-proxy`. After the installer succeeds, remove the
 old image it leaves behind:
@@ -827,6 +832,11 @@ Mac; the `tests/session/live_docker.py` checks: [Docker acceptance entry](../tes
   time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
 - [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
   proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] Remote Docker target, as the remote-target acceptance runs it (on the user's Mac against the PC's Docker
+  Desktop, an exception to the test Mac mini rule above): after the
+  [Windows target](remote-docker-target.md#windows-target) steps, `scripts/install-target-egress.sh` ends with
+  `egress-proxy` healthy on the target, and the target has no `gh` login, no registry credential from the install and
+  no registry login in its Docker client config.
 - [ ] [Linear presets](#linear-presets) in a new Linear team, from only that section and the config: both dry-runs
   report no configuration error. Deferred until there is a new Linear team.
 - [ ] [Linear apps](#linear-apps), before cutover: the harness app claims, moves, comments (the comment's `user` has
