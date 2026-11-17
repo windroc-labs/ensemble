@@ -13,6 +13,7 @@ import select
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable, Mapping
 from typing import NamedTuple
 
 from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
@@ -137,6 +138,51 @@ def target() -> Target:
             f' [up to {LOCAL_SECRETS_MAX} distinct "ensemble-broker-env/<name>" items]}}'
         )
     return Target(host, tuple(items))
+
+
+def daemons() -> tuple[str, ...]:
+    """The target, then the local Docker Desktop when the target is remote."""
+    host = endpoint()
+    local = local_endpoint()
+    return (host,) if host == local else (host, local)
+
+
+def placement(items: Iterable[str]) -> str:
+    """The daemon a worker given env secret `items` runs on: the local Docker Desktop for any
+    local secret, else the target.
+    """
+    found = target()
+    return local_endpoint() if set(items) & set(found.local_secrets) else found.host
+
+
+def daemon_flag(host: str) -> tuple[str, ...]:
+    """The broker's close and workspace-rm arguments naming `host`: none for the target."""
+    current = daemons()
+    if host == current[0]:
+        return ()
+    if host in current:
+        return ("--daemon", "local")
+    raise SessionError(
+        f"Docker daemon {host} is not the local Docker Desktop or the target {current[0]}"
+    )
+
+
+def env_items(credentials: Mapping[str, str]) -> tuple[str, ...]:
+    """The env secret items of a worker's credentials texts, merged as the broker does: the
+    caller's `credentials` env replaces `environment_credentials`'. Unreadable text adds none.
+    """
+    items: tuple[str, ...] = ()
+    for key in ("environment_credentials", "credentials"):
+        try:
+            spec = json.loads(credentials.get(key) or "{}")
+        except ValueError:
+            continue
+        env = spec.get("env") if isinstance(spec, dict) else None
+        if isinstance(env, list):
+            items = tuple(
+                e["item"] for e in env if isinstance(e, dict) and isinstance(e.get("item"), str)
+            )
+    return items
 
 
 def _remote(host: str) -> bool:

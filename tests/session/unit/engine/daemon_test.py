@@ -144,6 +144,48 @@ class TargetTest(Case):
     def test_no_target_file_has_no_local_secrets(self):
         self.assertEqual(daemon.target(), daemon.Target(daemon.local_endpoint(), ()))
 
+    def test_placement_between_the_local_docker_desktop_and_the_target(self):
+        local = daemon.local_endpoint()
+        mini = ("ensemble-broker-env/mini-op-password",)
+        self.assertEqual(daemon.daemons(), (local,))
+        self.assertEqual(daemon.placement(mini), local)
+        self.assertEqual(daemon.placement(()), local)
+        self.target(
+            '{"host": "ssh://u@pc", "local_secrets": ["ensemble-broker-env/mini-op-password"]}'
+        )
+        self.assertEqual(daemon.daemons(), ("ssh://u@pc", local))
+        self.assertEqual(daemon.placement(mini), local)
+        self.assertEqual(daemon.placement(("ensemble-broker-env/other", *mini)), local)
+        self.assertEqual(daemon.placement(("ensemble-broker-env/other",)), "ssh://u@pc")
+        self.assertEqual(daemon.placement(()), "ssh://u@pc")
+
+    def test_daemon_flag_names_the_local_docker_desktop_beside_a_remote_target(self):
+        local = daemon.local_endpoint()
+        self.assertEqual(daemon.daemon_flag(local), ())
+        self.target('{"host": "ssh://u@pc", "local_secrets": []}')
+        self.assertEqual(daemon.daemon_flag(local), ("--daemon", "local"))
+        self.assertEqual(daemon.daemon_flag("ssh://u@pc"), ())
+        for host in ("ssh://u@other", "unix:///elsewhere/docker.sock"):
+            with (
+                self.subTest(host=host),
+                self.assertRaisesRegex(SessionError, "is not the local Docker Desktop"),
+            ):
+                daemon.daemon_flag(host)
+
+    def test_env_items_cases_shared_with_the_broker(self):
+        with open(
+            os.path.join(REPO, "src/broker/protocol/docker-broker/cases/env_items.json")
+        ) as f:
+            cases = json.load(f)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                self.assertEqual(daemon.env_items(case["fields"]), tuple(case["items"]))
+
+    def test_unparseable_credentials_have_no_env_items(self):
+        for text in ("", "[]", "{", '{"env": 1}', '{"env": [1]}', '{"env": [{"item": 2}]}'):
+            with self.subTest(text=text):
+                self.assertEqual(daemon.env_items({"credentials": text}), ())
+
     def test_remote_target_without_the_wrapper_is_refused(self):
         self.target('{"host": "ssh://pc", "local_secrets": []}')
         with (
