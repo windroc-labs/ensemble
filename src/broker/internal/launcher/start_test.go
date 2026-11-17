@@ -317,7 +317,7 @@ func withClaudeAccount(account any) func(map[string]any) {
 func startHost(w *world, creds *fakeCreds) (Host, *fakeDocker) {
 	d := w.docker()
 	h := mountHost()
-	h.Docker, h.Creds, h.Endpoint = d, creds, "unix://"+home+"/.docker/run/docker.sock"
+	h.Daemons, h.Creds = one(d), creds
 	return h, d
 }
 
@@ -380,10 +380,9 @@ func TestRuntimeFixtures(t *testing.T) {
 			m, _ := ParseManifest(c.Data)
 			h := Host{
 				Home:     ctx.Home,
-				Endpoint: "unix://" + ctx.Home + "/.docker/run/docker.sock",
 				IsDir:    func(p string) bool { return ctx.CWDExists || p != m.CWD },
 				Safe:     func(string) error { return nil },
-				Docker:   d,
+				Daemons:  []Daemon{{Name: DaemonLocal, Endpoint: "unix://" + ctx.Home + "/.docker/run/docker.sock", Runner: d}},
 				Creds:    creds,
 				GitHub:   &fakeTokens{},
 				Versions: defaultVersions(),

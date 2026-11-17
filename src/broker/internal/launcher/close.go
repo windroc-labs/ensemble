@@ -11,8 +11,8 @@ import (
 )
 
 // remove deletes c and reports whether it existed: rm --force exits 0 for an absent container but echoes no name.
-func (h Host) remove(ctx context.Context, c string) (bool, error) {
-	out, err := h.Docker.Run(ctx, []string{"rm", "--force", c}, nil)
+func (h Host) remove(ctx context.Context, d Daemon, c string) (bool, error) {
+	out, err := d.Runner.Run(ctx, []string{"rm", "--force", c}, nil)
 	if err != nil && docker.Absent(err) {
 		return false, nil
 	}
@@ -22,11 +22,11 @@ func (h Host) remove(ctx context.Context, c string) (bool, error) {
 // held is what c's secrets tmpfs holds, only for the audit: kind is its client credential's audit kind ("": none or
 // unknown), from its client label, else (a container an older broker started) its env's client home; secrets are the
 // environment secrets its secrets label names.
-func (h Host) held(ctx context.Context, c string) (kind string, secrets []string) {
+func (h Host) held(ctx context.Context, d Daemon, c string) (kind string, secrets []string) {
 	if h.Audit == nil {
 		return "", nil
 	}
-	out, err := h.Docker.Run(ctx, []string{"container", "inspect", "--format", `{"env":{{json .Config.Env}},"labels":{{json .Config.Labels}}}`, c}, nil)
+	out, err := d.Runner.Run(ctx, []string{"container", "inspect", "--format", `{"env":{{json .Config.Env}},"labels":{{json .Config.Labels}}}`, c}, nil)
 	var config struct {
 		Env    []string          `json:"env"`
 		Labels map[string]string `json:"labels"`
@@ -55,11 +55,11 @@ func (h Host) held(ctx context.Context, c string) (kind string, secrets []string
 
 // Close revokes GitHub tokens read from the container, removes the container and its tmpfs, then revokes Linear
 // tokens from its retained record. Container removal proceeds even if reading or revoking GitHub tokens fails.
-func (h Host) Close(ctx context.Context, container string) (CloseResult, error) {
+func (h Host) Close(ctx context.Context, d Daemon, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)
-	kind, secrets := h.held(ctx, container)
-	h.GitHub.Revoke(ctx, container, h.agentRead(container))
-	removed, err := h.remove(ctx, container)
+	kind, secrets := h.held(ctx, d, container)
+	h.GitHub.Revoke(ctx, container, h.agentRead(d, container))
+	removed, err := h.remove(ctx, d, container)
 	revokeErr := h.Linear.Revoke(ctx, container)
 	if removed {
 		if kind != "" {

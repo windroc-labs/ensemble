@@ -152,7 +152,7 @@ func TestPrepareUmask(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := h.prepare(context.Background(), e.pkg, spec, tmp)
+			p, err := h.prepare(context.Background(), h.Daemons[0], e.pkg, spec, tmp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -307,10 +307,9 @@ type buildEnv struct {
 
 const testDaemon = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
 
-// onTestDaemon is h with testDaemon's image records under its Home, as onDaemon leaves it.
-func onTestDaemon(h Host) Host {
-	h.daemon, h.images = testDaemon, filepath.Join(h.Home, ".ensemble/docker/images", testDaemon)
-	return h
+// testRecords are testDaemon's image records under home.
+func testRecords(home string) records {
+	return records{filepath.Join(home, ".ensemble/docker/images", testDaemon)}
 }
 
 // fakeReleases answers Latest from latest, failing with err; it records each package asked.
@@ -428,15 +427,29 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	return e
 }
 
-// host is e's Host on e.daemon, its ID already looked up as a start's is; lookupHost looks it up.
-func (e *buildEnv) host() Host {
-	h := e.lookupHost()
-	h.daemon, h.images = e.daemon, e.imagesDir()
-	return h
+// knownHost is a Host on a daemon whose ID is already looked up, as a start's is: its Build and prune use r.
+type knownHost struct {
+	Host
+	d Daemon
+	r records
 }
 
+func (k knownHost) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
+	return k.build(ctx, k.d, k.r, pkg, spec, maxAge)
+}
+
+func (k knownHost) prune(ctx context.Context, key string) { k.Host.prune(ctx, k.d, k.r, key) }
+
+// host is e's Host on e.daemon, its ID already looked up; lookupHost looks it up.
+func (e *buildEnv) host() knownHost {
+	h := e.lookupHost()
+	return knownHost{h, h.Daemons[0], e.records()}
+}
+
+func (e *buildEnv) records() records { return records{e.imagesDir()} }
+
 func (e *buildEnv) lookupHost() Host {
-	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock, Releases: e.releases}
+	return Host{Home: e.home, Daemons: one(e.fake), Progress: &e.progress, Lock: e.lock, Releases: e.releases}
 }
 
 // lock is a non-reentrant image lock: taking it while held fails, as a second process would wait.

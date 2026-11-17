@@ -164,8 +164,8 @@ func workspaceMount(volume, target string, readonly bool) (string, audit.Mount) 
 }
 
 // volumeLabels reads a volume's labels; an absent volume is an error docker.Absent recognizes.
-func (h Host) volumeLabels(ctx context.Context, volume string) (map[string]string, error) {
-	out, err := h.Docker.Run(ctx, []string{"volume", "inspect", "--format", "{{json .Labels}}", volume}, nil)
+func (h Host) volumeLabels(ctx context.Context, d Daemon, volume string) (map[string]string, error) {
+	out, err := d.Runner.Run(ctx, []string{"volume", "inspect", "--format", "{{json .Labels}}", volume}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -185,10 +185,10 @@ func randomHex() string {
 
 // removeVolume removes volume v, which this start created, on a context of its own; a failed removal adds the command
 // to e.
-func (h Host) removeVolume(ctx context.Context, v string, e *protocol.Error) {
+func (h Host) removeVolume(ctx context.Context, d Daemon, v string, e *protocol.Error) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if _, err := h.Docker.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
+	if _, err := d.Runner.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
 		e.Message += " Remove it with docker volume rm " + v + " before retrying."
 	}
 }
@@ -196,9 +196,9 @@ func (h Host) removeVolume(ctx context.Context, v string, e *protocol.Error) {
 // ensureVolume gives m its workspace volume: created with its labels and an agent-owned root, or an
 // existing one whose labels match and that no container mounts. created: this start made it, which a prefetching
 // start knows by its own nonceLabel value.
-func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (created bool, _ error) {
+func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
 	v := m.Workspace
-	labels, err := h.volumeLabels(ctx, v)
+	labels, err := h.volumeLabels(ctx, d, v)
 	created = docker.Absent(err)
 	if created {
 		create := []string{"volume", "create", "--label", kindLabel + "=" + kind, "--label", workspaceLabel + "=" + m.CWD}
@@ -207,11 +207,11 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 			nonce = randomHex()
 			create = append(create, "--label", nonceLabel+"="+nonce)
 		}
-		if _, err := h.Docker.Run(ctx, append(create, v), nil); err != nil {
+		if _, err := d.Runner.Run(ctx, append(create, v), nil); err != nil {
 			return false, failure(err, protocol.StartFailed, "Creating workspace volume "+v+" failed.")
 		}
 		// create succeeds on a name a racing start made first, so read back what exists.
-		labels, err = h.volumeLabels(ctx, v)
+		labels, err = h.volumeLabels(ctx, d, v)
 		if err == nil && nonce != "" {
 			created = labels[nonceLabel] == nonce
 		}
@@ -219,7 +219,7 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 	// Until its root is the agent's, a volume this start created is removed on failure: a later start would skip the chown.
 	undo := func(e *protocol.Error) (bool, error) {
 		if created {
-			h.removeVolume(ctx, v, e)
+			h.removeVolume(ctx, d, v, e)
 		}
 		return false, e
 	}
@@ -230,7 +230,7 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
 			v, m.CWD, kindLabel, labels[kindLabel], workspaceLabel, labels[workspaceLabel])
 	}
-	out, err := h.Docker.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
+	out, err := d.Runner.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
 	if err != nil {
 		return undo(failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
 	}
@@ -243,7 +243,7 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 	l := info.Config.Labels
 	chown := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--user", "0:0",
 		"--mount", volumeMount(v, "/workspace", false), "--entrypoint", "/bin/chown", info.ID, l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"], "/workspace"}
-	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
 		return undo(failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
 	}
 	return true, nil
@@ -251,22 +251,22 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 
 // ensureStateVolume gives m its client state volume: created with its label, its root the agent's and its client's
 // dirs made by the agent, or an existing one labelled for m. created: this start made it.
-func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo) (created bool, _ error) {
+func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
 	v := stateVolume(m.Name)
-	labels, err := h.volumeLabels(ctx, v)
+	labels, err := h.volumeLabels(ctx, d, v)
 	created = docker.Absent(err)
 	l := info.Config.Labels
 	owner := l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"]
 	if created {
 		create := []string{"volume", "create", "--label", stateLabel + "=" + m.Name, "--label", stateOwnerLabel + "=" + owner, v}
-		if _, err := h.Docker.Run(ctx, create, nil); err != nil {
+		if _, err := d.Runner.Run(ctx, create, nil); err != nil {
 			return false, failure(err, protocol.StartFailed, "Creating state volume "+v+" failed.")
 		}
-		labels, err = h.volumeLabels(ctx, v)
+		labels, err = h.volumeLabels(ctx, d, v)
 	}
 	undo := func(e *protocol.Error) (bool, error) {
 		if created {
-			h.removeVolume(ctx, v, e)
+			h.removeVolume(ctx, d, v, e)
 		}
 		return false, e
 	}
@@ -282,7 +282,7 @@ func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo)
 	helper := []string{"run", "--rm", "--log-driver", "none", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
 	chown := append(slices.Clone(helper), "--cap-add", "CHOWN", "--user", "0:0", "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/chown",
 		info.ID, owner, "/state")
-	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
 		return undo(failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
 	}
 	mkdir := append(slices.Clone(helper), "--user", owner, "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/mkdir",
@@ -290,25 +290,25 @@ func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo)
 	for _, dir := range stateDirs(m) {
 		mkdir = append(mkdir, "/state/"+dir)
 	}
-	if _, err := h.Docker.Run(ctx, mkdir, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, mkdir, nil); err != nil {
 		return undo(failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
 	}
 	return true, nil
 }
 
 // removeStateVolume removes session name's reader containers, then its state volume; an absent volume is success.
-func (h Host) removeStateVolume(ctx context.Context, name string) error {
+func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string) error {
 	v := stateVolume(name)
-	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
+	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
 	if err != nil {
 		return failure(err, protocol.WorkspaceFailed, "Cannot list the readers of "+v+".")
 	}
 	if readers := strings.Fields(string(out)); len(readers) > 0 {
-		if _, err := h.Docker.Run(ctx, append([]string{"rm", "--force"}, readers...), nil); err != nil {
+		if _, err := d.Runner.Run(ctx, append([]string{"rm", "--force"}, readers...), nil); err != nil {
 			return failure(err, protocol.WorkspaceFailed, "Removing the readers of "+v+" failed.")
 		}
 	}
-	if _, err := h.Docker.Run(ctx, []string{"volume", "rm", v}, nil); err != nil && !docker.Absent(err) {
+	if _, err := d.Runner.Run(ctx, []string{"volume", "rm", v}, nil); err != nil && !docker.Absent(err) {
 		return diagnosed(err, protocol.WorkspaceFailed, "Deleting volume "+v+" failed.")
 	}
 	return nil

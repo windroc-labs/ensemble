@@ -201,8 +201,8 @@ func treeDigest(root string) (string, error) {
 }
 
 // inspectImage returns found=false when Docker reports the image absent.
-func (h Host) inspectImage(ctx context.Context, image string) (imageInfo, bool, error) {
-	out, err := h.Docker.Run(ctx, []string{"image", "inspect", image}, nil)
+func (h Host) inspectImage(ctx context.Context, d Daemon, image string) (imageInfo, bool, error) {
+	out, err := d.Runner.Run(ctx, []string{"image", "inspect", image}, nil)
 	if docker.Absent(err) {
 		return imageInfo{}, false, nil
 	}
@@ -222,8 +222,8 @@ func numeric(s string) bool {
 }
 
 // checkImage requires a broker-built image: matching key, version and agent ids in its labels.
-func (h Host) checkImage(ctx context.Context, image string) (imageInfo, error) {
-	info, found, err := h.inspectImage(ctx, image)
+func (h Host) checkImage(ctx context.Context, d Daemon, image string) (imageInfo, error) {
+	info, found, err := h.inspectImage(ctx, d, image)
 	if err != nil {
 		return imageInfo{}, failure(err, protocol.ImageRejected, "Cannot inspect image "+image+".")
 	}
@@ -298,7 +298,7 @@ type prepared struct {
 
 // prepare stages spec's build context into tmp and derives its key; Build and CheckClients share it so a key is
 // derived one way.
-func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp string) (prepared, error) {
+func (h Host) prepare(ctx context.Context, d Daemon, pkg string, spec BuildSpec, tmp string) (prepared, error) {
 	spec.ImagePlugins = slices.Sorted(slices.Values(spec.ImagePlugins))
 	version, dirs, err := h.stage(pkg, spec, tmp)
 	if err != nil {
@@ -306,7 +306,7 @@ func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp strin
 	}
 	var base imageInfo
 	if spec.BaseImage != "" {
-		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
+		if base, err = h.baseImage(ctx, d, spec.BaseImage); err != nil {
 			return prepared{}, err
 		}
 		if err := writeBuildInput(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n")); err != nil {
@@ -324,30 +324,34 @@ func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp strin
 // than maxAge ago is reused (maxAge < 0: of any age; 0: never). A rebuild installs each client's latest release; both
 // stages rebuild without cache to refresh plugins. spec's plugins are part of the key.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
-	h = h.place(spec.Secrets)
+	d, r, err := h.identify(ctx, h.placed(spec.Secrets), protocol.BuildFailed)
 	spec.Secrets = nil
-	h, err := h.onDaemon(ctx, protocol.BuildFailed)
 	if err != nil {
 		return BuildResult{}, err
 	}
+	return h.build(ctx, d, r, pkg, spec, maxAge)
+}
+
+// build is Build on the daemon whose image records are r.
+func (h Host) build(ctx context.Context, d Daemon, r records, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")
 	if err != nil {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
 	}
 	defer os.RemoveAll(tmp)
-	p, err := h.prepare(ctx, pkg, spec, tmp)
+	p, err := h.prepare(ctx, d, pkg, spec, tmp)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	key, version, dirs, spec := p.key, p.version, p.dirs, p.spec
 	image := "ensemble-worker:" + key
-	info, found, err := h.leaseImage(ctx, key)
+	info, found, err := h.leaseImage(ctx, d, r, key)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	built := func(result BuildResult) (BuildResult, error) {
-		h.record(key, pkg, spec)
-		h.afterBuild()
+		h.record(r, key, pkg, spec)
+		h.afterBuild(r)
 		return result, nil
 	}
 	_, labelled := imageClients(info.Config.Labels)
@@ -368,7 +372,7 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 		}
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases; check the network and retry.")
 	}
-	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, p.baseID, latest)
+	result, err := h.rebuild(ctx, d, r, tmp, key, version, dirs, spec, p.baseID, latest)
 	var e *protocol.Error
 	if keep && errors.As(err, &e) && e.Code == protocol.BuildFailed {
 		why := e.Message
@@ -385,16 +389,16 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 
 // leaseImage leases key, then inspects its worker image, both under the image lock:
 // a concurrent prune either finished before the lease or keeps the image.
-func (h Host) leaseImage(ctx context.Context, key string) (imageInfo, bool, error) {
+func (h Host) leaseImage(ctx context.Context, d Daemon, r records, key string) (imageInfo, bool, error) {
 	unlock, err := h.Lock()
 	if err != nil {
 		return imageInfo{}, false, protocol.New(protocol.BuildFailed, "Taking the image lock ~/.ensemble/docker/images.lock failed.")
 	}
 	defer unlock()
-	if err := h.lease(key); err != nil {
+	if err := lease(r, key); err != nil {
 		return imageInfo{}, false, leaseFailed()
 	}
-	info, found, err := h.inspectImage(ctx, "ensemble-worker:"+key)
+	info, found, err := h.inspectImage(ctx, d, "ensemble-worker:"+key)
 	if err != nil {
 		return imageInfo{}, false, failure(err, protocol.BuildFailed, "Cannot inspect the worker image.")
 	}
@@ -405,13 +409,9 @@ func leaseFailed() *protocol.Error {
 	return protocol.New(protocol.BuildFailed, "Cannot write the image lease in ~/.ensemble/docker/images.")
 }
 
-func (h Host) leasePath(key string) string {
-	return h.imagePath(key)
-}
-
 // lease marks key's images as in use by a build from now on.
-func (h Host) lease(key string) error {
-	path := h.leasePath(key)
+func lease(r records, key string) error {
+	path := r.leasePath(key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -427,63 +427,63 @@ func (h Host) lease(key string) error {
 }
 
 // leased reports whether a build leased key less than d ago.
-func (h Host) leased(key string, d time.Duration) bool {
-	info, err := os.Stat(h.leasePath(key))
+func (h Host) leased(r records, key string, d time.Duration) bool {
+	info, err := os.Stat(r.leasePath(key))
 	return err == nil && h.now().Sub(info.ModTime()) < d
 }
 
 // kept reports whether prune keeps key's images: leased within imageLease, or a variant a build used within
 // variantLease.
-func (h Host) kept(key string) bool {
-	return h.leased(key, imageLease) || h.inUse(key)
+func (h Host) kept(r records, key string) bool {
+	return h.leased(r, key, imageLease) || h.inUse(r, key)
 }
 
 // inUse reports whether a build used key's recorded variant less than variantLease ago; a check rebuild's own leases
 // never count, so an abandoned variant ages out.
-func (h Host) inUse(key string) bool {
-	info, err := os.Stat(h.recordPath(key))
+func (h Host) inUse(r records, key string) bool {
+	info, err := os.Stat(r.recordPath(key))
 	return err == nil && h.now().Sub(info.ModTime()) < variantLease
 }
 
 // rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set, the
 // ensemble layer installing the clients at v.
-func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, spec BuildSpec, baseID string, v ClientVersions) (BuildResult, error) {
+func (h Host) rebuild(ctx context.Context, d Daemon, r records, tmp, key, version, plugins string, spec BuildSpec, baseID string, v ClientVersions) (BuildResult, error) {
 	image, userImage := "ensemble-worker:"+key, "ensemble-user:"+key
 	var uid, gid string
 	var err error
 	if baseID != "" {
-		uid, gid, err = h.useBase(ctx, spec.BaseImage, baseID, userImage)
+		uid, gid, err = h.useBase(ctx, d, spec.BaseImage, baseID, userImage)
 	} else {
-		uid, gid, err = h.buildDefinition(ctx, tmp, key, userImage)
+		uid, gid, err = h.buildDefinition(ctx, d, tmp, key, userImage)
 	}
 	if err != nil {
 		return BuildResult{}, err
 	}
 	if len(spec.ImagePlugins) > 0 {
-		if err := h.checkImagePlugins(ctx, userImage, spec.ImagePlugins); err != nil {
+		if err := h.checkImagePlugins(ctx, d, userImage, spec.ImagePlugins); err != nil {
 			return BuildResult{}, err
 		}
 	}
-	if err := h.lease(key); err != nil {
+	if err := lease(r, key); err != nil {
 		return BuildResult{}, leaseFailed()
 	}
-	replaced, err := h.markReplaced(ctx, key, replacedImage{Pending: true})
+	replaced, err := h.markReplaced(ctx, d, r, key, replacedImage{Pending: true})
 	if err != nil {
 		return BuildResult{}, err
 	}
 	args := []string{"build", "--progress=plain", "--no-cache", "--build-arg", "USER_IMAGE=" + userImage, "--build-arg", "ENSEMBLE_VERSION=" + version,
 		"--build-arg", "AGENT_UID=" + uid, "--build-arg", "AGENT_GID=" + gid, "--build-arg", "ENSEMBLE_PLUGIN_DIRS=" + plugins,
 		"--build-arg", "CLAUDE_VERSION=" + v.Claude, "--build-arg", "CODEX_VERSION=" + v.Codex, "--build-arg", "OPENCODE_VERSION=" + v.Opencode, "--label", "ensemble.key=" + key, "--tag", image, filepath.Join(tmp, "package")}
-	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, args, nil); err != nil {
 		return BuildResult{}, diagnosed(err, protocol.BuildFailed, "Building the ensemble image stage failed.")
 	}
 	// The grace counts from the retag, however long the build took.
 	if replaced.ID != "" {
-		if _, err := h.markReplaced(ctx, key, replacedImage{ID: replaced.ID, At: replaced.At}); err != nil {
+		if _, err := h.markReplaced(ctx, d, r, key, replacedImage{ID: replaced.ID, At: replaced.At}); err != nil {
 			h.note("cannot refresh the replaced image record of " + image + ": " + message(err))
 		}
 	}
-	info, found, err := h.inspectImage(ctx, image)
+	info, found, err := h.inspectImage(ctx, d, image)
 	if err != nil {
 		return BuildResult{}, failure(err, protocol.BuildFailed, "Cannot inspect the built image.")
 	}
@@ -493,10 +493,10 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 		clients != v {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Built image labels do not match the package.")
 	}
-	if err := h.lease(key); err != nil {
+	if err := lease(r, key); err != nil {
 		return BuildResult{}, leaseFailed()
 	}
-	h.prune(ctx, key)
+	h.prune(ctx, d, r, key)
 	return BuildResult{Image: image, Digest: info.ID, Rebuilt: true}, nil
 }
 
@@ -515,15 +515,11 @@ type replacedImage struct {
 	Pending bool      `json:"pending,omitempty"`
 }
 
-func (h Host) replacedPath(key string) string {
-	return h.leasePath(key) + ".replaced"
-}
-
 // readReplaced is key's replaced entries younger than retagGrace, or pendingGrace while pending; an unreadable list is
 // empty.
-func (h Host) readReplaced(key string) []replacedImage {
+func (h Host) readReplaced(r records, key string) []replacedImage {
 	var entries []replacedImage
-	if data, err := os.ReadFile(h.replacedPath(key)); err != nil || json.Unmarshal(data, &entries) != nil {
+	if data, err := os.ReadFile(r.replacedPath(key)); err != nil || json.Unmarshal(data, &entries) != nil {
 		return nil
 	}
 	now := h.now()
@@ -534,7 +530,7 @@ func (h Host) readReplaced(key string) []replacedImage {
 
 // markReplaced records, under the image lock, the ID key's worker tag names (prior's ID when set, replacing that entry)
 // as replaced now, pending as prior is; it returns the entry, a zero one when the tag names no image.
-func (h Host) markReplaced(ctx context.Context, key string, prior replacedImage) (replacedImage, error) {
+func (h Host) markReplaced(ctx context.Context, d Daemon, r records, key string, prior replacedImage) (replacedImage, error) {
 	unlock, err := h.Lock()
 	if err != nil {
 		return replacedImage{}, protocol.New(protocol.BuildFailed, "Taking the image lock ~/.ensemble/docker/images.lock failed.")
@@ -542,7 +538,7 @@ func (h Host) markReplaced(ctx context.Context, key string, prior replacedImage)
 	defer unlock()
 	entry := replacedImage{ID: prior.ID, At: h.now(), Pending: prior.Pending}
 	if entry.ID == "" {
-		info, found, err := h.inspectImage(ctx, "ensemble-worker:"+key)
+		info, found, err := h.inspectImage(ctx, d, "ensemble-worker:"+key)
 		if err != nil {
 			return replacedImage{}, failure(err, protocol.BuildFailed, "Cannot inspect the worker image.")
 		}
@@ -551,10 +547,10 @@ func (h Host) markReplaced(ctx context.Context, key string, prior replacedImage)
 		}
 		entry.ID = info.ID
 	}
-	entries := slices.DeleteFunc(h.readReplaced(key), func(e replacedImage) bool { return e.ID == prior.ID && e.At.Equal(prior.At) })
+	entries := slices.DeleteFunc(h.readReplaced(r, key), func(e replacedImage) bool { return e.ID == prior.ID && e.At.Equal(prior.At) })
 	data, err := json.Marshal(append(entries, entry))
 	if err == nil {
-		err = writePrivate(h.replacedPath(key), data)
+		err = writePrivate(r.replacedPath(key), data)
 	}
 	if err != nil {
 		return replacedImage{}, protocol.New(protocol.BuildFailed, "Cannot record the replaced image in ~/.ensemble/docker/images.")
@@ -563,11 +559,11 @@ func (h Host) markReplaced(ctx context.Context, key string, prior replacedImage)
 }
 
 // buildDefinition builds ~/.ensemble/docker/worker's snapshot in tmp as userImage and returns its agent's ids.
-func (h Host) buildDefinition(ctx context.Context, tmp, key, userImage string) (string, string, error) {
-	if _, err := h.Docker.Run(ctx, []string{"build", "--progress=plain", "--no-cache", "--label", "ensemble.key=" + key, "--tag", userImage, filepath.Join(tmp, "user")}, nil); err != nil {
+func (h Host) buildDefinition(ctx context.Context, d Daemon, tmp, key, userImage string) (string, string, error) {
+	if _, err := d.Runner.Run(ctx, []string{"build", "--progress=plain", "--no-cache", "--label", "ensemble.key=" + key, "--tag", userImage, filepath.Join(tmp, "user")}, nil); err != nil {
 		return "", "", diagnosed(err, protocol.BuildFailed, "Building the worker image definition failed.")
 	}
-	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+	out, err := d.Runner.Run(ctx, []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--entrypoint", "/bin/sh", userImage, "-c", "id -u agent && id -g agent"}, nil)
 	if err != nil {
 		return "", "", failure(err, protocol.BuildFailed, "The worker image has no usable user agent.")
@@ -580,11 +576,11 @@ func (h Host) buildDefinition(ctx context.Context, tmp, key, userImage string) (
 }
 
 // baseImage inspects ref, which must be a local image without reserved labels.
-func (h Host) baseImage(ctx context.Context, ref string) (imageInfo, error) {
+func (h Host) baseImage(ctx context.Context, d Daemon, ref string) (imageInfo, error) {
 	if !ValidBaseImage(ref) {
 		return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+": use a local image tag or sha256 ID.")
 	}
-	info, found, err := h.inspectImage(ctx, ref)
+	info, found, err := h.inspectImage(ctx, d, ref)
 	if err != nil {
 		return imageInfo{}, failure(err, protocol.BuildFailed, "Cannot inspect base image "+ref+".")
 	}
@@ -616,9 +612,9 @@ func (h Host) baseImage(ctx context.Context, ref string) (imageInfo, error) {
 }
 
 // useBase checks ref's image, baseID, meets the ensemble layer's needs, tags it userImage and returns its agent's ids.
-func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (string, string, error) {
+func (h Host) useBase(ctx context.Context, d Daemon, ref, baseID, userImage string) (string, string, error) {
 	unexpected := protocol.New(protocol.BuildFailed, "Checking base image "+ref+" gave unexpected output.")
-	lines, err := h.baseCheck(ctx, ref, baseID, "65534:65534", "agent", "/usr/bin:/bin")
+	lines, err := h.baseCheck(ctx, d, ref, baseID, "65534:65534", "agent", "/usr/bin:/bin")
 	if err != nil {
 		return "", "", err
 	}
@@ -636,7 +632,7 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 	if ids != nil {
 		user = ids[0] + ":" + ids[1]
 	}
-	if lines, err = h.baseCheck(ctx, ref, baseID, user, "tools", checkPath); err != nil {
+	if lines, err = h.baseCheck(ctx, d, ref, baseID, user, "tools", checkPath); err != nil {
 		return "", "", err
 	}
 	for _, line := range lines {
@@ -659,7 +655,7 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 		}
 		return "", "", protocol.New(protocol.BuildFailed, "Base image "+ref+" lacks "+strings.Join(lacks, ", ")+"; add what it lacks to the image, then retry.")
 	}
-	if _, err := h.Docker.Run(ctx, []string{"tag", baseID, userImage}, nil); err != nil {
+	if _, err := d.Runner.Run(ctx, []string{"tag", baseID, userImage}, nil); err != nil {
 		return "", "", diagnosed(err, protocol.BuildFailed, "Tagging base image "+ref+" failed.")
 	}
 	return ids[0], ids[1], nil
@@ -667,12 +663,12 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 
 // baseCheck runs checks/base-check's mode with path in baseID's image as user, offline and without capabilities, and
 // returns its output lines.
-func (h Host) baseCheck(ctx context.Context, ref, baseID, user, mode, path string) ([]string, error) {
+func (h Host) baseCheck(ctx context.Context, d Daemon, ref, baseID, user, mode, path string) ([]string, error) {
 	script, err := checks.ReadFile("checks/base-check")
 	if err != nil {
 		return nil, protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
 	}
-	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+	out, err := d.Runner.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--user", user, "--entrypoint", "/bin/sh", baseID, "-s", mode, path}, script)
 	if err != nil {
 		return nil, diagnosed(err, protocol.BuildFailed, "Checking base image "+ref+" failed.")
@@ -685,14 +681,14 @@ func (h Host) baseCheck(ctx context.Context, ref, baseID, user, mode, path strin
 
 // checkImagePlugins requires each of names to be a plugin directory agent can read in image, its
 // plugin.json naming it.
-func (h Host) checkImagePlugins(ctx context.Context, image string, names []string) error {
+func (h Host) checkImagePlugins(ctx context.Context, d Daemon, image string, names []string) error {
 	script, err := checks.ReadFile("checks/plugin-check.js")
 	if err != nil {
 		return protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
 	}
 	args := append([]string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--user", "agent", "--env", "PATH=" + checkPath, "--entrypoint", "node", image, "-", strings.TrimSuffix(imagePluginRoot, "/")}, names...)
-	out, err := h.Docker.Run(ctx, args, script)
+	out, err := d.Runner.Run(ctx, args, script)
 	if err != nil {
 		return diagnosed(err, protocol.BuildFailed, "Checking in-image plugins failed.")
 	}
@@ -731,19 +727,19 @@ func (h Host) checkImagePlugins(ctx context.Context, image string, names []strin
 // replaced within retagGrace, that no container, running or stopped, uses, noting each to Progress; whatever fails is
 // kept and never fails the build. It holds the image lock, so a build's lease and inspect come wholly before or after
 // it.
-func (h Host) prune(ctx context.Context, key string) {
+func (h Host) prune(ctx context.Context, d Daemon, r records, key string) {
 	unlock, err := h.Lock()
 	if err != nil {
 		h.note("kept older images: cannot take the image lock: " + err.Error())
 		return
 	}
 	defer unlock()
-	used, err := h.usedImages(ctx)
+	used, err := h.usedImages(ctx, d)
 	if err != nil {
 		h.note("kept older images: cannot list containers: " + docker.Diagnostic(err))
 		return
 	}
-	out, err := h.Docker.Run(ctx, []string{"image", "ls", "--no-trunc", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"}, nil)
+	out, err := d.Runner.Run(ctx, []string{"image", "ls", "--no-trunc", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"}, nil)
 	if err != nil {
 		h.note("kept older images: cannot list images: " + docker.Diagnostic(err))
 		return
@@ -751,32 +747,32 @@ func (h Host) prune(ctx context.Context, key string) {
 	for _, line := range strings.Split(string(out), "\n") {
 		ref, id, _ := strings.Cut(line, " ")
 		_, refKey, _ := strings.Cut(ref, ":")
-		if !builtPattern.MatchString(ref) || refKey == key || used[id] || h.kept(refKey) {
+		if !builtPattern.MatchString(ref) || refKey == key || used[id] || h.kept(r, refKey) {
 			continue
 		}
 		// No --force: Docker also refuses an image a container uses.
-		if _, err := h.Docker.Run(ctx, []string{"image", "rm", ref}, nil); err != nil {
+		if _, err := d.Runner.Run(ctx, []string{"image", "rm", ref}, nil); err != nil {
 			h.note("kept " + ref + ": " + docker.Diagnostic(err))
 		} else {
 			h.note("removed " + ref)
 			// A stale lease and none are alike: the lease goes with the first of its key's images.
-			_ = os.Remove(h.leasePath(refKey))
+			_ = os.Remove(r.leasePath(refKey))
 			if strings.HasPrefix(ref, "ensemble-worker:") {
-				_ = os.Remove(h.recordPath(refKey))
-				_ = os.Remove(h.replacedPath(refKey))
+				_ = os.Remove(r.recordPath(refKey))
+				_ = os.Remove(r.replacedPath(refKey))
 			}
 		}
 	}
 	replaced := map[string]bool{}
-	entries, _ := os.ReadDir(h.images)
+	entries, _ := os.ReadDir(r.dir)
 	for _, entry := range entries {
 		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "replaced" {
-			for _, r := range h.readReplaced(m[1]) {
-				replaced[r.ID] = true
+			for _, e := range h.readReplaced(r, m[1]) {
+				replaced[e.ID] = true
 			}
 		}
 	}
-	out, err = h.Docker.Run(ctx, []string{"image", "ls", "--quiet", "--no-trunc", "--filter", "dangling=true", "--filter", "label=ensemble.key"}, nil)
+	out, err = d.Runner.Run(ctx, []string{"image", "ls", "--quiet", "--no-trunc", "--filter", "dangling=true", "--filter", "label=ensemble.key"}, nil)
 	if err != nil {
 		h.note("kept untagged images: cannot list them: " + docker.Diagnostic(err))
 		return
@@ -785,7 +781,7 @@ func (h Host) prune(ctx context.Context, key string) {
 		if used[id] || replaced[id] {
 			continue
 		}
-		if _, err := h.Docker.Run(ctx, []string{"image", "rm", id}, nil); err != nil {
+		if _, err := d.Runner.Run(ctx, []string{"image", "rm", id}, nil); err != nil {
 			h.note("kept " + id + ": " + docker.Diagnostic(err))
 		} else {
 			h.note("removed " + id)
@@ -800,13 +796,13 @@ func (h Host) note(s string) {
 }
 
 // usedImages is the set of image IDs every container, running or stopped, was created from.
-func (h Host) usedImages(ctx context.Context) (map[string]bool, error) {
-	out, err := h.Docker.Run(ctx, []string{"container", "ls", "--all", "--quiet", "--no-trunc"}, nil)
+func (h Host) usedImages(ctx context.Context, d Daemon) (map[string]bool, error) {
+	out, err := d.Runner.Run(ctx, []string{"container", "ls", "--all", "--quiet", "--no-trunc"}, nil)
 	ids := strings.Fields(string(out))
 	if err != nil || len(ids) == 0 {
 		return nil, err
 	}
-	out, err = h.Docker.Run(ctx, append([]string{"container", "inspect", "--format", "{{.Image}}"}, ids...), nil)
+	out, err = d.Runner.Run(ctx, append([]string{"container", "inspect", "--format", "{{.Image}}"}, ids...), nil)
 	used := map[string]bool{}
 	for _, id := range strings.Fields(string(out)) {
 		used[id] = true

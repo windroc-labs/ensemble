@@ -664,12 +664,12 @@ func TestTokenNeverLeaves(t *testing.T) {
 	for _, fail := range []string{"", "/usr/bin/python3", "credential-batch.py"} {
 		d := &scripted{fail: fail, output: []byte(`{"completed":1}`)}
 		h := launcher.Host{
-			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
-			IsDir:  func(string) bool { return true },
-			Safe:   func(string) error { return nil },
-			Docker: d,
-			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
-			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
+			Home:    home,
+			Daemons: []launcher.Daemon{{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Runner: d}},
+			IsDir:   func(string) bool { return true },
+			Safe:    func(string) error { return nil },
+			Creds:   broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
+			GitHub:  broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
@@ -824,11 +824,12 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		}
 		const home = "/Users/example"
 		h := launcher.Host{
-			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
-			IsDir:  func(string) bool { return true },
-			Safe:   func(string) error { return nil },
-			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n", output: []byte(`{"completed":2}`)},
-			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
+			Home: home,
+			Daemons: []launcher.Daemon{{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
+				Runner: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n", output: []byte(`{"completed":2}`)}}},
+			IsDir: func(string) bool { return true },
+			Safe:  func(string) error { return nil },
+			Creds: broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
 			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
 			Audit: rec, Linear: noLinear{},
@@ -839,7 +840,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case "maintain":
 			_, err = h.Maintain(context.Background(), c, path, true)
 		case "close":
-			_, err = h.Close(context.Background(), c)
+			_, err = h.Close(context.Background(), h.Daemons[0], c)
 		}
 		rec.Flush(err)
 		if err != nil {
@@ -1177,4 +1178,40 @@ func TestCloseAndWorkspaceRmOnTheLocalDaemon(t *testing.T) {
 			t.Fatalf("%q: exit %d, want usage", args, code)
 		}
 	}
+}
+
+func TestWithHostDaemons(t *testing.T) {
+	home := t.TempDir()
+	d, clean, err := docker.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clean()
+	local := launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock"}
+	if got := daemons(d); len(got) != 1 || got[0].Runner != d || withoutRunner(got[0]) != local {
+		t.Fatalf("no target: %+v", got)
+	}
+	target := filepath.Join(home, docker.TargetFile)
+	if err := os.WriteFile(target, []byte(`{"host":"ssh://u@pc","local_secrets":["ensemble-broker-env/mini-op-password"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, clean, err = docker.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clean()
+	got := daemons(d)
+	remote := launcher.Daemon{Name: launcher.DaemonRemote, Endpoint: "ssh://u@pc", Remote: true}
+	if len(got) != 2 || got[0].Runner != d || withoutRunner(got[0]) != remote || got[1].Runner == nil || withoutRunner(got[1]) != local {
+		t.Fatalf("remote target: %+v", got)
+	}
+	place := launcher.Placement(got, d.Target().LocalSecrets)
+	if place([]string{"ensemble-broker-env/mini-op-password"}).Name != launcher.DaemonLocal || place(nil).Name != launcher.DaemonRemote {
+		t.Fatal("a local secret is not placed on the local daemon")
+	}
+}
+
+func withoutRunner(d launcher.Daemon) launcher.Daemon {
+	d.Runner = nil
+	return d
 }

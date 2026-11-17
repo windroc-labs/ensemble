@@ -72,18 +72,27 @@ type LinearTokens interface {
 	Revoke(context.Context, string) error
 }
 
-// Daemon is one Docker daemon a command can work on.
+// The configured daemons' names: the local Docker Desktop, always present, and the remote target, when set.
+const (
+	DaemonLocal  = "local"
+	DaemonRemote = "remote"
+)
+
+// Daemon is one configured Docker daemon, built once per command; ID is set only by identify.
 type Daemon struct {
-	Docker   docker.Runner
+	Name     string
+	ID       string
 	Endpoint string
+	Remote   bool
+	Runner   docker.Runner
 }
 
 type Host struct {
 	Home     string
-	Endpoint string
 	IsDir    func(string) bool
 	Safe     func(string) error
-	Docker   docker.Runner
+	Daemons  []Daemon                    // every configured daemon, the default first; never empty
+	Place    func(items []string) Daemon // the daemon a worker given environment secret items runs on; nil: the default
 	Creds    Credentials
 	Codex    CodexCredentials
 	Opencode ProviderKeys
@@ -98,39 +107,38 @@ type Host struct {
 	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
 	Now      func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
-	// Local is the local Docker Desktop beside a remote target (Docker, Endpoint); nil: the target is the local Docker
-	// Desktop. A worker given any of LocalSecrets, environment secret items, runs on Local.
-	Local        *Daemon
-	LocalSecrets []string
-
-	daemon, images string  // the target daemon's ID and its image records' dir, set by onDaemon
-	peer           *Daemon // the configured daemon a placed command does not work on; nil: none
 }
 
-// place is h working on the daemon a worker given environment secret items secrets runs on: Local for any of
-// LocalSecrets, else the target; the other one becomes its peer. Without Local there is one daemon: h.
-func (h Host) place(secrets []string) Host {
-	if h.Local == nil {
-		return h
+// Placement is the rule a worker's daemon follows: one given any of localSecrets, environment secret items, runs on
+// the local daemon when another is configured beside it; every other runs on the default, daemons[0].
+func Placement(daemons []Daemon, localSecrets []string) func(items []string) Daemon {
+	return func(items []string) Daemon {
+		if len(daemons) > 1 && slices.ContainsFunc(items, func(item string) bool { return slices.Contains(localSecrets, item) }) {
+			if local, ok := named(daemons, DaemonLocal); ok {
+				return local
+			}
+		}
+		return daemons[0]
 	}
-	target := &Daemon{Docker: h.Docker, Endpoint: h.Endpoint}
-	if slices.ContainsFunc(secrets, func(item string) bool { return slices.Contains(h.LocalSecrets, item) }) {
-		h.Docker, h.Endpoint, h.peer = h.Local.Docker, h.Local.Endpoint, target
-	} else {
-		h.peer = h.Local
-	}
-	h.Local, h.daemon, h.images = nil, "", ""
-	return h
 }
 
-// OnLocal is h working on the local Docker Desktop: Local, or the target when that is the local Docker Desktop.
-func (h Host) OnLocal() Host {
-	if h.Local == nil {
-		return h
+// placed is the daemon a worker given environment secret items runs on.
+func (h Host) placed(items []string) Daemon {
+	if h.Place == nil {
+		return h.Daemons[0]
 	}
-	h.Docker, h.Endpoint = h.Local.Docker, h.Local.Endpoint
-	h.Local, h.daemon, h.images = nil, "", ""
-	return h
+	return h.Place(items)
+}
+
+// Named is the configured daemon called name.
+func (h Host) Named(name string) (Daemon, bool) { return named(h.Daemons, name) }
+
+func named(daemons []Daemon, name string) (Daemon, bool) {
+	i := slices.IndexFunc(daemons, func(d Daemon) bool { return d.Name == name })
+	if i < 0 {
+		return Daemon{}, false
+	}
+	return daemons[i], true
 }
 
 // secretItems are secrets' keychain items.
@@ -144,17 +152,16 @@ func secretItems(secrets []Secret) []string {
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens
 // also reports to.
-func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens Tokens, rec *audit.Recorder) Host {
+func NewHost(home string, daemons []Daemon, creds Credentials, tokens Tokens, rec *audit.Recorder) Host {
 	return Host{
 		Home:     home,
-		Endpoint: endpoint,
+		Daemons:  daemons,
 		Creds:    creds,
 		GitHub:   tokens,
 		Audit:    rec,
 		IsDir:    isDir,
 		Safe:     realSafe,
 		Schedule: StateSchedule{Home: home, Safe: realSafe},
-		Docker:   d,
 		Versions: codex.New(),
 		Releases: releases.New(),
 		Spawn:    func() error { return spawnCheck(home) },
