@@ -23,11 +23,16 @@ from ensemble.session.clients.codex.common import (
     launch_flags,
     mcp_off,
     read_metadata,
+    read_session,
+    session_paths,
+    session_size,
     snapshot_data,
     validate_snapshot,
 )
+from ensemble.session.clients.codex.common.types import Snapshot
 from ensemble.session.engine.types import Access, ConfigError, SessionInfo, SessionStatus
 from ensemble.utils import docker_home
+from tests.session.case import Case
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1269,6 +1274,81 @@ class CodecTest(Base):
             with self.subTest(parent=parent, origin=origin):
                 metadata = read_metadata(str(path)).metadata
                 self.assertEqual(metadata, NativeMetadata(NATIVE, str(self.cwd), expected))
+
+
+class DockerSessionFilesTest(Case):
+    """A Docker session's Codex home: its session files read through the client-state interface."""
+
+    def setUp(self):
+        self.codex_home = docker_home("w", "codex")
+        self.cwd = os.path.realpath(scratch(self))
+        self.day = os.path.join(self.codex_home, "sessions", "2026", "11", "17")
+        os.makedirs(self.day)
+        self.rollout = os.path.join(self.day, f"rollout-2026-11-17T00-00-00-{NATIVE}.jsonl")
+        meta = {"type": "session_meta", "payload": {"id": NATIVE, "cwd": self.cwd}}
+        with open(self.rollout, "w", encoding="utf-8") as f:
+            f.write(json.dumps(meta) + "\n" + '{"type": "x"}\n')
+        os.utime(self.rollout, (100, 200))
+        self.snapshot = Snapshot(
+            cwd=self.cwd,
+            project=False,
+            dirs=(),
+            commands=(),
+            model=None,
+            effort=None,
+            codex_home=self.codex_home,
+            flags=(),
+            env={},
+        )
+
+    def test_session_files_are_listed_and_their_metadata_read(self):
+        self.assertEqual(session_paths(self.snapshot, NATIVE), [self.rollout])
+        found = read_metadata(self.rollout)
+        self.assertEqual((found.path, found.mtime), (self.rollout, 200))
+        self.assertEqual(found.metadata, NativeMetadata(NATIVE, self.cwd, None))
+
+    def test_linked_day_dirs_and_rollouts_are_not_followed(self):
+        outside = os.path.join(scratch(self), "outside")
+        os.makedirs(os.path.join(outside, "18"))
+        os.symlink(os.path.join(outside, "18"), os.path.join(os.path.dirname(self.day), "18"))
+        link = os.path.join(self.day, f"rollout-link-{CHILD}.jsonl")
+        os.symlink(self.rollout, link)
+        self.assertEqual(session_paths(self.snapshot), sorted([self.rollout, link]))
+        with self.assertRaisesRegex(RecoveryError, "^cannot read Codex session file"):
+            read_metadata(link)
+        self.assertIsNone(read_session(link))
+        self.assertEqual(session_size(link), 0)
+
+    def test_a_missing_sessions_dir_or_file(self):
+        empty = replace(self.snapshot, codex_home=docker_home("v", "codex"))
+        self.assertEqual(session_paths(empty), [])
+        with self.assertRaises(FileNotFoundError):
+            read_metadata(os.path.join(self.day, f"rollout-gone-{CHILD}.jsonl"))
+
+    def test_a_directory_named_as_a_rollout_is_not_regular(self):
+        path = os.path.join(self.day, f"rollout-dir-{CHILD}.jsonl")
+        os.mkdir(path)
+        with self.assertRaisesRegex(RecoveryError, "^not a regular Codex session file"):
+            read_metadata(path)
+
+    def test_rollout_bytes_and_size(self):
+        data = read_session(self.rollout)
+        assert data is not None
+        self.assertEqual(session_size(self.rollout), len(data))
+        self.assertEqual(read_session(self.rollout, offset=len(data) - 14), b'{"type": "x"}\n')
+        self.assertEqual(read_session(self.rollout, offset=0, limit=1), b"{")
+        local = os.path.join(scratch(self), "local.jsonl")
+        with open(local, "wb") as f:
+            f.write(b"abc")
+        self.assertEqual((read_session(local), session_size(local)), (b"abc", None))
+
+    def test_another_clients_docker_home_is_refused(self):
+        path = os.path.join(docker_home("w", "claude"), "r.jsonl")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "wb") as f:
+            f.write(b"x")
+        self.assertIsNone(read_session(path))
+        self.assertEqual(session_size(path), 0)
 
 
 SECRETS = {"CFG_TOKEN": "cfg-secret-1", "ACCESS_TOKEN": "access-secret-2", "SPEC_TOKEN": "spec-3"}

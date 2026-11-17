@@ -18,12 +18,14 @@ from ensemble.session.clients import replies as shared
 from ensemble.session.clients.codex.common import (
     RecoveryError,
     SessionStore,
+    read_session,
     session_file,
+    session_size,
 )
 from ensemble.session.clients.codex.tui import records
 from ensemble.session.clients.replies import LIFETIME, Clock, Sleep, locked
 from ensemble.session.engine.types import HookCall
-from ensemble.utils import json_records, open_beneath, read_beneath, save
+from ensemble.utils import json_records, open_beneath, save
 
 PENDING_MAX = 16
 CLAIMED_MAX = 64
@@ -128,6 +130,8 @@ def _load(path: str) -> dict:
 
 
 def _size(path: str) -> int:
+    if (size := session_size(path)) is not None:
+        return size
     try:
         fd = open_beneath("/", path)
     except OSError:
@@ -177,7 +181,7 @@ def scan(state: dict, *, final: str = "", budget: int) -> dict[str, Any]:
         found = steers[steer["n"]] = {**steer, "answer": None}
         start = max(turn["start"], steer["cursor"])
         limit = min(SCAN_MAX, budget)
-        data = read_beneath("/", state["rollout"], offset=start, limit=limit) if limit else None
+        data = read_session(state["rollout"], offset=start, limit=limit) if limit else None
         if not data:
             continue
         budget -= len(data)
