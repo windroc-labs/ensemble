@@ -129,7 +129,7 @@ func (w *lockWorld) host(t *testing.T, name string) (Host, string, *fakeDocker) 
 		}
 		return base.respond(args, stdin)
 	}}
-	h.Docker = d
+	h = withRunner(h, d)
 	path := editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = name, "ensemble-ws-"+name, "dummy", name
 		f["claude_dir"] = w.home + "/.ensemble/docker-state/" + name + "/claude"
@@ -434,23 +434,26 @@ func lockOnly(w *lockWorld) *fakeDocker {
 	}}
 }
 
-func TestLockHeldOnPeerDaemonIsBusy(t *testing.T) {
-	localEndpoint := "unix://" + home + "/.docker/run/docker.sock"
+// A lock spans every configured daemon: a start checks the one it is placed on, then each other one.
+func TestLockIteratesDaemons(t *testing.T) {
+	t.Run("held on the other daemon", lockHeldOnOtherDaemon)
+	t.Run("other daemon unreachable", lockOtherDaemonUnreachable)
+}
+
+func lockHeldOnOtherDaemon(t *testing.T) {
 	for _, holderLocal := range []bool{true, false} {
 		holding, starting := newLockWorld(), newLockWorld()
 		holding.add("ensemble-holder-1", "running", map[string]string{lockLabel: "dummy", ownerLabel: "holder"})
 		h, _, _ := starting.host(t, "worker_1")
 		h.Env = &fakeEnv{}
-		started := h.Docker
+		started := h.Daemons[0].Runner
 		var secrets []any
 		if holderLocal {
-			h.Local = &Daemon{Docker: lockOnly(holding), Endpoint: localEndpoint}
+			h = onTwo(h, started, lockOnly(holding))
 		} else {
-			h.Docker = lockOnly(holding)
-			h.Local = &Daemon{Docker: started, Endpoint: localEndpoint}
+			h = onTwo(h, lockOnly(holding), started)
 			secrets = []any{secret(miniPassword, "mini-password")}
 		}
-		h.Endpoint, h.LocalSecrets = remoteEndpoint, []string{miniPassword}
 		_, err := h.Start(context.Background(), lockedManifest(t, starting.home, secrets))
 		e := protoErr(t, err)
 		peer := remoteEndpoint
@@ -465,7 +468,7 @@ func TestLockHeldOnPeerDaemonIsBusy(t *testing.T) {
 	}
 }
 
-func TestLockPeerUnreachableIsDockerUnreachable(t *testing.T) {
+func lockOtherDaemonUnreachable(t *testing.T) {
 	w := &world{labels: goodLabels()}
 	h, local := startHost(w, &fakeCreds{})
 	base := local.respond
@@ -477,8 +480,7 @@ func TestLockPeerUnreachableIsDockerUnreachable(t *testing.T) {
 	}
 	h.Env = &fakeEnv{}
 	remote := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	h.Local = &Daemon{Docker: local, Endpoint: h.Endpoint}
-	h.Docker, h.Endpoint, h.LocalSecrets = remote, remoteEndpoint, []string{miniPassword}
+	h = onTwo(h, remote, local)
 	h.Home = t.TempDir()
 	_, err := h.Start(context.Background(), lockedManifest(t, h.Home, []any{secret(miniPassword, "mini-password")}))
 	e := protoErr(t, err)

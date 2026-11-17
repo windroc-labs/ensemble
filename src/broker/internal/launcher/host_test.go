@@ -4,8 +4,48 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"ensemble/broker/internal/docker"
 )
+
+const localEndpoint = "unix://" + home + "/.docker/run/docker.sock"
+
+// one is the single configured daemon, the local Docker Desktop, run by r.
+func one(r docker.Runner) []Daemon {
+	return []Daemon{{Name: DaemonLocal, Endpoint: localEndpoint, Runner: r}}
+}
+
+// withRunner is h with its default daemon run by r, h's own list untouched.
+func withRunner(h Host, r docker.Runner) Host {
+	if len(h.Daemons) == 0 {
+		h.Daemons = one(r)
+		return h
+	}
+	h.Daemons = slices.Clone(h.Daemons)
+	h.Daemons[0].Runner = r
+	return h
+}
+
+// atEndpoint is h with its default daemon at endpoint, remote when it is an ssh:// one.
+func atEndpoint(h Host, endpoint string) Host {
+	h.Daemons = slices.Clone(h.Daemons)
+	h.Daemons[0].Endpoint, h.Daemons[0].Remote = endpoint, strings.HasPrefix(endpoint, "ssh://")
+	return h
+}
+
+// onTwo is h with a remote target run by remote, its default, beside the local Docker Desktop run by local, placing
+// a worker given miniPassword on local.
+func onTwo(h Host, remote, local docker.Runner) Host {
+	h.Daemons = []Daemon{
+		{Name: DaemonRemote, Endpoint: remoteEndpoint, Remote: true, Runner: remote},
+		{Name: DaemonLocal, Endpoint: localEndpoint, Runner: local},
+	}
+	h.Place = Placement(h.Daemons, []string{miniPassword})
+	return h
+}
 
 func writeLog(t *testing.T, path string, size int) {
 	t.Helper()

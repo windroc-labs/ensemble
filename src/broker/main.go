@@ -407,12 +407,26 @@ func workspaceOptions(args []string) *workspaceArgs {
 	return nil
 }
 
-// on is h on the local Docker Desktop when local, else on the target.
-func on(h launcher.Host, local bool) launcher.Host {
-	if local {
-		return h.OnLocal()
+// on is h's local daemon when local, else its default one.
+func on(h launcher.Host, local bool) launcher.Daemon {
+	if d, ok := h.Named(launcher.DaemonLocal); local && ok {
+		return d
 	}
-	return h
+	return h.Daemons[0]
+}
+
+// daemons are d's configured daemons, the default first: its target, then, beside a remote target, the local Docker
+// Desktop.
+func daemons(d *docker.CLI) []launcher.Daemon {
+	name := launcher.DaemonLocal
+	if d.Target().Remote() {
+		name = launcher.DaemonRemote
+	}
+	list := []launcher.Daemon{{Name: name, Endpoint: d.Endpoint(), Remote: d.Target().Remote(), Runner: d}}
+	if local := d.Local(); local != nil {
+		list = append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: local.Endpoint(), Runner: local})
+	}
+	return list
 }
 
 func emit(stdout io.Writer, v any) int {
@@ -448,11 +462,9 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 		}
 		defer clean()
 		d.Progress = progress
-		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
-		if local := d.Local(); local != nil {
-			h.Local = &launcher.Daemon{Docker: local, Endpoint: local.Endpoint()}
-		}
-		h.LocalSecrets = d.Target().LocalSecrets
+		list := daemons(d)
+		h := launcher.NewHost(home, list, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		h.Place = launcher.Placement(list, d.Target().LocalSecrets)
 		h.Codex = broker.NewCodex(home, k, nil)
 		h.Opencode = broker.OpencodeKeys{Keychain: k}
 		h.Env = broker.EnvKeys{Keychain: k}
@@ -515,11 +527,11 @@ func system() app {
 			})
 		},
 		close: func(ctx context.Context, k keys, container string, local bool) (any, error) {
-			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return on(h, local).Close(ctx, container) })
+			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, on(h, local), container) })
 		},
 		workspaceRm: func(ctx context.Context, k keys, volume string, force, local bool) (any, error) {
 			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) {
-				return on(h, local).WorkspaceRm(ctx, volume, force)
+				return h.WorkspaceRm(ctx, on(h, local), volume, force)
 			})
 		},
 		login: func(k keys, account string, out io.Writer) error {

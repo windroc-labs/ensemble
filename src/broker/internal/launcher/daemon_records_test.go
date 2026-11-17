@@ -78,11 +78,11 @@ func TestPruneKeepsAnotherDaemonsRecords(t *testing.T) {
 	e.daemon = otherDaemon
 	e.images = "ensemble-worker:" + key + " sha256:" + strings.Repeat("c", 64)
 	h := e.lookupHost()
-	_, r, err := h.identify(context.Background(), protocol.BuildFailed)
+	d, r, err := h.identify(context.Background(), h.Daemons[0], protocol.BuildFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.prune(context.Background(), r, "")
+	h.prune(context.Background(), d, r, "")
 	if removed := e.fake.removed(); len(removed) != 1 || removed[0] != "ensemble-worker:"+key {
 		t.Fatalf("removed %q, want the other daemon's unleased image", removed)
 	}
@@ -138,14 +138,14 @@ func TestDefaultImageIgnoresAnotherDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	var inspected []string
-	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+	h = withRunner(h, &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		inspected = append(inspected, ref)
 		labels := goodLabels()
 		labels["ensemble.key"] = strings.TrimPrefix(ref, "ensemble-worker:")
 		return inspectJSON("sha256:"+strings.Repeat("a", 64), labels, time.Time{}), nil
-	}}
-	if _, err := h.defaultImage(context.Background(), testRecords(h.Home), "ensemble-worker:"+imageKey); err != nil {
+	}})
+	if _, err := h.defaultImage(context.Background(), h.Daemons[0], testRecords(h.Home), "ensemble-worker:"+imageKey); err != nil {
 		t.Fatal(err)
 	}
 	for _, ref := range inspected {

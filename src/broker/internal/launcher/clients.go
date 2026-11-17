@@ -134,17 +134,18 @@ func (r records) recordPath(key string) string { return r.path(key + ".json") }
 
 func (r records) replacedPath(key string) string { return r.path(key + ".replaced") }
 
-// identify is the daemon's ID and its image records; failures are code, an unreachable target docker_unreachable.
-func (h Host) identify(ctx context.Context, code protocol.Code) (string, records, error) {
-	out, err := h.Docker.Run(ctx, []string{"info", "--format", "{{json .ID}}"}, nil)
+// identify is d with its ID, and its image records; failures are code, an unreachable daemon docker_unreachable.
+func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemon, records, error) {
+	out, err := d.Runner.Run(ctx, []string{"info", "--format", "{{json .ID}}"}, nil)
 	if err != nil {
-		return "", records{}, failure(err, code, "Cannot read the Docker daemon's ID.")
+		return Daemon{}, records{}, failure(err, code, "Cannot read the Docker daemon's ID.")
 	}
 	var id string
 	if json.Unmarshal(bytes.TrimSpace(out), &id) != nil || !daemonPattern.MatchString(id) {
-		return "", records{}, protocol.Newf(code, "The Docker daemon's ID %.80q is not usable.", strings.TrimSpace(string(out)))
+		return Daemon{}, records{}, protocol.Newf(code, "The Docker daemon's ID %.80q is not usable.", strings.TrimSpace(string(out)))
 	}
-	return id, records{filepath.Join(h.dockerPath("images"), id)}, nil
+	d.ID = id
+	return d, records{filepath.Join(h.dockerPath("images"), id)}, nil
 }
 
 func (h Host) now() time.Time {
@@ -244,8 +245,8 @@ func (h Host) checkLock() (unlock func(), held bool, err error) {
 }
 
 // CheckClients rebuilds, under its own key, every recorded variant a build used within variantLease whose image's
-// clients differ from the latest releases, then prunes: on the target, then on Local. A daemon's failure does not stop
-// the other's check; the first failure is the result's error. Another check running: it does nothing.
+// clients differ from the latest releases, then prunes, on each configured daemon in turn. A daemon's failure does not
+// stop the others' checks; the first failure is the result's error. Another check running: it does nothing.
 func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	unlock, held, err := h.checkLock()
 	if err != nil {
@@ -255,29 +256,29 @@ func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 		return CheckResult{Rebuilt: []string{}}, nil
 	}
 	defer unlock()
-	result, err := h.checkDaemon(ctx)
-	if h.Local == nil {
-		return result, err
+	result := CheckResult{Rebuilt: []string{}}
+	var first error
+	for _, d := range h.Daemons {
+		checked, err := h.checkDaemon(ctx, d)
+		if result.Latest == (ClientVersions{}) {
+			result.Latest = checked.Latest
+		}
+		result.Rebuilt = append(result.Rebuilt, checked.Rebuilt...)
+		if first == nil {
+			first = err
+		}
 	}
-	local, localErr := h.OnLocal().checkDaemon(ctx)
-	if result.Latest == (ClientVersions{}) {
-		result.Latest = local.Latest
-	}
-	result.Rebuilt = append(append([]string{}, result.Rebuilt...), local.Rebuilt...)
-	if err == nil {
-		err = localErr
-	}
-	return result, err
+	return result, first
 }
 
-// checkDaemon is CheckClients on h's daemon alone.
-func (h Host) checkDaemon(ctx context.Context) (CheckResult, error) {
-	id, r, err := h.identify(ctx, protocol.BuildFailed)
+// checkDaemon is CheckClients on d alone.
+func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
+	d, r, err := h.identify(ctx, d, protocol.BuildFailed)
 	if err != nil {
 		return CheckResult{}, err
 	}
-	defer h.prune(ctx, r, "")
-	stateFailed := protocol.New(protocol.BuildFailed, "Cannot write the client check state ~/.ensemble/docker/images/"+id+"/clients-check.json.")
+	defer h.prune(ctx, d, r, "")
+	stateFailed := protocol.New(protocol.BuildFailed, "Cannot write the client check state ~/.ensemble/docker/images/"+d.ID+"/clients-check.json.")
 	state, _ := readCheckState(r)
 	state.CheckedAt = h.now()
 	if err := writeCheckState(r, state); err != nil {
@@ -299,7 +300,7 @@ func (h Host) checkDaemon(ctx context.Context) (CheckResult, error) {
 		if m == nil || m[2] != "json" {
 			continue
 		}
-		rebuilt, failed := h.checkVariant(ctx, r, m[1], latest)
+		rebuilt, failed := h.checkVariant(ctx, d, r, m[1], latest)
 		if rebuilt {
 			result.Rebuilt = append(result.Rebuilt, "ensemble-worker:"+m[1])
 		}
@@ -319,7 +320,7 @@ func (h Host) checkDaemon(ctx context.Context) (CheckResult, error) {
 
 // checkVariant rebuilds key's variant at latest when its image's clients differ, returning the failure's protocol
 // message, never Docker's diagnostic, so a persistent failure keeps one text. A stale record is deleted.
-func (h Host) checkVariant(ctx context.Context, r records, key string, latest ClientVersions) (rebuilt bool, failed string) {
+func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string, latest ClientVersions) (rebuilt bool, failed string) {
 	image := "ensemble-worker:" + key
 	drop := func(why string) (bool, string) {
 		_ = os.Remove(r.recordPath(key))
@@ -333,7 +334,7 @@ func (h Host) checkVariant(ctx context.Context, r records, key string, latest Cl
 	if !h.inUse(r, key) {
 		return false, ""
 	}
-	info, found, err := h.inspectImage(ctx, image)
+	info, found, err := h.inspectImage(ctx, d, image)
 	if err != nil {
 		return false, failure(err, protocol.BuildFailed, "Cannot inspect the worker image.").Message
 	}
@@ -348,14 +349,14 @@ func (h Host) checkVariant(ctx context.Context, r records, key string, latest Cl
 		return false, "Cannot create a build directory."
 	}
 	defer os.RemoveAll(tmp)
-	p, err := h.prepare(ctx, v.Package, BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}, tmp)
+	p, err := h.prepare(ctx, d, v.Package, BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}, tmp)
 	if err != nil {
 		return drop(message(err))
 	}
 	if p.key != key {
 		return drop("its inputs now make another key")
 	}
-	if _, err := h.rebuild(ctx, r, tmp, key, p.version, p.dirs, p.spec, p.baseID, latest); err != nil {
+	if _, err := h.rebuild(ctx, d, r, tmp, key, p.version, p.dirs, p.spec, p.baseID, latest); err != nil {
 		return false, message(err)
 	}
 	return true, ""

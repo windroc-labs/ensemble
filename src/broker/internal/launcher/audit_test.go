@@ -270,9 +270,9 @@ func TestCloseLine(t *testing.T) {
 				}
 				return []byte(tc.rm + "\n"), nil
 			}}
-			h := Host{Docker: d, GitHub: &fakeTokens{}, Linear: &fakeLinear{}}
+			h := Host{Daemons: one(d), GitHub: &fakeTokens{}, Linear: &fakeLinear{}}
 			rec, path := audited(t, &h, "close", container)
-			got, err := h.Close(context.Background(), container)
+			got, err := h.Close(context.Background(), h.Daemons[0], container)
 			rec.Flush(err)
 			if err != nil || got.Removed != (tc.rm != "") {
 				t.Fatalf("%+v %v", got, err)
@@ -301,7 +301,7 @@ func TestNoSecretsInLog(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.Audit = &audit.Recorder{Command: "close", Container: container, Log: audit.Log{Path: path}}
-		_, err = h.Close(context.Background(), container)
+		_, err = h.Close(context.Background(), h.Daemons[0], container)
 		h.Audit.Flush(err)
 	}
 	data, err := os.ReadFile(path)

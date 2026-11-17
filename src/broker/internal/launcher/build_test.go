@@ -152,7 +152,7 @@ func TestPrepareUmask(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := h.prepare(context.Background(), e.pkg, spec, tmp)
+			p, err := h.prepare(context.Background(), h.Daemons[0], e.pkg, spec, tmp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -430,24 +430,26 @@ func newBuildEnv(t *testing.T) *buildEnv {
 // knownHost is a Host on a daemon whose ID is already looked up, as a start's is: its Build and prune use r.
 type knownHost struct {
 	Host
+	d Daemon
 	r records
 }
 
 func (k knownHost) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
-	return k.build(ctx, k.r, pkg, spec, maxAge)
+	return k.build(ctx, k.d, k.r, pkg, spec, maxAge)
 }
 
-func (k knownHost) prune(ctx context.Context, key string) { k.Host.prune(ctx, k.r, key) }
+func (k knownHost) prune(ctx context.Context, key string) { k.Host.prune(ctx, k.d, k.r, key) }
 
 // host is e's Host on e.daemon, its ID already looked up; lookupHost looks it up.
 func (e *buildEnv) host() knownHost {
-	return knownHost{e.lookupHost(), e.records()}
+	h := e.lookupHost()
+	return knownHost{h, h.Daemons[0], e.records()}
 }
 
 func (e *buildEnv) records() records { return records{e.imagesDir()} }
 
 func (e *buildEnv) lookupHost() Host {
-	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock, Releases: e.releases}
+	return Host{Home: e.home, Daemons: one(e.fake), Progress: &e.progress, Lock: e.lock, Releases: e.releases}
 }
 
 // lock is a non-reentrant image lock: taking it while held fails, as a second process would wait.

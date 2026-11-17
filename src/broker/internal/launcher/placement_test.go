@@ -20,11 +20,7 @@ const (
 func twoDaemons(remote, local *world, env *fakeEnv) (Host, *fakeDocker, *fakeDocker) {
 	h, rd, _ := envHost(remote, env)
 	ld := local.docker()
-	localEndpoint := h.Endpoint
-	h.Endpoint = remoteEndpoint
-	h.Local = &Daemon{Docker: ld, Endpoint: localEndpoint}
-	h.LocalSecrets = []string{miniPassword}
-	return h, rd, ld
+	return onTwo(h, rd, ld), rd, ld
 }
 
 func localWorld() *world {
@@ -42,7 +38,7 @@ func TestStartLocalSecretRunsOnLocalDaemon(t *testing.T) {
 	if len(rd.calls) != 0 {
 		t.Fatalf("docker calls on the target: %q", rd.calls)
 	}
-	if result.Endpoint != h.Local.Endpoint || result.Daemon != localDaemon {
+	if result.Endpoint != localEndpoint || result.Daemon != localDaemon {
 		t.Fatalf("reply %s %s, want the local daemon", result.Endpoint, result.Daemon)
 	}
 	if !hasCall(ld, "run") || len(startCommands(t, ld)) != 3 {
@@ -87,11 +83,26 @@ func TestLocalPlacedStartGetsLocalProxyHint(t *testing.T) {
 	}
 }
 
-func TestPlaceOnlyWithALocalDaemon(t *testing.T) {
-	h, _, _ := envHost(&world{labels: goodLabels()}, &fakeEnv{})
-	h.LocalSecrets = []string{miniPassword}
-	if placed := h.place([]string{miniPassword}); placed.Endpoint != h.Endpoint || placed.peer != nil {
-		t.Fatalf("placed %s with peer %v on a local target", placed.Endpoint, placed.peer)
+func TestPlacement(t *testing.T) {
+	remote := Daemon{Name: DaemonRemote, Endpoint: remoteEndpoint, Remote: true}
+	local := Daemon{Name: DaemonLocal, Endpoint: localEndpoint}
+	for _, tc := range []struct {
+		name    string
+		daemons []Daemon
+		items   []string
+		want    string
+	}{
+		{"local secret beside a remote target", []Daemon{remote, local}, []string{"ensemble-broker-env/other", miniPassword}, DaemonLocal},
+		{"no local secret", []Daemon{remote, local}, []string{"ensemble-broker-env/other"}, DaemonRemote},
+		{"no secrets", []Daemon{remote, local}, nil, DaemonRemote},
+		{"local target only", []Daemon{local}, []string{miniPassword}, DaemonLocal},
+	} {
+		if got := Placement(tc.daemons, []string{miniPassword})(tc.items); got.Name != tc.want {
+			t.Errorf("%s: placed on %s, want %s", tc.name, got.Name, tc.want)
+		}
+	}
+	if got := (Host{Daemons: []Daemon{remote, local}}).placed([]string{miniPassword}); got.Name != DaemonRemote {
+		t.Errorf("no placement rule: placed on %s, want the default", got.Name)
 	}
 }
 
@@ -110,11 +121,9 @@ func TestMaintainPlacesByManifest(t *testing.T) {
 			withSecrets([]any{secret(miniPassword, "mini-password")})(fields)
 			manifest = writeManifest(t, must(json.Marshal(fields)))
 		}
-		onLocal := h.Docker.(*fakeDocker)
+		onLocal := h.Daemons[0].Runner.(*fakeDocker)
 		remote := &fakeDocker{}
-		h.Docker, h.Endpoint = remote, remoteEndpoint
-		h.Local = &Daemon{Docker: onLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock"}
-		h.LocalSecrets = []string{miniPassword}
+		h = onTwo(h, remote, onLocal)
 		if _, err := h.Maintain(context.Background(), container, manifest, true); err != nil {
 			t.Fatal(err)
 		}
@@ -135,9 +144,7 @@ func TestBuildSecretPlacesOnLocalDaemon(t *testing.T) {
 	e := newBuildEnv(t)
 	h := e.lookupHost()
 	remote := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	h.Docker, h.Endpoint = remote, remoteEndpoint
-	h.Local = &Daemon{Docker: e.fake, Endpoint: "unix://" + e.home + "/.docker/run/docker.sock"}
-	h.LocalSecrets = []string{miniPassword}
+	h = onTwo(h, remote, e.fake)
 	if _, err := h.Build(context.Background(), e.pkg, BuildSpec{Secrets: []string{miniPassword}}, -1); err != nil {
 		t.Fatal(err)
 	}

@@ -164,7 +164,7 @@ func TestPrefetchOrder(t *testing.T) {
 		}
 		return base.respond(args, stdin)
 	}}
-	h.Docker = d
+	h = withRunner(h, d)
 	path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv)
 		}
 		return base.respond(args, stdin)
 	}}
-	h.Docker = d
+	h = withRunner(h, d)
 	return h, d, e
 }
 
@@ -342,7 +342,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 				}
 				return base.respond(args, stdin)
 			}}
-			h.Docker = d
+			h = withRunner(h, d)
 			tc.setup(t, lw, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 			_, err := h.Start(context.Background(), path)
@@ -454,14 +454,14 @@ func TestDefaultImageNewest(t *testing.T) {
 	}
 	// A newer variant on a base image never counts.
 	putFile(t, testRecords(h.Home).recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
-	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+	h = withRunner(h, &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
 		labels := goodLabels()
 		labels["ensemble.key"] = key
 		return inspectJSON("sha256:"+strings.Repeat(key[:1], 64), labels, time.Time{}), nil
-	}}
-	info, err := h.defaultImage(context.Background(), testRecords(h.Home), "ensemble-worker:"+imageKey)
+	}})
+	info, err := h.defaultImage(context.Background(), h.Daemons[0], testRecords(h.Home), "ensemble-worker:"+imageKey)
 	if err != nil || info.ID != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("%+v %v", info.ID, err)
 	}

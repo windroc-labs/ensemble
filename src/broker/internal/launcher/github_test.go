@@ -173,7 +173,8 @@ func TestMaintainGitHub(t *testing.T) {
 	tokens := &fakeTokens{}
 	d := &fakeDocker{}
 	h := mountHost()
-	h.Docker, h.GitHub = d, tokens
+	h = withRunner(h, d)
+	h.GitHub = tokens
 	got, err := h.Maintain(context.Background(), container, githubManifest(t), false)
 	if err != nil || got.Container != container || len(got.Results) != 1 || got.Results[0].Credential != "github" ||
 		*got.Results[0].ExpiresAt != expiry[0].ExpiresAt || got.Deadline != nil {
@@ -189,7 +190,8 @@ func TestMaintainGitHub(t *testing.T) {
 		t.Fatalf("refreshed with %v, want the manifest's set", tokens.permissions)
 	}
 	host := mountHost()
-	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{refresh: unreachableErr}
+	host = withRunner(host, &fakeDocker{})
+	host.GitHub = &fakeTokens{refresh: unreachableErr}
 	got, err = host.Maintain(context.Background(), container, githubManifest(t), false)
 	if e := results(got)["github"].Error; err != nil || len(got.Results) != 1 || e == nil || e.Code != protocol.DockerUnreachable {
 		t.Errorf("unreachable: %+v %v", got, err)

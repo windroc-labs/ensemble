@@ -99,7 +99,7 @@ func TestEgressRefusals(t *testing.T) {
 					w.labels = goodLabels()
 					h, d, creds, tokens, codexCreds, keys, env := credentialHost(&w)
 					if at.endpoint != "" {
-						h.Endpoint = at.endpoint
+						h = atEndpoint(h, at.endpoint)
 					}
 					_, err := h.Start(context.Background(), credentialManifest(t, manifest))
 					e := protoErr(t, err)
@@ -157,7 +157,7 @@ func TestEgressCommandFailureHint(t *testing.T) {
 			w := world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}, labels: goodLabels()}
 			h, _, creds, _, _, _, _ := credentialHost(&w)
 			if at.endpoint != "" {
-				h.Endpoint = at.endpoint
+				h = atEndpoint(h, at.endpoint)
 			}
 			_, err := h.Start(context.Background(), validManifest(t))
 			e := protoErr(t, err)
