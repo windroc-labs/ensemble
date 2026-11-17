@@ -105,7 +105,7 @@ func TestNoBindMountForAnyClient(t *testing.T) {
 	for _, client := range []string{"claude", "codex", "opencode"} {
 		m := baseManifest()
 		m.Client, m.ClaudeDir = client, ""
-		dir := home + "/.ensemble/docker-state/w/" + client
+		dir := ClientHomes + "/" + client
 		switch client {
 		case "claude":
 			m.ClaudeDir = dir

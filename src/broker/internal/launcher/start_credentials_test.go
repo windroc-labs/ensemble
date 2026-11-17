@@ -156,7 +156,7 @@ func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := fixtureManifest(t, "manifest-github-app", withSecrets(dummySecrets), func(m map[string]any) {
-				m["claude_dir"] = filepath.Join(parent, "claude")
+				m["claude_dir"] = ClientHomes + "/claude"
 			})
 			rec, log := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), path)

@@ -12,7 +12,6 @@ from unittest import mock
 
 from ensemble.utils.paths import (
     DOCKER_STATE,
-    docker_home,
     import_env,
     module_roots,
     overlaps,
@@ -305,10 +304,8 @@ class SourcePath(Case):
                 self.assertEqual(source_path(roots), want)
 
 
-class DockerHome(Case):
-    def test_a_session_home_under_the_docker_state_root(self):
-        with mock.patch.dict(os.environ, {"HOME": "/home/u"}):
-            self.assertEqual(docker_home("w", "dir"), "/home/u/.ensemble/docker-state/w/dir")
+class DockerState(Case):
+    def test_the_docker_state_root(self):
         self.assertEqual(DOCKER_STATE, "~/.ensemble/docker-state")
 
 

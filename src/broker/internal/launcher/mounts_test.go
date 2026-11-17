@@ -25,7 +25,7 @@ func mountHost(missing ...string) Host {
 
 func baseManifest() Manifest {
 	return Manifest{Client: "claude", Name: "w", Generation: strings.Repeat("0", 32), CWD: home + "/src/project", Workspace: "ensemble-ws-w",
-		ClaudeDir: home + "/.ensemble/docker-state/w/claude", HookPath: "/usr/local/bin/ensemble-session", HasHook: true}
+		ClaudeDir: ClientHomes + "/claude", HookPath: "/usr/local/bin/ensemble-session", HasHook: true}
 }
 
 func TestMountRules(t *testing.T) {
@@ -47,12 +47,11 @@ func TestMountRules(t *testing.T) {
 	cases := []tc{
 		{"missing cwd", mountHost(home + "/src/project"), nil, "existing host directory"},
 		{"root", ok, cwd("/"), "contains"},
-		{"home", ok, cwd(home), "claude_dir"},
-		{"Users", ok, cwd("/Users"), "claude_dir"},
-		{"state dir", ok, cwd(home + "/.ensemble/docker-state/w"), "claude_dir"},
-		{"claude dir", ok, cwd(home + "/.ensemble/docker-state/w/claude"), "claude_dir"},
-		{"inside claude dir", ok, cwd(home + "/.ensemble/docker-state/w/claude/x"), "claude_dir"},
-		{"claude dir wrong", ok, func(m *Manifest) { m.ClaudeDir = home + "/.ensemble/docker-state/other/claude" }, "claude_dir"},
+		{"client homes", ok, cwd(ClientHomes), "inside"},
+		{"claude dir", ok, cwd(ClientHomes + "/claude"), "inside"},
+		{"inside claude dir", ok, cwd(ClientHomes + "/claude/x"), "inside"},
+		{"claude dir a mac path", ok, func(m *Manifest) { m.ClaudeDir = "/Users/example/.ensemble/docker-state/w/claude" }, "claude_dir must be /home/agent/.ensemble-state/claude."},
+		{"claude dir of another client", ok, func(m *Manifest) { m.ClaudeDir = ClientHomes + "/codex" }, "claude_dir"},
 		{"claude dir trailing slash", ok, func(m *Manifest) { m.ClaudeDir += "/" }, "claude_dir"},
 		{"hook in cwd", ok, func(m *Manifest) { m.HookPath = home + "/src/project/bin/hook" }, "hook_path"},
 		{"hook is cwd", ok, func(m *Manifest) { m.HookPath = home + "/src/project" }, "hook_path"},

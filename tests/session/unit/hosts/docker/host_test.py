@@ -27,6 +27,7 @@ from ensemble.session.engine.daemon import (
     CLEARED,
     RECORD_FILE,
     RUN_TIMEOUT,
+    client_home,
     docker_call,
     load_record,
     save_record,
@@ -445,7 +446,7 @@ class ClientEnvTest(Base):
     def test_resume_gets_the_same_env_and_touches_no_file(self):
         self.assertEqual(
             self.host._client_env("w", "agent", HOME, resume=True),
-            {"AGENT_HOME": os.path.join(self.home, ".ensemble", "docker-state", "w", "agent")},
+            {"AGENT_HOME": "/home/agent/.ensemble-state/agent"},
         )
         self.assertFalse(os.path.exists(self.state))
         self.assertFalse(self.host._inherit_env)
@@ -542,7 +543,8 @@ class StartBase(Base):
 
     def setUp(self):
         super().setUp()
-        self.home_dir = os.path.join(self.state, "agent")
+        self.home_dir = client_home("agent")
+        self.volume_dir = os.path.join(self.state, "agent")  # the fake state volume's agent dir
         self.execs, self.handle = [], None
         popen = mock.patch("subprocess.Popen", side_effect=self.guard_popen)
         self.popen_mock = popen.start()
@@ -607,13 +609,14 @@ class StartBase(Base):
         self.docker.replies[(PYTHON, "-I", worker_module.GUARD, "--probe")] = (rc, word + "\n", "")
 
     def history(self):
-        """A native transcript in the home, which the launch names."""
-        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript))
-        with open(transcript, "w") as f:
+        """A native transcript in the home, which the launch names; its file in the fake volume."""
+        stored = os.path.join(self.volume_dir, "projects", "p", "s1.jsonl")
+        os.makedirs(os.path.dirname(stored))
+        with open(stored, "w") as f:
             f.write("{}\n")
+        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
         self.launch = replace(self.launch, transcript=transcript)
-        return transcript
+        return stored
 
     def refused_untouched(self, error, pattern):
         """start(resume="1") fails with `pattern`, before any broker call, file or supervisor."""
@@ -766,7 +769,7 @@ class StartTest(StartBase):
             ],
         )
         self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
-        self.assertFalse(os.path.exists(self.home_dir))
+        self.assertFalse(os.path.exists(self.volume_dir))
         with open(manifest) as f:
             self.assertEqual(
                 json.load(f),
@@ -804,7 +807,7 @@ class StartTest(StartBase):
         self.assertEqual(
             self.staged(), {os.path.join(self.home_dir, "settings.json"): '{"model": "opus"}'}
         )
-        self.assertFalse(os.path.exists(self.home_dir))
+        self.assertFalse(os.path.exists(self.volume_dir))
 
     CODEX = {
         "client": "codex",
@@ -883,18 +886,20 @@ class StartTest(StartBase):
             home_files=json.dumps({} if files is None else files),
         )
 
-    def resumable(self, home):
-        transcript = os.path.join(home, "sessions", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        with open(transcript, "w") as f:
+    def resumable(self):
+        """A Codex transcript in the fake state volume, which the launch names."""
+        stored = os.path.join(self.state, "codex", "sessions", "s1.jsonl")
+        os.makedirs(os.path.dirname(stored), exist_ok=True)
+        with open(stored, "w") as f:
             f.write("{}\n")
+        transcript = os.path.join(client_home("codex"), "sessions", "s1.jsonl")
         self.launch = replace(self.launch, transcript=transcript)
 
     def test_a_private_homes_copy_is_staged_on_a_new_start_and_never_on_a_resume(self):
-        home = os.path.join(self.state, "codex")
+        home = client_home("codex")
         self.kept(files={"config/config.toml": "a = 1"})
         self.assertEqual(self.staged(), {os.path.join(home, "config", "config.toml"): "a = 1"})
-        self.resumable(home)
+        self.resumable()
         self.docker.calls.clear()
         self.kept(resume="1", files={"config/config.toml": "b = 2"})
         self.assertEqual(self.staged(), {})
@@ -928,11 +933,12 @@ class StartTest(StartBase):
         self.assertNotIn("agent_account", manifest)
 
     def test_codex_resume_after_host_login_preserves_native_history(self):
-        home = os.path.join(self.state, "codex")
+        home = client_home("codex")
+        stored = os.path.join(self.state, "codex", "sessions", "rollout.jsonl")
         transcript = os.path.join(home, "sessions", "rollout.jsonl")
-        os.makedirs(os.path.dirname(transcript))
+        os.makedirs(os.path.dirname(stored))
         native = '{"session_id":"same-native-identity"}\n'
-        with open(transcript, "w") as stream:
+        with open(stored, "w") as stream:
             stream.write(native)
         self.launch = replace(self.launch, transcript=transcript, env={"CODEX_HOME": home})
         metadata = dict(
@@ -956,7 +962,7 @@ class StartTest(StartBase):
         until = {"at": "2100-01-01T00:00:00Z", "action": "close", "reason": "r"}
         self.broker.started = replace(self.broker.started, deadline=until)
         self.start(**metadata)
-        with open(transcript) as stream:
+        with open(stored) as stream:
             self.assertEqual(stream.read(), native)
         self.assertEqual(self.host_record()["sid"], "s1")
         with open(os.path.join(self.state, f"{GEN}.deadline.json")) as stream:
@@ -965,7 +971,7 @@ class StartTest(StartBase):
     def test_resume_keeps_the_home_and_starts_a_new_container(self):
         transcript = self.history()
         process = self.start(resume="1", home_files=json.dumps({"settings.json": "{}"}))
-        self.assertFalse(os.path.exists(os.path.join(self.home_dir, "settings.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.volume_dir, "settings.json")))
         with open(transcript) as f:
             self.assertEqual(f.read(), "{}\n")
         manifest = os.path.join(self.state, f"{GEN}.json")
@@ -1002,8 +1008,8 @@ class StartTest(StartBase):
     ):
         old = os.path.join(self.account, "src", "old")
         self.docker.volumes = [f"ensemble-ws-w\t{old}"]
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "keep"), "w"):
+        os.makedirs(self.volume_dir)
+        with open(os.path.join(self.volume_dir, "keep"), "w"):
             pass
         dirty = (
             "Workspace ensemble-ws-w has uncommitted or unpushed work in: src/o/a. Delete it"
@@ -1033,7 +1039,7 @@ class StartTest(StartBase):
                 with self.assertRaisesRegex(raised, pattern):
                     self.start()
                 self.assertEqual(self.order[-1], ("workspace_rm", "ensemble-ws-w"))
-                self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                self.assertEqual(os.listdir(self.volume_dir), ["keep"])
                 self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
                 self.popen_mock.assert_not_called()
 
@@ -1050,15 +1056,15 @@ class StartTest(StartBase):
         ):
             with self.subTest(case=case):
                 if keep:
-                    os.makedirs(self.home_dir, exist_ok=True)
-                    with open(os.path.join(self.home_dir, "keep"), "w"):
+                    os.makedirs(self.volume_dir, exist_ok=True)
+                    with open(os.path.join(self.volume_dir, "keep"), "w"):
                         pass
                 self.launch = replace(self.launch, transcript=transcript)
                 self.refused_untouched(
                     ConfigError, f"docker session w: no native history to resume in {self.home_dir}"
                 )
                 if keep:
-                    self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                    self.assertEqual(os.listdir(self.volume_dir), ["keep"])
 
     def test_a_resume_check_docker_cannot_answer_names_its_reason(self):
         self.history()
@@ -1098,8 +1104,8 @@ class StartTest(StartBase):
         self.refused_untouched(ConfigError, "no native history")
 
     def test_a_missing_or_bad_resume_flag_is_refused_untouched(self):
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "keep"), "w"):
+        os.makedirs(self.volume_dir)
+        with open(os.path.join(self.volume_dir, "keep"), "w"):
             pass
         for flag in (None, "", "yes", "2"):
             with self.subTest(flag=flag):
@@ -1107,7 +1113,7 @@ class StartTest(StartBase):
                 with self.assertRaisesRegex(SessionError, "docker session w: bad resume flag"):
                     self.start(resume=flag)
                 self.assertEqual([step[0] for step in self.order], ["ps"])
-                self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                self.assertEqual(os.listdir(self.volume_dir), ["keep"])
 
     def test_broker_environment_is_applied_without_interpreting_credentials(self):
         identity = {"ENSEMBLE_PR_AUTHOR": BOT, **GIT_IDENTITY, "FUTURE_IDENTITY": "opaque"}

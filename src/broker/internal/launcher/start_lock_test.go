@@ -132,7 +132,7 @@ func (w *lockWorld) host(t *testing.T, name string) (Host, string, *fakeDocker) 
 	h = withRunner(h, d)
 	path := editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = name, "ensemble-ws-"+name, "dummy", name
-		f["claude_dir"] = w.home + "/.ensemble/docker-state/" + name + "/claude"
+		f["claude_dir"] = ClientHomes + "/claude"
 	})
 	return h, path, d
 }
@@ -417,7 +417,7 @@ func TestLockedStartCleanup(t *testing.T) {
 func lockedManifest(t *testing.T, home string, secrets []any) string {
 	return editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = "worker_1", "ensemble-ws-worker_1", "dummy", "worker_1"
-		f["claude_dir"] = home + "/.ensemble/docker-state/worker_1/claude"
+		f["claude_dir"] = ClientHomes + "/claude"
 		if secrets != nil {
 			withSecrets(secrets)(f)
 		}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const opencodeDir = home + "/.ensemble/docker-state/worker_1/opencode"
+const opencodeDir = ClientHomes + "/opencode"
 
 // opencodeManifest is fixture manifest-valid for client opencode, edit applied to its fields.
 func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
@@ -199,12 +198,12 @@ func TestStartOpencodeProvidersFail(t *testing.T) {
 
 func TestCheckMountsOpencode(t *testing.T) {
 	m := baseManifest()
-	m.Client, m.ClaudeDir, m.OpencodeDir = "opencode", "", home+"/.ensemble/docker-state/w/opencode"
+	m.Client, m.ClaudeDir, m.OpencodeDir = "opencode", "", ClientHomes+"/opencode"
 	if err := mountHost().checkMounts(m); err != nil {
 		t.Fatal(err)
 	}
 	wrong, inside := m, m
-	wrong.OpencodeDir = home + "/.ensemble/docker-state/w/claude"
+	wrong.OpencodeDir = ClientHomes + "/claude"
 	inside.CWD = m.OpencodeDir + "/work"
 	for name, tc := range map[string]struct {
 		host   Host
@@ -212,7 +211,7 @@ func TestCheckMountsOpencode(t *testing.T) {
 		reason string
 	}{
 		"wrong dir":  {mountHost(), wrong, "opencode_dir must be " + m.OpencodeDir},
-		"cwd inside": {mountHost(), inside, "overlaps opencode_dir"},
+		"cwd inside": {mountHost(), inside, "inside the container's /home/agent"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := protoErr(t, tc.host.checkMounts(tc.m))
@@ -339,7 +338,7 @@ func TestMaintainOpencode(t *testing.T) {
 		tokens := &fakeTokens{}
 		h, _, codexCreds := opencodeHost(&world{labels: goodLabels()}, tokens)
 		h.Home = t.TempDir()
-		dir := filepath.Join(h.Home, ".ensemble/docker-state/worker_1/opencode")
+		dir := ClientHomes + "/opencode"
 		manifest := opencodeManifest(t, func(f map[string]any) {
 			f["opencode_dir"] = dir
 			if github {

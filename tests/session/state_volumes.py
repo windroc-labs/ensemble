@@ -136,6 +136,11 @@ class Volumes:
         raise AssertionError(f"unexpected docker call {argv}")
 
 
+def stored(session, client):
+    """`client`'s dir in `session`'s fake volume; also a test's client home path."""
+    return os.path.join(os.path.expanduser(DOCKER_STATE), session, client)
+
+
 def record(session, found=LOCAL):
     daemon.save_record(session, DaemonRecord(found, DOCKER))
 

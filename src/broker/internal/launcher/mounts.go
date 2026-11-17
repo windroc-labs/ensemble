@@ -89,7 +89,7 @@ func (h Host) checkMounts(m Manifest) error {
 		return err
 	}
 	dir := m.StateDir()
-	if want := filepath.Join(h.Home, ".ensemble/docker-state", m.Name, m.Client); dir != want {
+	if want := ClientHomes + "/" + m.Client; dir != want {
 		return reject("%s_dir must be %s.", m.Client, want)
 	}
 	if inside(m.CWD, dir) || inside(dir, m.CWD) {

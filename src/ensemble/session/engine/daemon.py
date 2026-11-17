@@ -18,8 +18,7 @@ from ensemble.utils import DOCKER_STATE, read_regular, save
 CLEARED = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 RUN_TIMEOUT = 10
 OUT_MAX = 8 << 20
-# The broker's state volume names and labels and the container's client homes; the protocol's
-# state-volume.json holds the same values.
+# As the protocol's state-volume.json.
 CLIENT_HOMES = "/home/agent/.ensemble-state"
 STATE_VOLUME_PREFIX = "ensemble-state-"
 STATE_LABEL = "ensemble.state"
@@ -37,6 +36,10 @@ class Overflow(OSError):
 
 def state_volume(name: str) -> str:
     return f"{STATE_VOLUME_PREFIX}{name}"
+
+
+def client_home(client: str) -> str:
+    return f"{CLIENT_HOMES}/{client}"
 
 
 def _record_path(name: str) -> str:

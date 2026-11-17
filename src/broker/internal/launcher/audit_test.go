@@ -232,8 +232,8 @@ func TestMaintainRefreshLineCodex(t *testing.T) {
 }
 
 func TestCloseLine(t *testing.T) {
-	claudeEnv := `["PATH=/usr/bin","CLAUDE_CONFIG_DIR=/Users/example/.ensemble/docker-state/worker_1/claude"]`
-	codexEnv := `["CODEX_HOME=/Users/example/.ensemble/docker-state/worker_1/codex"]`
+	claudeEnv := `["PATH=/usr/bin","CLAUDE_CONFIG_DIR=/home/agent/.ensemble-state/claude"]`
+	codexEnv := `["CODEX_HOME=/home/agent/.ensemble-state/codex"]`
 	config := func(env, labels string) string { return `{"env":` + env + `,"labels":` + labels + `}` }
 	for name, tc := range map[string]struct {
 		config  string

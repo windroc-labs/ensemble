@@ -35,9 +35,9 @@ from ensemble.session.engine.types import (
     SessionInfo,
     SessionStatus,
 )
-from ensemble.utils import LOCAL_ENV_VARS, docker_home
+from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import SPAWNS, Case, packaged_hosts
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.claude.support import (
     CEILING,
     CONFIG,
@@ -1127,7 +1127,7 @@ class DockerStateReadTest(Base):
         super().setUp()
         self.enterContext(serve())
         self.store = VolumeHome("w", "claude")
-        self.path = HomePath(docker_home("w", "claude"), f"projects/p/{SID}.jsonl")
+        self.path = HomePath(stored("w", "claude"), f"projects/p/{SID}.jsonl")
         write(local(self.path), b"0123456789")
 
     def test_a_transcript_there_is_read_and_sized(self):
@@ -1207,9 +1207,7 @@ class HomeStoreReadsTest(Base):
 
     def test_docker_reads_open_no_mac_path(self):
         self.enterContext(serve())
-        found, touched = self.reads(
-            VolumeHome("w", "claude"), docker_home("w", "claude"), itself=True
-        )
+        found, touched = self.reads(VolumeHome("w", "claude"), stored("w", "claude"), itself=True)
         self.assert_read(found)
         self.assertEqual(touched, [])
 
@@ -1230,7 +1228,7 @@ class ActivityTest(Base):
         self.common = ClaudeCommon({})
         self.stores = (
             (LocalHome(), self.config_dir),
-            (VolumeHome("w", "claude"), docker_home("w", "claude")),
+            (VolumeHome("w", "claude"), stored("w", "claude")),
         )
 
     def newest(self, files: dict[str, float]) -> list[float | None]:
@@ -1269,7 +1267,7 @@ class DockerStateStatusTest(Base):
         super().setUp()
         self.enterContext(serve())
         self.common = ClaudeCommon({})
-        self.env_vars = {"CLAUDE_CONFIG_DIR": docker_home("w", "claude")}
+        self.env_vars = {"CLAUDE_CONFIG_DIR": stored("w", "claude")}
         self.path = self.common.transcript(self.work, SID, self.env_vars)
         self.resume = reference(self.work)
 
@@ -1558,7 +1556,7 @@ class DockerContinuationTest(ContinuationTest):
     def setUp(self):
         super().setUp()
         self.store = VolumeHome("w", "claude")
-        self.config_dir = docker_home("w", "claude")
+        self.config_dir = stored("w", "claude")
         self.env({"CLAUDE_CONFIG_DIR": self.config_dir})
         self.path = self.common.transcript(self.work, SID)
         self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")

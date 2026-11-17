@@ -27,7 +27,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 func prefetchManifest(t *testing.T, h Host, edit func(map[string]any)) string {
 	t.Helper()
 	return editedManifest(t, func(f map[string]any) {
-		f["claude_dir"] = h.Home + "/.ensemble/docker-state/worker_1/claude"
+		f["claude_dir"] = ClientHomes + "/claude"
 		f["prefetch"] = map[string]any{"repo": "acme/app", "ref": "main"}
 		if edit != nil {
 			edit(f)
@@ -144,7 +144,7 @@ func TestPrefetchVolumeNonce(t *testing.T) {
 	// Without prefetch, the create is unchanged.
 	w2 := &world{labels: goodLabels()}
 	h2, d2, _ := prefetchHost(t, w2)
-	path := editedManifest(t, func(f map[string]any) { f["claude_dir"] = h2.Home + "/.ensemble/docker-state/worker_1/claude" })
+	path := editedManifest(t, func(f map[string]any) { f["claude_dir"] = ClientHomes + "/claude" })
 	if _, err := h2.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}

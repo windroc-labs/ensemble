@@ -30,6 +30,7 @@ from ensemble.session.engine.daemon import (
     STATE_READER_LABEL,
     attach_env,
     capped,
+    client_home,
     container_name,
     daemon_named,
     daemon_with_id,
@@ -104,7 +105,6 @@ from ensemble.utils import (
     DOCKER_STATE,
     Display,
     command_path,
-    docker_home,
     inode_lock,
     kill_group,
     module_roots,
@@ -752,7 +752,7 @@ class DockerHost(Host):
             raise ConfigError(
                 f"client {client or '(unnamed)'}: not supported on the Docker Host yet"
             )
-        return {home.env: docker_home(name, home.dir)}
+        return {home.env: client_home(home.dir)}
 
     def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
         if home is None:
@@ -1022,7 +1022,7 @@ class DockerHost(Host):
                     f"docker session {name}: container {row[0]} is labelled for it but not named"
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
-        home = docker_home(name, home_dir)
+        home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
         daemon = self._resumed(name) if resume == "1" else self._choose(environment)
         if recorded is None:

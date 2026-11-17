@@ -420,7 +420,7 @@ func TestRunArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := detached(d)
-	cwd, claude := home+"/src/project", home+"/.ensemble/docker-state/worker_1/claude"
+	cwd, claude := home+"/src/project", ClientHomes+"/claude"
 	want := []string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
 		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
 		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
@@ -543,7 +543,7 @@ func TestStartOrder(t *testing.T) {
 		t.Fatalf("inject %q", inject)
 	}
 	boot := d.calls[17]
-	if !slices.Equal(boot[8:11], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) {
+	if !slices.Equal(boot[8:11], []string{"claude", ClientHomes + "/claude", home + "/src/project"}) {
 		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
@@ -738,7 +738,7 @@ func TestManifestUnreadable(t *testing.T) {
 
 func TestHookUnderUncleanCWD(t *testing.T) {
 	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","daemon":"` + testDaemon + `","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + ClientHomes + `/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {

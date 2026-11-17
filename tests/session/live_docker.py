@@ -32,12 +32,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ensemble.session.engine import client_state
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.daemon import client_home
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.docker.broker import BROKER, Broker, plugin_root
 from ensemble.session.hosts.docker.host import LABEL
 from ensemble.session.hosts.docker.mounts import state_dir
-from ensemble.utils import docker_home
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(REPO, "bin")
@@ -708,7 +708,7 @@ class OpenCodeChecks(Checks):
 
     def after_start(self, start: Start) -> None:
         w = self.worker
-        root = docker_home(w.name, "opencode")
+        root = client_home("opencode")
         db = os.path.join(root, "opencode", "opencode.db")
         store = client_state.VolumeHome(w.name, "opencode")
         if store.stat(client_state.home_path(root, db)) is None:

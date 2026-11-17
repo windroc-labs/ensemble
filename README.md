@@ -94,8 +94,10 @@ name=<name> client=<client>
 ```
 
 The copy runs in a container from the worker image already on the Mac, with no network, reading the directory
-read-only: its content was written by a worker, so its links are copied as links and never followed. Then resume the
-session as usual (`ensemble-crew resume <name>`); once its conversation continues, delete
+read-only: its content was written by a worker, so its links are copied as links and never followed. In the worker the
+copy is the client home `/home/agent/.ensemble-state/<client>`: a path the client recorded under
+`~/.ensemble/docker-state/<name>/<client>` (for example in Claude's `plugins/installed_plugins.json`) does not exist
+there. Then resume the session as usual (`ensemble-crew resume <name>`); once its conversation continues, delete
 `~/.ensemble/docker-state/<name>/<client>`.
 
 Use the model account/provider required by your selected client. OpenCode provider and network setup lives

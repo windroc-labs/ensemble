@@ -42,11 +42,11 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.session.modes.tui import TuiMode
-from ensemble.utils import LOCAL_ENV_VARS, docker_home
+from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import PACKAGE_ROOTS, ROOTS, SRC
 from tests.session.codex_tui import PlanCase
 from tests.session.fakes.terminal import MemoryHost
-from tests.session.state_volumes import serve
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1264,13 +1264,13 @@ class DockerHomeObserveTest(Base):
         super().setUp()
         self.enterContext(serve())
         self.store = VolumeHome("w", "codex")
-        self.codex_home = Path(docker_home("w", "codex"))
+        self.codex_home = Path(stored("w", "codex"))
         self.codex_home.mkdir(parents=True)
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
 
     def test_observe_reads_the_docker_session_file(self):
         run, path = self.bound()
-        self.assertTrue(str(path).startswith(docker_home("w", "codex") + os.sep))
+        self.assertTrue(str(path).startswith(stored("w", "codex") + os.sep))
         _append(path, said("user", "go"), said("assistant", "done"))
         self.assertEqual(run.observe(), [Reply("done")])
         self.assertEqual(run.offset, path.stat().st_size)
@@ -1789,7 +1789,7 @@ class HookTest(Base):
 
     def test_on_hook_reads_through_persisted_home(self):
         volumes = self.enterContext(serve())
-        self.codex_home = Path(docker_home("w", "codex"))
+        self.codex_home = Path(stored("w", "codex"))
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
         self.prepare()
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
@@ -2022,9 +2022,7 @@ class HomeStoreReadsTest(Base):
 
     def test_docker_reads_open_no_mac_path(self):
         self.enterContext(serve())
-        found, lines, path, touched = self.reads(
-            VolumeHome("w", "codex"), docker_home("w", "codex")
-        )
+        found, lines, path, touched = self.reads(VolumeHome("w", "codex"), stored("w", "codex"))
         self.assert_read(found, lines, path)
         self.assertEqual(touched, [])
 
