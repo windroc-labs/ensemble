@@ -156,6 +156,9 @@ class VolumeHome:
             raise _broken(file, "too many entries")
         return tuple(sorted(listed))
 
+    def persisted(self) -> dict[str, str]:
+        return {"kind": "volume", "session": self.session, "client": self.client}
+
     @contextlib.contextmanager
     def snapshot(
         self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
@@ -182,9 +185,6 @@ class VolumeHome:
             yield main
         finally:
             shutil.rmtree(folder, ignore_errors=True)
-
-    def persisted(self) -> dict[str, str]:
-        return {"kind": "volume", "session": self.session, "client": self.client}
 
     def _file(self, path: HomePath) -> StateFile:
         return StateFile(self.session, self.client, path.rel)

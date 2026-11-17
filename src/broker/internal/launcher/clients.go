@@ -127,6 +127,26 @@ func (r records) recordPath(key string) string { return r.path(key + ".json") }
 
 func (r records) replacedPath(key string) string { return r.path(key + ".replaced") }
 
+// variantRecord is a key's record file in a daemon's image records.
+type variantRecord struct {
+	key   string
+	entry os.DirEntry
+}
+
+func (r records) variants() []variantRecord {
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		return nil
+	}
+	var found []variantRecord
+	for _, entry := range entries {
+		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "json" {
+			found = append(found, variantRecord{m[1], entry})
+		}
+	}
+	return found
+}
+
 func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemon, records, error) {
 	id, err := daemonID(ctx, d)
 	var u *docker.Unreachable
@@ -305,18 +325,13 @@ func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
 	}
 	result := CheckResult{Latest: latest, Rebuilt: []string{}}
 	var failures []string
-	entries, _ := os.ReadDir(r.dir)
-	for _, entry := range entries {
-		m := variantFile.FindStringSubmatch(entry.Name())
-		if m == nil || m[2] != "json" {
-			continue
-		}
-		rebuilt, failed := h.checkVariant(ctx, d, r, m[1], latest)
+	for _, v := range r.variants() {
+		rebuilt, failed := h.checkVariant(ctx, d, r, v.key, latest)
 		if rebuilt {
-			result.Rebuilt = append(result.Rebuilt, "ensemble-worker:"+m[1])
+			result.Rebuilt = append(result.Rebuilt, "ensemble-worker:"+v.key)
 		}
 		if failed != "" {
-			failures = append(failures, "ensemble-worker:"+m[1]+": "+failed)
+			failures = append(failures, "ensemble-worker:"+v.key+": "+failed)
 		}
 	}
 	state.Failure = strings.Join(failures, "; ")

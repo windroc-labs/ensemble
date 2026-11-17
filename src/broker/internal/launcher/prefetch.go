@@ -21,27 +21,21 @@ const (
 	nonceLabel = "ensemble.prefetch-start"
 )
 
-// defaultImage is the newest default worker image: a broker-built image whose variant record names no base image,
-// newest by the record's mtime (a build's last use). With none, it builds one from run's package, as build does.
+// defaultImage is the newest (by record mtime) broker-built image with no base image; with none, one built from run's package.
 func (h Host) defaultImage(ctx context.Context, d Daemon, r records, run string) (imageInfo, error) {
 	type candidate struct {
 		key string
 		at  time.Time
 	}
 	var found []candidate
-	entries, _ := os.ReadDir(r.dir)
-	for _, entry := range entries {
-		m := variantFile.FindStringSubmatch(entry.Name())
-		if m == nil || m[2] != "json" {
-			continue
-		}
+	for _, record := range r.variants() {
 		var v variant
-		data, err := os.ReadFile(r.recordPath(m[1]))
-		info, statErr := entry.Info()
+		data, err := os.ReadFile(r.recordPath(record.key))
+		info, statErr := record.entry.Info()
 		if err != nil || statErr != nil || json.Unmarshal(data, &v) != nil || v.BaseImage != "" {
 			continue
 		}
-		found = append(found, candidate{m[1], info.ModTime()})
+		found = append(found, candidate{record.key, info.ModTime()})
 	}
 	slices.SortFunc(found, func(a, b candidate) int { return b.at.Compare(a.at) })
 	for _, c := range found {
@@ -71,9 +65,8 @@ func (h Host) defaultImage(ctx context.Context, d Daemon, r records, run string)
 	return h.checkImage(ctx, d, built.Image)
 }
 
-// prefetch clones m's prefetch repo into its new workspace volume through a throwaway helper: the default worker
-// image on the egress proxy's workers network, whatever m's gateway, running as run's agent (the volume's owner). The
-// token reaches it only on stdin; GitHub.Prefetch owns the token and the clone script.
+// prefetch clones m's repo into its new workspace through a throwaway default-image helper on the workers network, as
+// run's agent; the token reaches it only on stdin.
 func (h Host) prefetch(ctx context.Context, d Daemon, r records, c string, m Manifest, run imageInfo, px egressProxy) error {
 	network, err := h.caller(ctx, d, px, workersKey)
 	if err != nil {
