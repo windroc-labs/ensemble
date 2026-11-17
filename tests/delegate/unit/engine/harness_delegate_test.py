@@ -550,7 +550,7 @@ class VerifierDockerTest(HarnessCase):
                 '[orchestrator.roles.engineer.credentials.github]\napp = "ensemble-broker-bot"\npermissions = {contents = "write"}\n'
                 f'[session.clients.claude.accounts.work]\ndir = "{self.home}/.claude-work"\n'
             )
-        self.calls, self.programs, self.refusals = [], [], {}
+        self.calls, self.programs, self.refusals, self.docker = [], [], {}, []
         fake_bin = os.path.join(self.home, "fake-bin")
         os.makedirs(fake_bin)
         with open(os.path.join(fake_bin, "claude"), "w", encoding="utf-8") as file:
@@ -569,6 +569,10 @@ class VerifierDockerTest(HarnessCase):
         if harnesses.spawned(argv):
             return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
+        if program == "docker" and argv[1] == "--host":  # the packaged Docker Host: no daemon
+            self.docker.append(argv[3])
+            down = b"Cannot connect to the Docker daemon. Is the docker daemon running?\n"
+            return support.FakeProc(argv, err=down, code=1)
         self.programs.append(program)
         if program == "claude":  # the start's usage probe: a login with no usage panel
             process = mock.MagicMock()
@@ -631,7 +635,7 @@ class VerifierDockerTest(HarnessCase):
         )
         self.assertIn("ensemble-broker-env/mini-op-ssh-key", self.failure())
         self.assertEqual(self.calls.count("start"), 1)
-        self.assertNotIn("docker", self.programs)
+        self.assertLessEqual(set(self.docker), {"ps", "volume"})
 
 
 class IdentityTest(HarnessCase):
