@@ -2252,6 +2252,64 @@ class RemoveWorkspacesTest(Base):
         self.assertEqual(self.host.remove_workspaces(os.path.join(self.account, "none")), [])
         self.assertEqual(self.removals(), [])
 
+    def session(self, name, cwd, access=None):
+        """Session `name`'s Mac records: its generation's manifest at `cwd`, and `access` if any."""
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "kind": "tui"}, f)
+        with open(os.path.join(state, f"{GEN}.json"), "w") as f:
+            json.dump({"name": name, "generation": GEN, "cwd": cwd}, f)
+        if access is not None:
+            daemon.save_access(name, access)
+
+    def remote(self):
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": "ssh://u@pc"}, f)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.docker.ep, self.docker.daemons["ssh://u@pc"] = "ssh://u@pc", "PC-DAEMON"
+
+    def test_reclaim_of_another_daemons_session_is_refused(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))
+        with self.assertRaisesRegex(
+            SessionError,
+            "^docker session pm-TASK-1-1a2b3c4d: cannot reclaim it here: its Docker target is"
+            rf" ssh://u@pc \(daemon PC\), the current target is the local Docker Desktop"
+            rf" \({re.escape(self.ep)}\) \(daemon {LOCAL_DAEMON}\); set the Docker target back"
+            " to ssh://u@pc to reclaim it$",
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_reclaim_of_a_pre_upgrade_session_on_a_remote_target_is_refused(self):
+        local = self.ep
+        self.session("pm-TASK-1-1a2b3c4d", self.agent)
+        self.remote()
+        with self.assertRaisesRegex(
+            SessionError,
+            "cannot reclaim it here: its Docker target is the local Docker Desktop"
+            rf" \({re.escape(local)}\) \(daemon {LOCAL_DAEMON}\)",
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_reclaim_on_the_same_daemon_removes(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
+        self.session("legacy", self.agent)
+        self.session(
+            "elsewhere",
+            os.path.join(self.account, "none"),
+            DockerAccess(DOCKER, "ssh://u@pc", "PC"),
+        )
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            removed, ["ensemble-ws-engineer-TASK-1-0b6f2c1e", "ensemble-ws-pm-TASK-1-1a2b3c4d"]
+        )
+
 
 class LastLinesTest(Base):
     def diagnostic(self, value, gen=GEN):

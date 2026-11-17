@@ -375,6 +375,28 @@ def _accept_started(
     )
 
 
+def _sessions_at(anchor: str) -> list[str]:
+    """The sessions whose latest generation's manifest has cwd `anchor`."""
+    root = os.path.expanduser(DOCKER_STATE)
+    try:
+        names = sorted(n for n in os.listdir(root) if SESSION_NAME.fullmatch(n))
+    except FileNotFoundError:
+        return []
+    found = []
+    for name in names:
+        generation = _record(name).get("generation")
+        if not isinstance(generation, str) or not GEN.fullmatch(generation):
+            continue
+        try:
+            with open(os.path.join(state_dir(name), f"{generation}.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError, RecursionError):
+            continue
+        if isinstance(manifest, dict) and manifest.get("cwd") == anchor:
+            found.append(name)
+    return found
+
+
 def _no_daemon() -> str:
     return f"no Docker CLI, or Docker target {endpoint()} unreachable"
 
@@ -543,11 +565,18 @@ class DockerHost(Host):
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
     def remove_workspaces(self, cwd: str) -> list[str]:
-        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept."""
+        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
+        A session at cwd whose state is on another daemon refuses before any removal.
+        """
         rows = self._workspaces()
         if rows is None:
             raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
         anchor, removed = os.path.realpath(cwd), []
+        sessions = _sessions_at(anchor)
+        current = self._current(sessions[0]) if sessions else None
+        for name in sessions:
+            if why := self._refusal(name, "reclaim", current):
+                raise SessionError(why)
         for volume in sorted(v for v, a in rows if a == anchor):
             try:
                 if self.broker.workspace_rm(volume, force=True):
@@ -733,9 +762,9 @@ class DockerHost(Host):
         except SessionError as error:
             raise SessionError(f"docker session {name}: {error}") from None
 
-    def _check_target(self, name: str, action: str, current: DockerAccess) -> None:
-        """ConfigError unless session `name`'s state is on the current target's daemon; with no access
-        record, it is the local Docker Desktop's.
+    def _refusal(self, name: str, action: str, current: DockerAccess) -> str | None:
+        """Why session `name` cannot `action` here: its state is on another daemon than the current
+        target's; with no access record, on the local Docker Desktop's.
         """
         try:
             recorded = load_access(name)
@@ -744,14 +773,14 @@ class DockerHost(Host):
         host, owner = (recorded.host, recorded.daemon) if recorded else (local_endpoint(), None)
         if owner is None:
             if host == current.host:
-                return
+                return None
             try:
                 owner = daemon_id(self.docker, host, run=self.run)
             except SessionError as error:
                 owner = f"unknown: {error}"
         if owner == current.daemon:
-            return
-        raise ConfigError(
+            return None
+        return (
             f"docker session {name}: cannot {action} it here: its Docker target is {describe(host)}"
             f" (daemon {owner}), the current target is {describe(current.host)} (daemon"
             f" {current.daemon}); set the Docker target back to {host} to {action} it"
@@ -759,7 +788,11 @@ class DockerHost(Host):
 
     def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
         if (metadata or {}).get("resume") == "1":
-            self._check_target(name, "resume", self._current(name))
+            self._check_target(name, self._current(name))
+
+    def _check_target(self, name: str, current: DockerAccess) -> None:
+        if why := self._refusal(name, "resume", current):
+            raise ConfigError(why)
 
     def _drop_state(self, name: str) -> None:
         """A new start's empty client home: its readers and state volume go; the broker makes it."""
@@ -840,7 +873,7 @@ class DockerHost(Host):
         home = docker_home(name, home_dir)
         current = self._current(name)
         if resume == "1":
-            self._check_target(name, "resume", current)
+            self._check_target(name, current)
         try:
             save_access(name, current)
         except OSError as error:
