@@ -18,10 +18,14 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
+// The container's client homes and the state volumes' names and labels; the protocol's state-volume.json holds the
+// same values.
 const (
-	stateLabel      = "ensemble.state"
-	stateOwnerLabel = "ensemble.state-owner" // its client dirs' uid:gid, which its readers run as
-	readerLabel     = "ensemble.state-reader"
+	ClientHomes       = "/home/agent/.ensemble-state"
+	stateVolumePrefix = "ensemble-state-"
+	stateLabel        = "ensemble.state"
+	stateOwnerLabel   = "ensemble.state-owner" // its client dirs' uid:gid, which its readers run as
+	readerLabel       = "ensemble.state-reader"
 )
 
 var (
@@ -124,7 +128,7 @@ func stateMount(volume, subpath, target string) string {
 }
 
 func stateVolume(name string) string {
-	return "ensemble-state-" + name
+	return stateVolumePrefix + name
 }
 
 // stateDirs are the subpaths m's mounts name, parents first.

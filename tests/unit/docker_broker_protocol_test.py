@@ -3,6 +3,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from ensemble.session.engine import daemon
 from tests.case import REPO, Case
 from tests.session.unit.hosts.docker.support import cases, data
 
@@ -10,6 +11,20 @@ PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
 
 
 class DockerBrokerProtocol(Case):
+    def test_state_volume_constants_match_the_protocol(self):
+        found = json.loads((PROTOCOL / "state-volume.json").read_text())
+        self.assertEqual(
+            found,
+            {
+                "client_homes": daemon.CLIENT_HOMES,
+                "state_volume_prefix": daemon.STATE_VOLUME_PREFIX,
+                "state_label": daemon.STATE_LABEL,
+                "state_owner_label": daemon.STATE_OWNER_LABEL,
+                "reader_label": daemon.STATE_READER_LABEL,
+            },
+        )
+        self.assertEqual(daemon.state_volume("w"), f"{daemon.STATE_VOLUME_PREFIX}w")
+
     def test_static_state_is_absent_from_product_sources(self):
         removed = (
             "static-secrets.json",

@@ -412,9 +412,9 @@ class _Reader:
         except ValueError:
             found = None
         found = found if isinstance(found, dict) else {}
-        if found.get("ensemble.state") != self.session:
+        if found.get(daemon.STATE_LABEL) != self.session:
             raise FileNotFoundError(errno.ENOENT, "not this session's state volume", volume)
-        user = found.get("ensemble.state-owner")
+        user = found.get(daemon.STATE_OWNER_LABEL)
         if not isinstance(user, str) or not OWNER.fullmatch(user):
             raise OSError(errno.EIO, "state volume has no owner", volume)
         listed = self._run(
