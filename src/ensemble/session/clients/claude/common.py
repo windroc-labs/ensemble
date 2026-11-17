@@ -16,20 +16,22 @@ from types import MappingProxyType
 
 from ensemble.session.clients import common
 from ensemble.session.clients.claude import usage
-from ensemble.session.clients.common import UUID, located, scan, strings
+from ensemble.session.clients.common import UUID, home_of, scan, strings
 from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
     COMMAND,
     DEFAULT_MAX_USAGE,
+    ClientContext,
     ClientHome,
     ConfigError,
     Effort,
+    HomePath,
+    HomeStore,
     Launch,
     Permission,
     Resumable,
     SessionStatus,
     Spec,
-    StateFile,
     StateKind,
     Usage,
 )
@@ -40,7 +42,6 @@ from ensemble.utils import (
     environment_ok,
     json_records,
     printable_abs,
-    read_regular,
     resume_command,
     save,
 )
@@ -310,16 +311,12 @@ def _max_usage(at: str, table: Mapping) -> float:
     return value
 
 
-def size(path: str) -> int:
+def size(home: HomeStore, path: HomePath) -> int:
     try:
-        found = located(os.path.abspath(path), HOME.dir)
-        if found is not None:
-            state = client_state.stat(found)
-            return state.size if state is not None else 0
-        info = os.stat(path)
+        found = home.stat(path)
     except (OSError, ValueError):
         return 0
-    return info.st_size if stat.S_ISREG(info.st_mode) else 0
+    return found.size if found is not None else 0
 
 
 def texts(content) -> list[str]:
@@ -332,102 +329,67 @@ def texts(content) -> list[str]:
     ]
 
 
-def read(path: str, *, offset: int = 0, limit: int | None = None, tail: bool = False):
-    """read_regular; a Docker session's Claude home through client_state."""
-    path = os.path.abspath(path)
+def read(
+    home: HomeStore,
+    path: HomePath,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    tail: bool = False,
+) -> bytes | None:
     try:
-        found = located(path, HOME.dir)
-        if found is not None:
-            return client_state.read(found, offset=offset, limit=limit, tail=tail)
+        return home.read(path, offset=offset, limit=limit, tail=tail)
+    except (OSError, ValueError):
+        return None
+
+
+def _named(path: HomePath) -> str:
+    return os.path.join(path.root, *path.rel.split("/"))
+
+
+def tracked(transcript: str) -> HomePath | None:
+    """Its home path, three parts below its config dir."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(transcript)))
+    try:
+        return client_state.home_path(root, transcript)
     except OSError:
         return None
-    return read_regular(path, offset=offset, limit=limit, tail=tail)
 
 
-def _subdirs(path: str) -> list[str]:
-    found = located(path, HOME.dir)
-    if found is not None:
-        listed = client_state.entries(found) or ()
-        return [e.name for e in listed if e.kind is StateKind.DIR]
-    with os.scandir(path) as entries:
-        return [entry.name for entry in entries]
-
-
-def _contained(path: str, root: str) -> bool:
-    if located(path, HOME.dir) is not None:
-        return True
-    real = os.path.realpath(root)
-    return os.path.commonpath((os.path.realpath(path), real)) == real
-
-
-def _recorded(transcript: str, path: str) -> str | None:
+def _recorded(home: HomeStore, transcript: str, path: HomePath) -> HomePath | None:
     if not printable_abs(transcript):
         return None
     with contextlib.suppress(OSError):
-        found = located(path, HOME.dir)
-        if found is None:
-            root = os.path.realpath(os.path.dirname(path))
-            recorded = os.path.realpath(transcript)
-            if os.path.commonpath((recorded, root)) == root and stat.S_ISREG(
-                os.stat(transcript).st_mode
-            ):
-                return recorded
-            return None
-        other = located(transcript, HOME.dir)
+        other = client_state.home_path(path.root, transcript)
         if (
-            other is not None
-            and (other.session, other.client) == (found.session, found.client)
-            and posixpath.dirname(other.rel) == posixpath.dirname(found.rel)
-            and client_state.stat(other) is not None
+            posixpath.dirname(other.rel) == posixpath.dirname(path.rel)
+            and home.stat(other) is not None
         ):
-            return os.path.abspath(transcript)
+            return other
     return None
 
 
-def _resumable(path: str) -> Resumable:
+def _resumable(home: HomeStore, path: HomePath) -> Resumable:
     try:
-        found = located(path, HOME.dir)
-        if found is not None:
-            return Resumable.NO if client_state.stat(found) is None else Resumable.YES
-        mode = os.stat(path).st_mode
-    except (FileNotFoundError, NotADirectoryError):
+        found = home.stat(path)
+    except NotADirectoryError:  # a file where a folder of its path belongs
         return Resumable.NO
     except OSError:
         return Resumable.UNKNOWN
-    return Resumable.YES if stat.S_ISREG(mode) else Resumable.UNKNOWN
+    return Resumable.NO if found is None else Resumable.YES
 
 
-def _activity(path: str) -> float | None:
-    """The newest mtime of `path` and the files in its folder."""
-    try:
-        found = located(path, HOME.dir)
-    except OSError:
-        return None
-    if found is not None:
-        return _state_activity(found)
-    root = os.path.realpath(os.path.dirname(path))
-    paths = [path]
-    folder = os.path.splitext(path)[0]
-    if os.path.commonpath((os.path.realpath(folder), root)) == root:
-        for top, _, files in os.walk(folder):
-            paths += (os.path.join(top, name) for name in files)
-    times = []
-    for each in paths:
-        with contextlib.suppress(OSError):
-            times.append(os.lstat(each).st_mtime)
-    return max(times, default=None)
-
-
-def _state_activity(file: StateFile) -> float | None:
+def _activity(home: HomeStore, path: HomePath) -> float | None:
+    """The newest mtime of `path` and the files below its folder."""
     times = []
     with contextlib.suppress(OSError):
-        if (found := client_state.stat(file)) is not None:
+        if (found := home.stat(path)) is not None:
             times.append(found.mtime)
-    pending, seen = [(posixpath.splitext(file.rel)[0], 0)], 0
+    pending, seen = [(posixpath.splitext(path.rel)[0], 0)], 0
     while pending:
         rel, depth = pending.pop()
         try:
-            listed = client_state.entries(file._replace(rel=rel)) or ()
+            listed = home.entries(path._replace(rel=rel)) or ()
         except OSError:
             continue
         for entry in listed:
@@ -524,13 +486,18 @@ class ClaudeCommon:
         return replace(HOME, files=_docker_files)
 
     def transcript(self, cwd: str, sid: str, env: Mapping[str, str] = MappingProxyType({})) -> str:
+        return _named(self.transcript_path(cwd, sid, env))
+
+    def transcript_path(
+        self, cwd: str, sid: str, env: Mapping[str, str] = MappingProxyType({})
+    ) -> HomePath:
         project = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd))
-        return os.path.join(self.config_dir(env), "projects", project, f"{sid}.jsonl")
+        return HomePath(self.config_dir(env), f"projects/{project}/{sid}.jsonl")
 
     @staticmethod
     def continuation(
-        record: dict, sid: str, config_dir: str
-    ) -> tuple[str, str | None, str | None] | None:
+        record: dict, sid: str, home: HomeStore, root: str
+    ) -> tuple[str, HomePath | None, str | None] | None:
         """A matching continuation's native id, existing target and copy cutoff."""
         target = record.get("continuedInSessionId")
         if not (
@@ -541,11 +508,10 @@ class ClaudeCommon:
         ):
             return None
         path = None
-        projects = os.path.join(config_dir, "projects")
         with contextlib.suppress(OSError):
-            for name in _subdirs(projects):
-                candidate = os.path.join(projects, name, f"{target}.jsonl")
-                if read(candidate, limit=0) is not None and _contained(candidate, projects):
+            for entry in home.entries(HomePath(root, "projects")) or ():
+                candidate = HomePath(root, f"projects/{entry.name}/{target}.jsonl")
+                if entry.kind is StateKind.DIR and read(home, candidate, limit=0) is not None:
                     path = candidate
                     break
         timestamp = record.get("timestamp")
@@ -553,20 +519,20 @@ class ClaudeCommon:
 
     @classmethod
     def walk(
-        cls, path: str | None, sid: str, config_dir: str
-    ) -> list[tuple[str, str | None, str | None]]:
+        cls, home: HomeStore, path: HomePath, sid: str
+    ) -> list[tuple[str, HomePath | None, str | None]]:
         """Follow the last matching marker in each tail, retaining a missing final target."""
-        hops: list[tuple[str, str | None, str | None]] = [(sid, path, None)]
-        seen = {sid}
-        while path:
-            data = read(path, limit=TAIL, tail=True) or b""
+        hops: list[tuple[str, HomePath | None, str | None]] = [(sid, path, None)]
+        seen, at = {sid}, path
+        while at:
+            data = read(home, at, limit=TAIL, tail=True) or b""
             found = None
             for record in json_records(data.splitlines()):
-                found = cls.continuation(record, sid, config_dir) or found
+                found = cls.continuation(record, sid, home, path.root) or found
             if found is None or found[0] in seen:
                 break
             hops.append(found)
-            sid, path, _ = found
+            sid, at, _ = found
             seen.add(sid)
         return hops
 
@@ -619,11 +585,9 @@ class ClaudeCommon:
         try:
             state = _load(store, cwd, self.uuid(sid))
             os.chdir(state["cwd"])
-            path = self.transcript(state["cwd"], sid, state["env"])
+            path = self.transcript_path(state["cwd"], sid, state["env"])
             native, _, _ = next(
-                hop
-                for hop in reversed(self.walk(path, sid, self.config_dir(state["env"])))
-                if hop[1]
+                hop for hop in reversed(self.walk(client_state.LocalHome(), path, sid)) if hop[1]
             )
             command = self._argv(
                 state["cwd"],
@@ -660,7 +624,7 @@ class ClaudeCommon:
         output: tuple[str, ...] = (),
         tail: tuple[str, ...] = (),
         env: Mapping[str, str] = MappingProxyType({}),
-        permission: Permission,
+        context: ClientContext,
     ) -> Launch:
         sid = spec.sid
         model, effort = self.model(spec.tier), self.effort(spec.effort)
@@ -673,18 +637,17 @@ class ClaudeCommon:
             for k, v in {**env, **self.env(), **access.env, **spec.env}.items()
             if k not in LOCAL_ENV_VARS
         }
-        transcript = self.transcript(cwd, sid, merged)
+        path = self.transcript_path(cwd, sid, merged)
         native = sid
         if spec.resume:
-            native, transcript, _ = next(
-                hop
-                for hop in reversed(self.walk(transcript, sid, self.config_dir(merged)))
-                if hop[1]
+            native, found, _ = next(
+                hop for hop in reversed(self.walk(home_of(context), path, sid)) if hop[1]
             )
+            path = found or path
         argv = self._argv(
             cwd,
             self.selector(native, resume=spec.resume),
-            permission,
+            context.permission,
             flags=spec.flags,
             project=access.project,
             dirs=access.dirs,
@@ -703,7 +666,7 @@ class ClaudeCommon:
             argv,
             env=merged,
             unset=self.UNSET,
-            transcript=transcript or "",
+            transcript=_named(path),
             resume=self.resume(cwd, sid),
         )
 
@@ -791,21 +754,20 @@ class ClaudeCommon:
         *,
         transcript: str = "",
         env: Mapping[str, str] = MappingProxyType({}),
+        home: HomeStore,
     ) -> SessionStatus:
         """`env`: the run's access and spec env; its CLAUDE_CONFIG_DIR, if any, holds the transcript."""
         try:
             self.uuid(sid)
         except ConfigError:
             return SessionStatus(Resumable.NO, None, "")
-        path = self.transcript(cwd, sid, env)
-        chain = self.walk(path, sid, self.config_dir(env))
-        path = _recorded(transcript, path) or path
-        _, path, _ = next(
+        path = self.transcript_path(cwd, sid, env)
+        chain = self.walk(home, path, sid)
+        path = _recorded(home, transcript, path) or path
+        _, found, _ = next(
             hop
-            for hop in reversed(
-                chain if len(chain) > 1 else self.walk(path, sid, self.config_dir(env))
-            )
+            for hop in reversed(chain if len(chain) > 1 else self.walk(home, path, sid))
             if hop[1]
         )
-        assert path is not None
-        return SessionStatus(_resumable(path), _activity(path), self.resume(cwd, sid))
+        assert found is not None
+        return SessionStatus(_resumable(home, found), _activity(home, found), self.resume(cwd, sid))

@@ -13,6 +13,7 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.tui import CodexTui
 from ensemble.session.engine import types as engine_types
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -194,7 +195,10 @@ class ClientTest(Refusals):
                 self.assertIsNone(client.usage(output))
         self.assertEqual(
             client.session_status(
-                engine_types.SessionInfo(sid="s", cwd="/c", project=False, transcript="", resume="")
+                engine_types.SessionInfo(
+                    sid="s", cwd="/c", project=False, transcript="", resume=""
+                ),
+                home=LocalHome(),
             ),
             SessionStatus("unknown", None, ""),
         )
@@ -243,7 +247,10 @@ class NoProcessTest(Case):
             client.usage_probe()
             client.usage("output")
             client.session_status(
-                engine_types.SessionInfo(sid="s", cwd="/c", project=False, transcript="", resume="")
+                engine_types.SessionInfo(
+                    sid="s", cwd="/c", project=False, transcript="", resume=""
+                ),
+                home=LocalHome(),
             )
             client.in_process()
             StubInProcess().check(Spec(workdir="/w", access=Access(cwd="/w")))

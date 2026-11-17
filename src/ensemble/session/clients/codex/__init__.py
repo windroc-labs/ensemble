@@ -7,7 +7,7 @@ from ensemble.session.clients.base import Client
 from ensemble.session.clients.codex.common import CodexCommon
 from ensemble.session.clients.codex.headless import CodexHeadless
 from ensemble.session.clients.codex.tui import CodexTui
-from ensemble.session.engine.types import SessionInfo, Spec
+from ensemble.session.engine.types import HomeStore, SessionInfo, Spec
 from ensemble.utils import LOCAL_ENV_VARS
 
 
@@ -66,7 +66,13 @@ class CodexClient(Client):
     def resume_main(self, argv):
         return self.common.resume_main(argv)
 
-    def session_status(self, info: SessionInfo, *, env: Mapping[str, str] = MappingProxyType({})):
+    def session_status(
+        self,
+        info: SessionInfo,
+        *,
+        env: Mapping[str, str] = MappingProxyType({}),
+        home: HomeStore,
+    ):
         return self.common.session_status(info.sid, info.cwd, transcript=info.transcript)
 
     def writable_dirs(self, spec: Spec):

@@ -12,10 +12,11 @@ from unittest import mock
 from ensemble.session.clients import replies as shared
 from ensemble.session.clients.claude import ClaudeClient, replies
 from ensemble.session.clients.claude.tui import on_hook
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import Access, HookCall, Spec
 from ensemble.utils import file_lock, read_reply
 from tests.session.case import SPAWNS
-from tests.session.unit.clients.claude.support import SID, Base, text, tool
+from tests.session.unit.clients.claude.support import SID, Base, homed, text, tool
 from tests.utils.clock import FakeClock
 
 NAME = "w1"
@@ -46,7 +47,7 @@ class RepliesBase(Base):
     def setUp(self):
         super().setUp()
         self.env({"HOME": self.tmp})
-        self.run = ClaudeClient({}).tui()
+        self.run = homed(ClaudeClient({}).tui())
         spec = Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID, name=NAME)
         self.path = self.run.launch(spec, HOOK).transcript
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -96,7 +97,7 @@ class RepliesBase(Base):
         self.hook("Stop", last_assistant_message=final)
 
     def pump(self):
-        replies.settle_pending(self.callback["store"], self.work, SID)
+        replies.settle_pending(self.callback["store"], self.work, SID, LocalHome())
 
 
 class TurnTest(RepliesBase):

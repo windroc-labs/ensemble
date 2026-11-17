@@ -1,17 +1,20 @@
 import errno
 import os
 import re
+from dataclasses import replace
 
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.common import (
     check_selection,
     docker_config,
+    home_of,
     located,
     scan,
     select,
     split_flags,
 )
-from ensemble.session.engine.types import ConfigError, StateFile
+from ensemble.session.engine.client_state import LocalHome
+from ensemble.session.engine.types import LOCAL_CONTEXT, ConfigError, StateFile
 from ensemble.utils import docker_home
 from tests.session.case import SID, Case
 from tests.utils.sandbox import scratch
@@ -127,6 +130,19 @@ class FlagsTest(Case):
                 self.assertRaisesRegex(ConfigError, "session ids are UUIDs"),
             ):
                 select(native, syntax, uuid=True, resume=False)
+
+
+class HomeOfTest(Case):
+    def test_the_contexts_home_store(self):
+        store = LocalHome()
+        self.assertIs(home_of(replace(LOCAL_CONTEXT, home=store)), store)
+
+    def test_a_context_without_one_is_a_config_error(self):
+        with self.assertRaises(ConfigError) as caught:
+            home_of(LOCAL_CONTEXT)
+        self.assertEqual(
+            str(caught.exception), "no client home store: the Host hands one at session start"
+        )
 
 
 class DockerConfigTest(Case):

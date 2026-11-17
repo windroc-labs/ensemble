@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import CodexClient
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     ConfigError,
     Launch,
@@ -36,7 +37,8 @@ class SessionStatusTest(Base):
         info = self.client.session_status(
             SessionInfo(
                 sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-            )
+            ),
+            home=LocalHome(),
         )
         self.assertIsInstance(info, SessionStatus)
         self.assertEqual((info.resumable, info.last_active), ("yes", 300))
@@ -59,7 +61,7 @@ class SessionStatusTest(Base):
             resume="rm -rf ~",
         )
         self.assertEqual(
-            self.client.session_status(info),
+            self.client.session_status(info, home=LocalHome()),
             SessionStatus("yes", recorded.stat().st_mtime, self.common.resume_command(state)),
         )
 
@@ -67,9 +69,13 @@ class SessionStatusTest(Base):
         info = SessionInfo(
             sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
         )
-        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()), SessionStatus("no", None, "")
+        )
         self.prepare()
-        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()), SessionStatus("no", None, "")
+        )
 
 
 class UsageTest(Case):

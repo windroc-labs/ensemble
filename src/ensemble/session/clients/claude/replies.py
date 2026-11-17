@@ -1,11 +1,6 @@
-"""Claude mid-turn replies. Claude Code queues a message sent while a turn runs (a `queue-operation`
-enqueue record) and, once the running tool returns, joins it to that turn as a `queued_command`
-attachment; its UserPromptSubmit, if one runs, keeps the open turn. A message one (commandMode
-prompt, not a background task's notification) after the turn's first assistant record is an
-interjection; the first assistant text after it is its answer, stored and announced as
-`reply <id>` by the owning harness's pump (settle_pending) or the turn's Stop hook, whichever finds
-it first. UserPromptSubmit opens the turn, PostToolUse scans it, Stop scans with its text and
-closes it. Only main-thread records count.
+"""Claude mid-turn replies. A message Claude Code queues and joins to a turn after its first
+assistant record is an interjection; the next assistant text answers it, announced as `reply <id>`
+by the harness's pump or the Stop hook, whichever is first.
 """
 
 import hashlib
@@ -15,9 +10,9 @@ import sys
 import time
 
 from ensemble.session.clients import replies as shared
-from ensemble.session.clients.claude.common import read, size, texts
+from ensemble.session.clients.claude.common import read, size, texts, tracked
 from ensemble.session.clients.replies import LIFETIME, Clock, Sleep, locked
-from ensemble.session.engine.types import HookCall
+from ensemble.session.engine.types import HomeStore, HookCall
 from ensemble.utils import json_records, save
 
 SCAN_MAX = 4 << 20  # bytes of the transcript one scan reads
@@ -35,11 +30,11 @@ def _turn(*, open_: bool = False, since=0.0, start=0) -> dict:
     return {
         "open": open_,
         "since": since,
-        "start": start,  # the transcript's size when the turn opened
-        "cursor": start,  # bytes scanned
-        "skip": False,  # the cursor is inside a line longer than SCAN_MAX
-        "spoke": False,  # an assistant record since the turn opened or its last prompt
-        "queued": 0,  # messages enqueued, not yet joined or taken out
+        "start": start,  # the transcript's size at the turn's start
+        "cursor": start,
+        "skip": False,  # inside a line longer than SCAN_MAX
+        "spoke": False,  # an assistant record since the last prompt
+        "queued": 0,
         "steers": [],  # unanswered interjections' offsets
     }
 
@@ -73,7 +68,6 @@ def _load(path: str) -> dict:
 
 
 def _record(found: dict, at: int, record: dict) -> None:
-    """One main-thread transcript record's effect on the turn's progress."""
     kind = record.get("type")
     if record.get("isSidechain") is True:
         return
@@ -92,7 +86,7 @@ def _record(found: dict, at: int, record: dict) -> None:
         content = message.get("content") if isinstance(message, dict) else None
         said = "\n".join(texts(content))
         if kind == "user":
-            if isinstance(content, str) or said:  # a prompt: as ClaudeTui's, a new turn
+            if isinstance(content, str) or said:  # a prompt starts a turn
                 found.update(spoke=False, steers=[])
             return
         found["spoke"] = True
@@ -101,21 +95,20 @@ def _record(found: dict, at: int, record: dict) -> None:
             found["steers"] = []
 
 
-def scan(state: dict) -> dict:
-    """The turn's progress through the transcript's whole lines from its cursor, SCAN_MAX bytes:
-    its fields, and `answers`, [(interjection offset, text)].
-    """
+def scan(state: dict, home: HomeStore) -> dict:
+    """The turn's fields after its next SCAN_MAX bytes, and `answers`: [(offset, text)]."""
     turn = state["turn"]
     found = {key: turn[key] for key in ("cursor", "skip", "spoke", "queued", "steers")}
     found["answers"] = []
-    data = read(state["transcript"], offset=turn["cursor"], limit=SCAN_MAX) or b""
+    path = tracked(state["transcript"])
+    data = (read(home, path, offset=turn["cursor"], limit=SCAN_MAX) if path else None) or b""
     complete = data[: data.rfind(b"\n") + 1]
     if not complete:
-        if len(data) == SCAN_MAX:  # one line longer than a read: skip past it
+        if len(data) == SCAN_MAX:
             found.update(cursor=turn["cursor"] + len(data), skip=True)
         return found
     lines, position = complete.split(b"\n")[:-1], turn["cursor"]
-    if found["skip"]:  # the rest of a line longer than a read
+    if found["skip"]:
         position, lines = position + len(lines[0]) + 1, lines[1:]
         found["skip"] = False
     for line in lines:
@@ -138,17 +131,23 @@ def _identity(turn: dict) -> tuple:
 
 
 def settle(
-    path: str, *, deadline: float, clock: Clock, sleep: Sleep, final: str = "", close=False
+    path: str,
+    *,
+    deadline: float,
+    clock: Clock,
+    sleep: Sleep,
+    home: HomeStore,
+    final: str = "",
+    close=False,
 ) -> int:
-    """Scans the open turn unlocked, then, locked again, applies the scan to the same turn unless
-    another went further, emitting its answers (once each: by interjection), and, `close`, answers
-    the rest with `final` and closes the turn; the answers and messages still awaited.
+    """Applies an unlocked scan to the same open turn unless another went further; `close`: the
+    rest answered with `final`, the turn closed. The answers and messages still awaited.
     """
     with locked(path, deadline, clock, sleep):
         state = _load(path)
     if not state["turn"]["open"]:
         return 0
-    progress = scan(state)
+    progress = scan(state, home)
     with locked(path, deadline, clock, sleep):
         current = _load(path)
         turn = current["turn"]
@@ -166,29 +165,27 @@ def settle(
         return current["turn"]["queued"] + len(current["turn"]["steers"])
 
 
-def settle_pending(store: str, workdir: str, sid: str) -> None:
-    """The run's open turn settled by its owning harness's pump (shared.pumped): an answer no hook
-    follows is still announced.
-    """
+def settle_pending(store: str, workdir: str, sid: str, home: HomeStore) -> None:
+    """Settles the run's open turn from its harness's pump, for answers no hook follows."""
     path = state_path(store, workdir, sid)
     shared.pumped(
         path,
-        lambda deadline: settle(path, deadline=deadline, clock=time.monotonic, sleep=time.sleep),
+        lambda deadline: settle(
+            path, deadline=deadline, clock=time.monotonic, sleep=time.sleep, home=home
+        ),
         "claude reply",
     )
 
 
-def on_hook(call: HookCall, *, began: float) -> None:
-    """The Claude client hook's reply bookkeeping, within DEADLINE s of `began` (the hook's
-    time.monotonic() start); never raises, failures said on stderr.
-    """
+def on_hook(call: HookCall, *, began: float, home: HomeStore) -> None:
+    """Within DEADLINE s of `began`; failures go to stderr."""
     try:
-        _on_hook(call, began + DEADLINE)
+        _on_hook(call, began + DEADLINE, home)
     except Exception as error:  # noqa: BLE001  # replies must never fail the hook or keep its done line
         print(f"claude reply: {error}", file=sys.stderr)
 
 
-def _on_hook(call: HookCall, deadline: float) -> None:
+def _on_hook(call: HookCall, deadline: float, home: HomeStore) -> None:
     name, store, events = call.state.get("name"), call.state.get("store"), call.events
     if call.label not in LABELS or not (isinstance(name, str) and name and events):
         return
@@ -202,7 +199,9 @@ def _on_hook(call: HookCall, deadline: float) -> None:
         final = call.payload.get("last_assistant_message") if call.label == "Stop" else ""
         close = call.label != "PostToolUse"
         final = final if isinstance(final, str) else ""
-        settle(path, deadline=deadline, clock=clock, sleep=sleep, final=final, close=close)
+        settle(
+            path, deadline=deadline, clock=clock, sleep=sleep, home=home, final=final, close=close
+        )
         return
     with locked(path, deadline, clock, sleep):
         current = _load(path)
@@ -212,6 +211,7 @@ def _on_hook(call: HookCall, deadline: float) -> None:
         if call.label == "SessionStart":
             current["turn"] = _turn()
         elif not kept:
-            start = size(transcript)
+            found = tracked(transcript)
+            start = size(home, found) if found else 0
             current["turn"] = _turn(open_=True, since=now, start=start)
         save(path, json.dumps(current))

@@ -6,6 +6,7 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
 from ensemble.session.clients.claude.headless import ClaudeHeadless
 from ensemble.session.clients.claude.tui import ClaudeTui
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     Access,
     ConfigError,
@@ -157,7 +158,7 @@ class ClientTest(Base):
             sid=SID, cwd=self.work, project=False, transcript=path, resume="rm -rf ~"
         )
         self.assertEqual(
-            client.session_status(info),
+            client.session_status(info, home=LocalHome()),
             SessionStatus(
                 "yes",
                 os.stat(path).st_mtime,
@@ -172,19 +173,21 @@ class ClientTest(Base):
         with open(path, "w", encoding="utf-8") as stream:
             stream.write("recorded")
         info = SessionInfo(sid=SID, cwd=self.work, project=False, transcript=path, resume="")
-        self.assertEqual(client.session_status(info, env=env).resumable, "yes")
-        self.assertEqual(client.session_status(info).resumable, "no")
+        self.assertEqual(client.session_status(info, env=env, home=LocalHome()).resumable, "yes")
+        self.assertEqual(client.session_status(info, home=LocalHome()).resumable, "no")
 
     def test_session_status(self):
         self.assertEqual(
             ClaudeClient({}).session_status(
-                SessionInfo(sid=SID, cwd=self.work, project=False, transcript="", resume="")
+                SessionInfo(sid=SID, cwd=self.work, project=False, transcript="", resume=""),
+                home=LocalHome(),
             ),
             SessionStatus("no", None, reference(self.work)),
         )
         self.assertEqual(
             ClaudeClient({}).session_status(
-                SessionInfo(sid="x", cwd=self.work, project=False, transcript="", resume="")
+                SessionInfo(sid="x", cwd=self.work, project=False, transcript="", resume=""),
+                home=LocalHome(),
             ),
             SessionStatus("no", None, ""),
         )

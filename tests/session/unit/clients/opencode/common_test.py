@@ -18,6 +18,7 @@ from ensemble.session.clients.opencode.common import (
     OpenCodeCommon,
     worktree,
 )
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
@@ -264,7 +265,7 @@ class SessionStatusTest(Case):
         self.info = SessionInfo("run-1", self.cwd, project=False, transcript="", resume="")
 
     def status(self, **env):
-        return self.client.session_status(self.info, env=env)
+        return self.client.session_status(self.info, env=env, home=LocalHome())
 
     def test_a_bound_session_in_the_db_is_resumable(self):
         self.client.common.bind(self.cwd, "run-1", SES)
@@ -313,10 +314,14 @@ class SessionStatusTest(Case):
         make_db(docker, {SES: 1000})
         self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
         info = replace(self.info, transcript=docker)
-        self.assertEqual(self.client.session_status(info).resumable, Resumable.YES)
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()).resumable, Resumable.YES
+        )
         make_db(self.db, {SES: 1000})
         os.unlink(docker)
-        self.assertEqual(self.client.session_status(info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()).resumable, Resumable.UNKNOWN
+        )
 
     def test_the_db_follows_the_session_env_over_the_caller(self):
         self.client.common.bind(self.cwd, "run-1", SES)
@@ -325,7 +330,9 @@ class SessionStatusTest(Case):
         self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
         self.assertEqual(self.status(XDG_DATA_HOME=other).resumable, Resumable.YES)
         configured = OpenCodeClient({**packaged_table(), "env": {"XDG_DATA_HOME": other}})
-        self.assertEqual(configured.session_status(self.info).resumable, Resumable.YES)
+        self.assertEqual(
+            configured.session_status(self.info, home=LocalHome()).resumable, Resumable.YES
+        )
 
 
 class DockerDatabaseTest(Case):
@@ -358,7 +365,7 @@ class DockerDatabaseTest(Case):
         self.wal_db()
         real = sqlite3.connect
         with mock.patch.object(sqlite3, "connect", side_effect=real) as spy:
-            found = self.client.session_status(self.info)
+            found = self.client.session_status(self.info, home=LocalHome())
             native = self.client.common.session(self.cwd, "run-2", self.state_db)
         self.assertEqual(found, SessionStatus(Resumable.YES, 1_760_000_000.25, ""))
         self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
@@ -369,15 +376,21 @@ class DockerDatabaseTest(Case):
             self.assertNotIn(state, str(call))
 
     def test_an_absent_db(self):
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.NO)
+        self.assertEqual(
+            self.client.session_status(self.info, home=LocalHome()).resumable, Resumable.NO
+        )
         self.client.common.bind(self.cwd, "run-1", SES)
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(self.info, home=LocalHome()).resumable, Resumable.UNKNOWN
+        )
 
     def test_a_linked_db_is_refused(self):
         outside = make_db(os.path.join(self.home, "outside.db"), {SES: 1000})
         os.makedirs(os.path.dirname(self.state_db))
         os.symlink(outside, self.state_db)
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(self.info, home=LocalHome()).resumable, Resumable.UNKNOWN
+        )
         with self.assertRaisesRegex(ConfigError, "^opencode session lookup: "):
             self.client.common.session(self.cwd, "run-1", self.state_db)
 

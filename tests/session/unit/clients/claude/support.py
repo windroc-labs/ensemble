@@ -12,10 +12,12 @@ from zoneinfo import ZoneInfo
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
 from ensemble.session.clients.common import select
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
     ConfigError,
+    HomeStore,
     HookKind,
     Launch,
     Permission,
@@ -130,8 +132,22 @@ class Base(Case):
         return _launch("headless", self.work, prompt, config, **spec)
 
 
+def homed(run, home: HomeStore | None = None, permission=Permission.AUTO):
+    """`run` given a local context holding `home`, this machine's by default, as a mode gives it."""
+    run._context = replace(LOCAL_CONTEXT, permission=permission, home=home or LocalHome())
+    return run
+
+
 def _launch(
-    mode, work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
+    mode,
+    work,
+    prompt="hi",
+    config=CONFIG,
+    *,
+    resume=False,
+    permission=Permission.AUTO,
+    home: HomeStore | None = None,
+    **spec,
 ) -> Launch:
     spec = Spec(
         **{
@@ -144,8 +160,7 @@ def _launch(
         }
     )
     client = ClaudeClient(config)
-    run = client.tui() if mode == "tui" else client.headless()
-    run._context = replace(LOCAL_CONTEXT, permission=permission)
+    run = homed(client.tui() if mode == "tui" else client.headless(), home, permission)
     return run.launch(spec, HOOK) if mode == "tui" else run.launch(spec)
 
 
