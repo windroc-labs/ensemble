@@ -16,22 +16,26 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from typing import NamedTuple
 
 import ensemble.utils
+from ensemble.session.engine import client_state
 from ensemble.session.engine.daemon import (
     CLEARED,
     RUN_TIMEOUT,
+    STATE_READER_LABEL,
     attach_env,
     capped,
     container_name,
     docker_call,
     endpoint,
+    save_access,
     ssh_agent,
+    state_volume,
     unreachable,
 )
 from ensemble.session.engine.status_log import SessionStatusLog
@@ -46,6 +50,7 @@ from ensemble.session.engine.types import (
     ClientHome,
     ConfigError,
     Container,
+    DockerAccess,
     EnvironmentSpec,
     Launch,
     Liveness,
@@ -96,9 +101,7 @@ from ensemble.utils import (
     inode_lock,
     kill_group,
     module_roots,
-    read_beneath,
     read_regular,
-    remove_tree,
     save,
     source_path,
     timestamp,
@@ -220,32 +223,20 @@ def _state_file(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
 
 
-def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
-    """Empties a new start's client home in place, following no link: Docker Desktop can report a
-    bind source recreated at a known path as missing, so `home` and each `kept` dir stay the same dir.
-    """
-    keep = {os.path.join(home, directory) for directory in kept}
-
-    def empty(path: str) -> None:
-        os.chmod(path, 0o700)
-        with os.scandir(path) as entries:
-            for entry in entries:
-                if not entry.is_dir(follow_symlinks=False):
-                    os.unlink(entry.path)
-                elif entry.path in keep:
-                    empty(entry.path)
-                else:
-                    remove_tree(entry.path)
-
+def _check_history(name: str, home: str, client: str, transcript: str) -> None:
+    """A resume's native history, read from the state volume with no container running."""
+    missing = f"docker session {name}: no native history to resume in {home}"
     try:
-        if os.path.lexists(home) and (os.path.islink(home) or not os.path.isdir(home)):
-            os.unlink(home)
-        os.makedirs(home, mode=0o700, exist_ok=True)
-        empty(home)
+        found = client_state.locate(os.path.join(home, transcript))
+        present = (
+            found is not None
+            and found.client == client
+            and client_state.read(found, limit=0) is not None
+        )
     except OSError as error:
-        raise SessionError(
-            f"docker session {name}: cannot reset {home}: {error.strerror or error}"
-        ) from None
+        raise ConfigError(f"{missing}: {error.strerror or error}") from None
+    if not present:
+        raise ConfigError(missing)
 
 
 def _report_plan(name: str, plan: Mapping) -> None:
@@ -258,7 +249,7 @@ def _report_plan(name: str, plan: Mapping) -> None:
         )
     except OSError as error:
         raise SessionError(f"docker session {name}: plan: {error}") from None
-    mounts = ", ".join(f"{mount['path']} rw" for mount in plan["mounts"])
+    mounts = ", ".join(f"{mount['path']} rw ({mount['volume']})" for mount in plan["mounts"])
     workspace = plan["workspace"]
     for part in (
         f"image {plan['image']} {plan['image_digest']}",
@@ -318,6 +309,7 @@ class _Container(NamedTuple):
     started: Started
     began: str
     ended: str
+    seeds: Mapping[str, str]  # a new start's home files, by container path
 
 
 def _save_result(
@@ -615,10 +607,7 @@ class DockerHost(Host):
             raise ConfigError(
                 f"client {client or '(unnamed)'}: not supported on the Docker Host yet"
             )
-        path = docker_home(name, home.dir)
-        if os.path.realpath(path) != path:
-            raise ConfigError(f"client home {path}: symlink component")
-        return {home.env: path}
+        return {home.env: docker_home(name, home.dir)}
 
     def _resume_argv(self, name: str) -> tuple[str, ...]:
         return (*RESUME, name)
@@ -726,6 +715,34 @@ class DockerHost(Host):
             )
         return hook, root, built
 
+    def _drop_state(self, name: str) -> None:
+        """A new start's empty client home: its readers and state volume go; the broker makes it."""
+        why = f"docker session {name}: cannot reset its client state"
+        listed = self._state_call(
+            why, "ps", "--all", "--quiet", "--filter", f"label={STATE_READER_LABEL}={name}"
+        )
+        if listed is None:
+            return  # no daemon: the broker start fails on it, naming the target, before any write
+        if readers := listed.split():
+            self._state_call(why, "rm", "--force", *readers)
+        self._state_call(why, "volume", "rm", state_volume(name), absent_ok=True)
+
+    def _state_call(self, why: str, *args: str, absent_ok: bool = False) -> str | None:
+        """`docker <args>`'s stdout; None: no reachable daemon."""
+        argv, env = docker_call(self.docker, *args)
+        try:
+            result = self.run(argv, env, timeout=RUN_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise SessionError(f"{why}: {error}") from None
+        if result.returncode and unreachable(result.stderr):
+            return None
+        if result.returncode and not (absent_ok and "no such volume" in result.stderr.lower()):
+            lines = (result.stderr or "").strip().splitlines()
+            raise SessionError(
+                f"{why}: {lines[-1] if lines else f'exit status {result.returncode}'}"
+            )
+        return result.stdout
+
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
         """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
         anchor = next((a for v, a in self._workspaces() or () if v == volume), cwd)
@@ -780,8 +797,12 @@ class DockerHost(Host):
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
-        if resume == "1" and read_beneath(home, launch.transcript, limit=0) is None:
-            raise ConfigError(f"docker session {name}: no native history to resume in {home}")
+        try:
+            save_access(name, DockerAccess(self.docker, endpoint()))
+        except OSError as error:
+            raise SessionError(f"docker session {name}: state access: {error}") from None
+        if resume == "1":
+            _check_history(name, home, home_dir, launch.transcript)
         laps("checks")
         hook, root, (image, digest) = self._image(name, environment)
         volume = workspace_volume(name)
@@ -795,11 +816,8 @@ class DockerHost(Host):
                 )
         if resume == "0":
             self._move_workspace(name, volume, cwd)
-            _reset_home(name, home, persistent or ())
-        for directory in persistent or ():
-            os.makedirs(os.path.join(home, directory), mode=0o700, exist_ok=True)
-        for file, text in files.items() if resume == "0" else ():
-            save(os.path.join(home, file), text)
+            self._drop_state(name)
+        seeds = {os.path.join(home, f): text for f, text in files.items()} if resume == "0" else {}
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
         write_manifest(
@@ -835,10 +853,15 @@ class DockerHost(Host):
                 "image_digest": digest,
                 "workspace": {"volume": volume, "path": cwd},
                 "mounts": [
-                    {"path": os.path.join(home, directory), "rw": True} for directory in persistent
+                    {
+                        "path": os.path.join(home, directory),
+                        "rw": True,
+                        "volume": state_volume(name),
+                    }
+                    for directory in persistent
                 ]
                 if persistent is not None
-                else [{"path": home, "rw": True}],
+                else [{"path": home, "rw": True, "volume": state_volume(name)}],
                 "credential": credential,
             },
         )
@@ -851,7 +874,9 @@ class DockerHost(Host):
             _accept_started(name, generation, started, container)
             ended = timestamp()
             laps("start")
-            created = _Container(container, generation, hook, image, cwd, started, began, ended)
+            created = _Container(
+                container, generation, hook, image, cwd, started, began, ended, seeds
+            )
             _save_result(name, created, laps.phases)
         except BrokerError as error:
             if error.code == "busy" and error.holder and environment and environment.lock:
@@ -972,12 +997,12 @@ class DockerHost(Host):
     ) -> DockerWorker:
         laps = _Laps()
         created = self._container(name, launch, stops, laps, metadata, environment=environment)
-        container, generation, hook, _, _, _, _, _ = created
+        container, generation, hook, _, _, _, _, _, seeds = created
         handle = proc = None
         try:
             stops.check()
             self._stage_files(container, metadata)
-            self._stage_staged_files(container, metadata)
+            self._stage_staged_files(container, metadata, seeds)
             _save_record(
                 name,
                 {
@@ -1163,11 +1188,14 @@ class DockerHost(Host):
         if result.returncode:
             raise SessionError("staging client runtime failed")
 
-    def _stage_staged_files(self, container: str, metadata: Mapping[str, str]) -> None:
-        """As the container's agent user."""
-        files = metadata.get(STAGED)
-        if files is None:
+    def _stage_staged_files(
+        self, container: str, metadata: Mapping[str, str], seeds: Mapping[str, str]
+    ) -> None:
+        """As the container's agent user, with a new start's home files."""
+        staged = metadata.get(STAGED)
+        if staged is None and not seeds:
             return
+        files = json.dumps({**json.loads(staged or "{}"), **seeds})
         argv, env = docker_call(
             self.docker,
             *("exec", "-i", "--user", "agent", container),

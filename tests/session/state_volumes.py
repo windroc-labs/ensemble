@@ -139,5 +139,10 @@ def serve(sessions=("s1", "v", "w")):
         try:
             yield volumes
         finally:
-            client_state._close_readers()
-            client_state._READERS.clear()
+            reset()
+
+
+def reset():
+    """No reader left from an earlier test."""
+    client_state._close_readers()
+    client_state._READERS.clear()
