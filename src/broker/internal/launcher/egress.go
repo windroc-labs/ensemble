@@ -25,7 +25,7 @@ const (
 	workersKey      = "workers"
 	proxyName       = "egress-proxy"
 	noProxy         = "localhost,127.0.0.1,::1"
-	egressHint      = " Start the egress proxy with ~/.egress/current/start.sh, wait until it is healthy, then retry."
+	localEgressHint = " Start the egress proxy with ~/.egress/current/start.sh, wait until it is healthy, then retry."
 )
 
 // networkPattern is a Docker network name; never a flag.
@@ -61,8 +61,18 @@ type networkInfo struct {
 	Internal bool
 }
 
-func refuse(format string, args ...any) *protocol.Error {
-	return protocol.New(protocol.EgressUnavailable, fmt.Sprintf(format, args...)+egressHint)
+// egressHint ends every egress refusal: how to bring up the proxy on the Docker target this start uses. A remote
+// target's proxy is installed from this Mac, as nothing on the target can fetch its image.
+func (h Host) egressHint() string {
+	if docker.RemoteEndpoint(h.Endpoint) {
+		return " Install it on the Docker target " + h.Endpoint +
+			" by running bash <ensemble plugin directory>/scripts/install-target-egress.sh on this Mac, wait until it is healthy, then retry."
+	}
+	return localEgressHint
+}
+
+func (h Host) refuse(format string, args ...any) *protocol.Error {
+	return protocol.New(protocol.EgressUnavailable, fmt.Sprintf(format, args...)+h.egressHint())
 }
 
 // clip bounds a label value quoted in a message, on a rune boundary.
@@ -110,7 +120,8 @@ func (h Host) checkProxy(ctx context.Context, key string) (egressProxy, error) {
 	px, err := h.inspectProxy(ctx)
 	var e *protocol.Error
 	if errors.As(err, &e) && e.Code == protocol.EgressUnavailable {
-		e.Message = strings.TrimSuffix(e.Message, egressHint) + " Caller network " + key + " needs it." + egressHint
+		hint := h.egressHint()
+		e.Message = strings.TrimSuffix(e.Message, hint) + " Caller network " + key + " needs it." + hint
 	}
 	return px, err
 }
@@ -118,24 +129,24 @@ func (h Host) checkProxy(ctx context.Context, key string) (egressProxy, error) {
 func (h Host) inspectProxy(ctx context.Context) (egressProxy, error) {
 	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--no-trunc", "--filter", "label=" + contractLabel, "--format", "{{.ID}}"}, nil)
 	if err != nil {
-		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot list egress proxy containers."+egressHint)
+		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot list egress proxy containers."+h.egressHint())
 	}
 	ids := strings.Fields(string(out))
 	switch {
 	case len(ids) == 0:
-		return egressProxy{}, refuse("No egress proxy container (label %s) found; expected %s.", contractLabel, proxyName)
+		return egressProxy{}, h.refuse("No egress proxy container (label %s) found; expected %s.", contractLabel, proxyName)
 	case len(ids) > 1:
-		return egressProxy{}, refuse("Found %d egress proxy containers (label %s); keep only %s.", len(ids), contractLabel, proxyName)
+		return egressProxy{}, h.refuse("Found %d egress proxy containers (label %s); keep only %s.", len(ids), contractLabel, proxyName)
 	case !containerIDPattern.MatchString(ids[0]):
-		return egressProxy{}, refuse("Cannot inspect egress proxy %s.", proxyName)
+		return egressProxy{}, h.refuse("Cannot inspect egress proxy %s.", proxyName)
 	}
 	out, err = h.Docker.Run(ctx, []string{"container", "inspect", ids[0]}, nil)
 	if err != nil {
-		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress proxy "+proxyName+"."+egressHint)
+		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress proxy "+proxyName+"."+h.egressHint())
 	}
 	px, err := inspectOne[proxyInfo](out)
 	if err != nil {
-		return egressProxy{}, refuse("Cannot inspect egress proxy %s.", proxyName)
+		return egressProxy{}, h.refuse("Cannot inspect egress proxy %s.", proxyName)
 	}
 	name := strings.TrimPrefix(px.Name, "/")
 	if !networkPattern.MatchString(name) {
@@ -144,13 +155,13 @@ func (h Host) inspectProxy(ctx context.Context) (egressProxy, error) {
 	labels := px.Config.Labels
 	switch {
 	case labels[contractLabel] != contractVersion:
-		return egressProxy{}, refuse("Egress proxy %s has label contract version %s; this broker knows %s.", name, clip(labels[contractLabel]), contractVersion)
+		return egressProxy{}, h.refuse("Egress proxy %s has label contract version %s; this broker knows %s.", name, clip(labels[contractLabel]), contractVersion)
 	case !px.State.Running || px.State.Paused: // a paused proxy keeps its last health but proxies nothing
-		return egressProxy{}, refuse("Egress proxy %s is not running.", name)
+		return egressProxy{}, h.refuse("Egress proxy %s is not running.", name)
 	case px.State.Health == nil:
-		return egressProxy{}, refuse("Egress proxy %s is without a health check, not healthy.", name)
+		return egressProxy{}, h.refuse("Egress proxy %s is without a health check, not healthy.", name)
 	case px.State.Health.Status != "healthy":
-		return egressProxy{}, refuse("Egress proxy %s is %s, not healthy.", name, clip(px.State.Health.Status))
+		return egressProxy{}, h.refuse("Egress proxy %s is %s, not healthy.", name, clip(px.State.Health.Status))
 	}
 	attached := map[string]string{}
 	for network, a := range px.NetworkSettings.Networks {
@@ -165,29 +176,29 @@ func (h Host) caller(ctx context.Context, px egressProxy, key string) (egress, e
 	name := px.name
 	e, ok := callerLabels(px.labels, key)
 	if !ok {
-		return egress{}, refuse("Egress proxy %s has no valid %s network labels.", name, key)
+		return egress{}, h.refuse("Egress proxy %s has no valid %s network labels.", name, key)
 	}
 	attached := px.attached[e.Network]
 	if attached == "" {
-		return egress{}, refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
+		return egress{}, h.refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
 	}
 	out, err := h.Docker.Run(ctx, []string{"network", "inspect", e.Network}, nil)
 	if docker.Absent(err) {
-		return egress{}, refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
+		return egress{}, h.refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
 	}
 	if err != nil {
-		return egress{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress network "+e.Network+" of proxy "+name+"."+egressHint)
+		return egress{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress network "+e.Network+" of proxy "+name+"."+h.egressHint())
 	}
 	network, err := inspectOne[networkInfo](out)
 	switch {
 	case err != nil:
-		return egress{}, refuse("Cannot inspect egress network %s of proxy %s.", e.Network, name)
+		return egress{}, h.refuse("Cannot inspect egress network %s of proxy %s.", e.Network, name)
 	case network.Name != e.Network: // Docker matched an ID prefix, not the name
-		return egress{}, refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
+		return egress{}, h.refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
 	case !network.Internal:
-		return egress{}, refuse("Egress network %s of proxy %s is not internal.", e.Network, name)
+		return egress{}, h.refuse("Egress network %s of proxy %s is not internal.", e.Network, name)
 	case network.ID != attached:
-		return egress{}, refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
+		return egress{}, h.refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
 	}
 	return e, nil
 }
