@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import posixpath
 import re
 import stat
 import sys
@@ -15,7 +16,8 @@ from types import MappingProxyType
 
 from ensemble.session.clients import common
 from ensemble.session.clients.claude import usage
-from ensemble.session.clients.common import UUID, scan, strings
+from ensemble.session.clients.common import UUID, located, scan, strings
+from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
     COMMAND,
     DEFAULT_MAX_USAGE,
@@ -27,17 +29,17 @@ from ensemble.session.engine.types import (
     Resumable,
     SessionStatus,
     Spec,
+    StateFile,
+    StateKind,
     Usage,
 )
 from ensemble.utils import (
     LOCAL_ENV_VARS,
     STATE,
-    docker_home_of,
     drop_stale,
     environment_ok,
     json_records,
     printable_abs,
-    read_beneath,
     read_regular,
     resume_command,
     save,
@@ -79,7 +81,8 @@ UNATTENDED = MappingProxyType(
         "promptSuggestionEnabled": False,
     }
 )
-HOME_READ_MAX = 64 << 20
+WALK_DEPTH = 16  # dirs below a Docker transcript's folder searched for activity
+WALK_ENTRIES = 4096
 # Off: the alternate screen keeps a hidden worker's output out of scrollback.
 TUI_ENV = MappingProxyType(
     {"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}
@@ -309,6 +312,10 @@ def _max_usage(at: str, table: Mapping) -> float:
 
 def size(path: str) -> int:
     try:
+        found = located(os.path.abspath(path), HOME.dir)
+        if found is not None:
+            state = client_state.stat(found)
+            return state.size if state is not None else 0
         info = os.stat(path)
     except (OSError, ValueError):
         return 0
@@ -326,13 +333,118 @@ def texts(content) -> list[str]:
 
 
 def read(path: str, *, offset: int = 0, limit: int | None = None, tail: bool = False):
-    """read_regular; a container-written home: no link, at most HOME_READ_MAX bytes."""
+    """read_regular; a Docker session's home through client_state; None too for a Docker state
+    path outside its Claude home.
+    """
     path = os.path.abspath(path)
-    root = docker_home_of(path, HOME.dir)
-    if root is None:
-        return read_regular(path, offset=offset, limit=limit, tail=tail)
-    cap = HOME_READ_MAX if limit is None else min(limit, HOME_READ_MAX)
-    return read_beneath(root, path, offset=offset, limit=cap, tail=tail)
+    try:
+        found = located(path, HOME.dir)
+        if found is not None:
+            return client_state.read(found, offset=offset, limit=limit, tail=tail)
+    except OSError:
+        return None
+    return read_regular(path, offset=offset, limit=limit, tail=tail)
+
+
+def _subdirs(path: str) -> list[str]:
+    """Names in dir `path`: a Docker session home's subdirs only."""
+    found = located(path, HOME.dir)
+    if found is not None:
+        listed = client_state.entries(found) or ()
+        return [e.name for e in listed if e.kind is StateKind.DIR]
+    with os.scandir(path) as entries:
+        return [entry.name for entry in entries]
+
+
+def _contained(path: str, root: str) -> bool:
+    """Read `path` below `root`: a Docker session home's by its text, as no link is read there."""
+    if located(path, HOME.dir) is not None:
+        return True
+    real = os.path.realpath(root)
+    return os.path.commonpath((os.path.realpath(path), real)) == real
+
+
+def _recorded(transcript: str, path: str) -> str | None:
+    """`transcript`, a regular file in `path`'s folder; None otherwise."""
+    if not printable_abs(transcript):
+        return None
+    with contextlib.suppress(OSError):
+        found = located(path, HOME.dir)
+        if found is None:
+            root = os.path.realpath(os.path.dirname(path))
+            recorded = os.path.realpath(transcript)
+            if os.path.commonpath((recorded, root)) == root and stat.S_ISREG(
+                os.stat(transcript).st_mode
+            ):
+                return recorded
+            return None
+        other = located(transcript, HOME.dir)
+        if (
+            other is not None
+            and other[:2] == found[:2]
+            and posixpath.dirname(other.rel) == posixpath.dirname(found.rel)
+            and client_state.stat(other) is not None
+        ):
+            return os.path.abspath(transcript)
+    return None
+
+
+def _resumable(path: str) -> Resumable:
+    try:
+        found = located(path, HOME.dir)
+        if found is not None:
+            return Resumable.NO if client_state.stat(found) is None else Resumable.YES
+        mode = os.stat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return Resumable.NO
+    except OSError:
+        return Resumable.UNKNOWN
+    return Resumable.YES if stat.S_ISREG(mode) else Resumable.UNKNOWN
+
+
+def _activity(path: str) -> float | None:
+    """The newest mtime of `path` and of the files in its folder (`path` less its suffix)."""
+    try:
+        found = located(path, HOME.dir)
+    except OSError:
+        return None
+    if found is not None:
+        return _state_activity(found)
+    root = os.path.realpath(os.path.dirname(path))
+    paths = [path]
+    folder = os.path.splitext(path)[0]
+    if os.path.commonpath((os.path.realpath(folder), root)) == root:
+        for top, _, files in os.walk(folder):
+            paths += (os.path.join(top, name) for name in files)
+    times = []
+    for each in paths:
+        with contextlib.suppress(OSError):
+            times.append(os.lstat(each).st_mtime)
+    return max(times, default=None)
+
+
+def _state_activity(file: StateFile) -> float | None:
+    """_activity in a Docker session home: links skipped, WALK_DEPTH dirs and WALK_ENTRIES deep."""
+    times = []
+    with contextlib.suppress(OSError):
+        if (found := client_state.stat(file)) is not None:
+            times.append(found.mtime)
+    pending, seen = [(posixpath.splitext(file.rel)[0], 0)], 0
+    while pending:
+        rel, depth = pending.pop()
+        try:
+            listed = client_state.entries(file._replace(rel=rel)) or ()
+        except OSError:
+            continue
+        for entry in listed:
+            seen += 1
+            if seen > WALK_ENTRIES:
+                return max(times, default=None)
+            if entry.kind is StateKind.FILE:
+                times.append(entry.mtime)
+            elif entry.kind is StateKind.DIR and depth < WALK_DEPTH:
+                pending.append((f"{rel}/{entry.name}", depth + 1))
+    return max(times, default=None)
 
 
 class ClaudeCommon:
@@ -436,12 +548,10 @@ class ClaudeCommon:
             return None
         path = None
         projects = os.path.join(config_dir, "projects")
-        with contextlib.suppress(OSError), os.scandir(projects) as entries:
-            for entry in entries:
-                candidate = os.path.join(entry.path, f"{target}.jsonl")
-                if read(candidate, limit=0) is not None and os.path.commonpath(
-                    (os.path.realpath(candidate), os.path.realpath(projects))
-                ) == os.path.realpath(projects):
+        with contextlib.suppress(OSError):
+            for name in _subdirs(projects):
+                candidate = os.path.join(projects, name, f"{target}.jsonl")
+                if read(candidate, limit=0) is not None and _contained(candidate, projects):
                     path = candidate
                     break
         timestamp = record.get("timestamp")
@@ -694,15 +804,8 @@ class ClaudeCommon:
         except ConfigError:
             return SessionStatus(Resumable.NO, None, "")
         path = self.transcript(cwd, sid, env)
-        root = os.path.realpath(os.path.dirname(path))
         chain = self.walk(path, sid, self.config_dir(env))
-        if printable_abs(transcript):
-            with contextlib.suppress(OSError):
-                recorded = os.path.realpath(transcript)
-                if os.path.commonpath((recorded, root)) == root and stat.S_ISREG(
-                    os.stat(transcript).st_mode
-                ):
-                    path = recorded
+        path = _recorded(transcript, path) or path
         _, path, _ = next(
             hop
             for hop in reversed(
@@ -711,22 +814,4 @@ class ClaudeCommon:
             if hop[1]
         )
         assert path is not None
-        root = os.path.realpath(os.path.dirname(path))
-        try:
-            mode = os.stat(path).st_mode
-        except (FileNotFoundError, NotADirectoryError):
-            resumable = Resumable.NO
-        except OSError:
-            resumable = Resumable.UNKNOWN
-        else:
-            resumable = Resumable.YES if stat.S_ISREG(mode) else Resumable.UNKNOWN
-        paths = [path]
-        folder = os.path.splitext(path)[0]
-        if os.path.commonpath((os.path.realpath(folder), root)) == root:
-            for top, _, files in os.walk(folder):
-                paths += (os.path.join(top, name) for name in files)
-        times = []
-        for each in paths:
-            with contextlib.suppress(OSError):
-                times.append(os.lstat(each).st_mtime)
-        return SessionStatus(resumable, max(times, default=None), self.resume(cwd, sid))
+        return SessionStatus(_resumable(path), _activity(path), self.resume(cwd, sid))
