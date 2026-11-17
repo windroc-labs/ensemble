@@ -1,5 +1,28 @@
 # Upgrading
 
+## Broker protocol 40: Docker target
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer now also creates
+`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A `docker_unreachable` error now names the
+Docker target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock:
+Docker daemon not running; start Docker Desktop and retry.`
+
+With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
+machine the target, write `{"host": "ssh://user@host"}` there, with `:port` when it is not 22. Nothing else may be in
+the file. The broker and the session then send every docker call there, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or
+`DOCKER_CONFIG` say:
+
+- SSH ignores `~/.ssh/config`, so the address carries the user and port. Authentication is key-only: the default key
+  files or the agent at `SSH_AUTH_SOCK`. Agent, X11 and port forwarding are off.
+- The host key must already be in `~/.ssh/known_hosts`. A new key is never accepted, and a changed key is refused.
+- The remote login shell must find `docker` on its PATH. The Docker Engine must be version 26 or newer.
+- Before any build or credential write, each broker command checks the target once. Start fails `docker_unreachable`
+  with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
+  running, or an Engine older than 26.
+
+A remote target cannot run a worker end to end yet: the worker's client state is still a bind mount of a Mac
+directory.
+
 ## ensemble resume opens a manager; ensemble list only lists
 
 `ensemble list` now only prints the managers; it no longer asks which one to open. To open one, run `ensemble resume`
