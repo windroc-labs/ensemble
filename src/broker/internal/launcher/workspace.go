@@ -16,10 +16,21 @@ import (
 const checkTimeout = 120 * time.Second
 
 // WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work, or at once with force;
-// an absent volume is success.
+// an absent volume is success. A session's workspace (ensemble-ws-<name>) takes its state volume with it, first, so a
+// failed state removal keeps the workspace that reclaim finds the session by.
 func (h Host) WorkspaceRm(ctx context.Context, volume string, force bool) (WorkspaceResult, error) {
+	session, isSession := strings.CutPrefix(volume, "ensemble-ws-")
+	removeState := func() error {
+		if !isSession {
+			return nil
+		}
+		return h.removeStateVolume(ctx, session)
+	}
 	labels, err := h.volumeLabels(ctx, volume)
 	if docker.Absent(err) {
+		if err := removeState(); err != nil {
+			return WorkspaceResult{}, err
+		}
 		return WorkspaceResult{Volume: volume}, nil
 	}
 	if err != nil {
@@ -38,6 +49,9 @@ func (h Host) WorkspaceRm(ctx context.Context, volume string, force bool) (Works
 				"Workspace %s has uncommitted or unpushed work in: %s. Delete it anyway with ensemble-broker workspace-rm --volume %s --force.",
 				volume, strings.Join(dirty, ", "), volume)
 		}
+	}
+	if err := removeState(); err != nil {
+		return WorkspaceResult{}, err
 	}
 	if _, err := h.Docker.Run(ctx, []string{"volume", "rm", volume}, nil); err != nil {
 		return WorkspaceResult{}, diagnosed(err, protocol.WorkspaceFailed, "Deleting volume "+volume+" failed.")

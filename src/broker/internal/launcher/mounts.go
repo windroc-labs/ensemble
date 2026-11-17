@@ -293,3 +293,21 @@ func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo)
 	}
 	return true, nil
 }
+
+// removeStateVolume removes session name's reader containers, then its state volume; an absent volume is success.
+func (h Host) removeStateVolume(ctx context.Context, name string) error {
+	v := stateVolume(name)
+	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
+	if err != nil {
+		return failure(err, protocol.WorkspaceFailed, "Cannot list the readers of "+v+".")
+	}
+	if readers := strings.Fields(string(out)); len(readers) > 0 {
+		if _, err := h.Docker.Run(ctx, append([]string{"rm", "--force"}, readers...), nil); err != nil {
+			return failure(err, protocol.WorkspaceFailed, "Removing the readers of "+v+" failed.")
+		}
+	}
+	if _, err := h.Docker.Run(ctx, []string{"volume", "rm", v}, nil); err != nil && !docker.Absent(err) {
+		return diagnosed(err, protocol.WorkspaceFailed, "Deleting volume "+v+" failed.")
+	}
+	return nil
+}
