@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 
 from ensemble.session.clients.common import (
@@ -17,7 +17,7 @@ from ensemble.session.clients.common import (
     MODES,
     check_config,
     docker_config,
-    located,
+    home_of,
     mode_flags,
     scan,
     strings,
@@ -32,6 +32,8 @@ from ensemble.session.engine.types import (
     ConfigError,
     Container,
     Effort,
+    HomePath,
+    HomeStore,
     Launch,
     Permission,
     ProviderProbe,
@@ -345,7 +347,7 @@ class OpenCodeCommon:
         sid = spec.sid or ""
         env = {**self.env, **spec.access.env, **spec.env}
         db = database(env if context.container is not None else {**os.environ, **env})
-        native = self.session(spec.access.cwd, sid, db)
+        native = self.session(spec.access.cwd, sid, _db_path(db), home_of(context))
         return () if native is None else self.selector(native, resume=True)
 
     def home(self) -> ClientHome:
@@ -537,13 +539,13 @@ class OpenCodeCommon:
     def unbind(self, cwd: str, sid: str) -> None:
         Bindings(self.store).unbind(cwd, sid)
 
-    def session(self, cwd: str, sid: str, db: str) -> str | None:
+    def session(self, cwd: str, sid: str, db: HomePath, home: HomeStore) -> str | None:
         """(cwd, sid)'s bound session, else its headless run's TITLE one in `db`, bound then."""
         native = self.native(cwd, sid)
         if native is not None:
             return native
         try:
-            with _database(db) as path:
+            with _database(home, db) as path:
                 return self._titled(cwd, sid, path)
         except OSError as error:
             raise ConfigError(f"opencode session lookup: {error}") from None
@@ -560,7 +562,7 @@ class OpenCodeCommon:
         return native
 
     def session_status(
-        self, cwd: str, sid: str, env: Mapping[str, str], *, transcript: str = ""
+        self, cwd: str, sid: str, env: Mapping[str, str], *, transcript: str = "", home: HomeStore
     ) -> SessionStatus:
         """By the bound session's row in `transcript`, else the run's opencode.db; unbound: a fresh
         session once that db exists.
@@ -568,7 +570,7 @@ class OpenCodeCommon:
         db = transcript or database({**os.environ, **self.env, **env})
         try:
             native = self.native(cwd, sid)
-            with _database(db) as path:
+            with _database(home, _db_path(db)) as path:
                 return _status(native or self._titled(cwd, sid, path), path)
         except (ConfigError, OSError):
             return SessionStatus(Resumable.UNKNOWN, None, "")
@@ -588,15 +590,14 @@ def _status(native: str | None, path: str | None) -> SessionStatus:
     return SessionStatus(Resumable.YES, updated, "")
 
 
-@contextlib.contextmanager
-def _database(db: str) -> Iterator[str | None]:
-    """`db`, a Docker session's as a snapshot; None: no db."""
-    found = located(db, HOME.dir)
-    if found is None:
-        yield db if os.path.isfile(db) else None
-        return
-    with client_state.snapshot(found, limit=DB_MAX, siblings=("-wal", "-shm")) as path:
-        yield path
+def _db_path(db: str) -> HomePath:
+    """`db`, an opencode.db path as database() builds it, below its data home."""
+    return client_state.home_path(os.path.dirname(os.path.dirname(db)), db)
+
+
+def _database(home: HomeStore, db: HomePath) -> contextlib.AbstractContextManager[str | None]:
+    """`db` readable by sqlite with its WAL; None: no db."""
+    return home.snapshot(db, limit=DB_MAX, siblings=("-wal", "-shm"))
 
 
 class Homed:

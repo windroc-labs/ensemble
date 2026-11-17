@@ -34,7 +34,6 @@ from ensemble.session.engine.types import (
     StateKind,
     StateStat,
 )
-from ensemble.utils import DOCKER_STATE
 
 READ_MAX = 64 << 20
 ENTRIES_MAX = 65536
@@ -123,18 +122,65 @@ class VolumeHome:
     def read(
         self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
     ) -> bytes | None:
-        return read(self._file(path), offset=offset, limit=limit, tail=tail)
+        """At most READ_MAX bytes from `offset`; `tail`: the last `limit`."""
+        cap = READ_MAX if limit is None else min(limit, READ_MAX)
+        request = {"op": "read", "offset": offset, "limit": cap, "tail": tail}
+        found = _ask(self._file(path), request, cap)
+        return None if found is None else found[1]
 
     def stat(self, path: HomePath) -> StateStat | None:
-        return stat(self._file(path))
+        found = _ask(self._file(path), {"op": "stat"}, 0)
+        return None if found is None else StateStat(found[0]["size"], found[0]["mtime"])
 
     def entries(self, path: HomePath, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
-        return entries(self._file(path), limit=limit)
+        """A dir's entries, by lstat; EFBIG past `limit`."""
+        file = self._file(path)
+        found = _ask(file, {"op": "entries", "limit": limit}, 0)
+        if found is None:
+            return None
+        listed = []
+        for item in found[0]["entries"]:
+            if not (
+                isinstance(item, list)
+                and len(item) == 4
+                and isinstance(item[0], str)
+                and _part(item[0])
+                and item[1] in {kind.value for kind in StateKind}
+                and _count(item[2])
+                and isinstance(item[3], (int, float))
+            ):
+                raise _broken(file, "bad entry")
+            listed.append(StateEntry(item[0], StateKind(item[1]), item[2], item[3]))
+        if len(listed) > limit:
+            raise _broken(file, "too many entries")
+        return tuple(sorted(listed))
 
+    @contextlib.contextmanager
     def snapshot(
         self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
-    ) -> contextlib.AbstractContextManager[str | None]:
-        return snapshot(self._file(path), limit=limit, siblings=siblings)
+    ) -> Iterator[str | None]:
+        """A private copy of the file and its present siblings, `limit` bytes in all, unchanged
+        while copied, removed on exit.
+        """
+        file = self._file(path)
+        names = [file, *(file._replace(rel=file.rel + suffix) for suffix in siblings)]
+        paths = [_path(name) for name in names]
+        found = _ask(
+            file, {"op": "snapshot", "paths": paths, "limit": limit}, limit + ARCHIVE_SLACK
+        )
+        folder = tempfile.mkdtemp(prefix="ensemble-state-")
+        try:
+            if found is None:
+                yield None
+                return
+            bases = [posixpath.basename(each) for each in paths]
+            _unpack(file, found[1], bases, limit, folder)
+            main = os.path.join(folder, bases[0])
+            if not os.path.isfile(main):
+                raise _broken(file, "no main file in the snapshot")
+            yield main
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def persisted(self) -> dict[str, str]:
         return {"kind": "volume", "session": self.session, "client": self.client}
@@ -223,82 +269,6 @@ def _kind(mode: int) -> StateKind:
     return StateKind.FILE if stat_module.S_ISREG(mode) else StateKind.OTHER
 
 
-def locate(path: str) -> StateFile | None:
-    """`path`'s StateFile by its text; None outside the state root; EXDEV outside a client home."""
-    path = os.path.abspath(path)
-    for root in _roots():
-        if os.path.commonpath((path, root)) != root:
-            continue
-        parts = os.path.relpath(path, root).split(os.sep)
-        if len(parts) < 3:
-            raise OSError(errno.EXDEV, "not below a client home", path)
-        return StateFile(parts[0], parts[1], "/".join(parts[2:]))
-    return None
-
-
-def read(
-    file: StateFile, *, offset: int = 0, limit: int | None = None, tail: bool = False
-) -> bytes | None:
-    """At most READ_MAX bytes from `offset`; `tail`: the last `limit`."""
-    cap = READ_MAX if limit is None else min(limit, READ_MAX)
-    request = {"op": "read", "offset": offset, "limit": cap, "tail": tail}
-    found = _ask(file, request, cap)
-    return None if found is None else found[1]
-
-
-def stat(file: StateFile) -> StateStat | None:
-    found = _ask(file, {"op": "stat"}, 0)
-    return None if found is None else StateStat(found[0]["size"], found[0]["mtime"])
-
-
-def entries(file: StateFile, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
-    """A dir's entries, by lstat; EFBIG past `limit`."""
-    found = _ask(file, {"op": "entries", "limit": limit}, 0)
-    if found is None:
-        return None
-    listed = []
-    for item in found[0]["entries"]:
-        if not (
-            isinstance(item, list)
-            and len(item) == 4
-            and isinstance(item[0], str)
-            and _part(item[0])
-            and item[1] in {kind.value for kind in StateKind}
-            and _count(item[2])
-            and isinstance(item[3], (int, float))
-        ):
-            raise _broken(file, "bad entry")
-        listed.append(StateEntry(item[0], StateKind(item[1]), item[2], item[3]))
-    if len(listed) > limit:
-        raise _broken(file, "too many entries")
-    return tuple(sorted(listed))
-
-
-@contextlib.contextmanager
-def snapshot(
-    file: StateFile, *, limit: int, siblings: tuple[str, ...] = ()
-) -> Iterator[str | None]:
-    """A private copy of `file` and its present siblings, `limit` bytes in all, unchanged while
-    copied, removed on exit.
-    """
-    names = [file, *(file._replace(rel=file.rel + suffix) for suffix in siblings)]
-    paths = [_path(name) for name in names]
-    found = _ask(file, {"op": "snapshot", "paths": paths, "limit": limit}, limit + ARCHIVE_SLACK)
-    folder = tempfile.mkdtemp(prefix="ensemble-state-")
-    try:
-        if found is None:
-            yield None
-            return
-        bases = [posixpath.basename(path) for path in paths]
-        _unpack(file, found[1], bases, limit, folder)
-        main = os.path.join(folder, bases[0])
-        if not os.path.isfile(main):
-            raise _broken(file, "no main file in the snapshot")
-        yield main
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
-
-
 def _unpack(file: StateFile, payload: bytes, bases: list[str], limit: int, folder: str) -> None:
     """Writes into `folder` each member, once checked: a regular file named by `bases`, once."""
     total, seen = 0, set()
@@ -363,11 +333,6 @@ def _broken(file: StateFile, why: str) -> OSError:
     with reader.lock:
         reader.close()
     return OSError(errno.EPROTO, f"state reader reply: {why}", file.rel)
-
-
-def _roots() -> tuple[str, ...]:
-    named = os.path.abspath(os.path.expanduser(DOCKER_STATE))
-    return tuple(dict.fromkeys((named, os.path.realpath(named))))
 
 
 _READERS: dict[str, "_Reader"] = {}

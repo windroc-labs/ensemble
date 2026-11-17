@@ -708,9 +708,10 @@ class OpenCodeChecks(Checks):
 
     def after_start(self, start: Start) -> None:
         w = self.worker
-        db = os.path.join(docker_home(w.name, "opencode"), "opencode", "opencode.db")
-        found = client_state.locate(db)
-        if found is None or client_state.stat(found) is None:
+        root = docker_home(w.name, "opencode")
+        db = os.path.join(root, "opencode", "opencode.db")
+        store = client_state.VolumeHome(w.name, "opencode")
+        if store.stat(client_state.home_path(root, db)) is None:
             raise SystemExit(f"FAIL no opencode.db at {db} in ensemble-state-{w.name}")
         print(f"PASS opencode.db at {db} in ensemble-state-{w.name}", flush=True)
         argv = ["lsof", "-nP", f"-iTCP:{OLLAMA_PORT}", "-sTCP:LISTEN"]
