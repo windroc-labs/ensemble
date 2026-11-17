@@ -27,6 +27,7 @@ from ensemble.session.engine import client_state
 from ensemble.session.engine.daemon import (
     CLEARED,
     RUN_TIMEOUT,
+    SESSION_RECORD,
     attach_env,
     capped,
     client_home,
@@ -36,6 +37,7 @@ from ensemble.session.engine.daemon import (
     describe,
     docker_call,
     load_record,
+    result_file,
     save_record,
     ssh_agent,
     state_volume,
@@ -113,7 +115,6 @@ from ensemble.utils import (
     timestamp,
 )
 
-RECORD = "host.json"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
@@ -160,7 +161,7 @@ PS_FIELDS = 4
 
 def _record(name: str) -> dict:
     try:
-        with open(os.path.join(state_dir(name), RECORD), encoding="utf-8") as f:
+        with open(os.path.join(state_dir(name), SESSION_RECORD), encoding="utf-8") as f:
             found = json.load(f)
     except (OSError, ValueError, RecursionError):
         return {}
@@ -173,7 +174,7 @@ class Kind(StrEnum):
 
 
 def _damaged_record(name: str) -> bool:
-    if not os.path.lexists(os.path.join(state_dir(name), RECORD)):
+    if not os.path.lexists(os.path.join(state_dir(name), SESSION_RECORD)):
         return False
     found = _record(name)
     recorded = found.get("generation")
@@ -212,7 +213,7 @@ def _take_owner(name: str) -> int | None:
 
 
 def _save_record(name: str, data: Mapping) -> None:
-    save(os.path.join(state_dir(name), RECORD), json.dumps(dict(data)), durable=True)
+    save(os.path.join(state_dir(name), SESSION_RECORD), json.dumps(dict(data)), durable=True)
 
 
 def _lock_free(path: str) -> bool:
@@ -337,7 +338,7 @@ def _save_result(
         **({} if launched is None else {"launched_at": launched}),
     }
     save(
-        os.path.join(state_dir(name), f"{created.generation}.result.json"),
+        os.path.join(state_dir(name), result_file(created.generation)),
         json.dumps(result),
         durable=True,
     )
@@ -1146,7 +1147,9 @@ class DockerHost(Host):
         made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
             if _damaged_record(name):
-                raise SessionBusy(name, f"damaged record: {os.path.join(state_dir(name), RECORD)}")
+                raise SessionBusy(
+                    name, f"damaged record: {os.path.join(state_dir(name), SESSION_RECORD)}"
+                )
             for row in self._rows():
                 if row.name == name and _guarded(name, row.generation):
                     if self._row_liveness(name, row.generation) != Liveness.ABSENT:

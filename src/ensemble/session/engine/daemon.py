@@ -26,6 +26,10 @@ STATE_OWNER_LABEL = "ensemble.state-owner"
 STATE_READER_LABEL = "ensemble.state-reader"
 RECORD_FILE = "daemon.json"
 RECORD_MAX = 4096
+SESSION_RECORD = "host.json"  # the Docker Host's record of a session's last start
+SESSION_RECORD_MAX = 1 << 20
+GENERATION = re.compile(r"[0-9a-f]{32}")
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 DAEMON = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
 
@@ -40,6 +44,31 @@ def state_volume(name: str) -> str:
 
 def client_home(client: str) -> str:
     return f"{CLIENT_HOMES}/{client}"
+
+
+def result_file(generation: str) -> str:
+    return f"{generation}.result.json"
+
+
+def recorded_image(name: str) -> str:
+    """The image ID session `name`'s last start ran; OSError (EIO): none recorded."""
+    folder = os.path.join(os.path.expanduser(DOCKER_STATE), name)
+    generation = _recorded(os.path.join(folder, SESSION_RECORD), "generation")
+    if generation is not None and GENERATION.fullmatch(generation):
+        digest = _recorded(os.path.join(folder, result_file(generation)), "image_digest")
+        if digest is not None and DIGEST.fullmatch(digest):
+            return digest
+    raise OSError(errno.EIO, "no recorded worker image", name)
+
+
+def _recorded(path: str, key: str) -> str | None:
+    data = read_regular(path, limit=SESSION_RECORD_MAX)
+    try:
+        found = json.loads(data) if data is not None else None
+    except (ValueError, RecursionError):
+        return None
+    value = found.get(key) if isinstance(found, dict) else None
+    return value if isinstance(value, str) else None
 
 
 def _record_path(name: str) -> str:

@@ -195,6 +195,36 @@ class RecordTest(Case):
                     )
         self.assertIsNone(daemon.load_record("s2"))
 
+    def test_a_sessions_recorded_image_is_its_last_starts(self):
+        folder = os.path.dirname(self.path)
+        os.makedirs(folder)
+        digest = "sha256:" + "d" * 64
+        generation = "0123456789abcdef0123456789abcdef"
+        for host, result, found in (
+            ({"generation": generation}, {"image_digest": digest}, digest),
+            (None, {"image_digest": digest}, None),
+            ({"generation": "../x"}, {"image_digest": digest}, None),
+            ({"generation": generation}, None, None),
+            ({"generation": generation}, {"image_digest": "ensemble-worker:latest"}, None),
+            ([], {"image_digest": digest}, None),
+        ):
+            with self.subTest(host=host, result=result):
+                for name, value in (
+                    (daemon.SESSION_RECORD, host),
+                    (daemon.result_file(generation), result),
+                ):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(os.path.join(folder, name))
+                    if value is not None:
+                        with open(os.path.join(folder, name), "w") as f:
+                            json.dump(value, f)
+                if found:
+                    self.assertEqual(daemon.recorded_image("s1"), found)
+                    continue
+                with self.assertRaises(OSError) as caught:
+                    daemon.recorded_image("s1")
+                self.assertEqual(caught.exception.errno, errno.EIO)
+
     def test_a_malformed_record_is_refused_naming_its_file(self):
         good = self.GOOD
         for label, text in (

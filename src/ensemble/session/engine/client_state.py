@@ -42,7 +42,6 @@ HEADER_MAX = 32 << 20
 ARCHIVE_SLACK = 64 << 10  # tar headers and padding
 REPLY_TIMEOUT = 10
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
-IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
@@ -426,16 +425,7 @@ class _Reader:
         user = found.get(daemon.STATE_OWNER_LABEL)
         if not isinstance(user, str) or not OWNER.fullmatch(user):
             raise OSError(errno.EIO, "state volume has no owner", volume)
-        image = self.image
-        if image is None:
-            listed = self._run(
-                recorded,
-                *("image", "ls", "--filter", "reference=ensemble-worker"),
-                *("--format", "{{.Repository}}:{{.Tag}}"),
-            )
-            image = next((ref for ref in listed.split() if IMAGE.fullmatch(ref)), None)
-        if image is None:
-            raise OSError(errno.EIO, "no worker image on the Docker target")
+        image = self.image or daemon.recorded_image(self.session)
         with open(READER, encoding="utf-8") as f:
             program = f.read()
         argv, env = daemon.docker_call(
