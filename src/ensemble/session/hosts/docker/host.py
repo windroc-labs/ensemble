@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
@@ -36,8 +36,10 @@ from ensemble.session.engine.daemon import (
     describe,
     docker_call,
     endpoint,
+    env_items,
     load_access,
     local_endpoint,
+    placement,
     save_access,
     ssh_agent,
     state_volume,
@@ -319,6 +321,7 @@ class _Container(NamedTuple):
     began: str
     ended: str
     seeds: Mapping[str, str]  # a new start's home files, by container path
+    host: str  # the daemon it is on
 
 
 def _save_result(
@@ -593,7 +596,7 @@ class DockerHost(Host):
         except (SessionError, OSError) as error:
             LOG.warning("docker reclaim: %s", error)
 
-    def _workspaces(self) -> list[tuple[str, str]] | None:
+    def _workspaces(self, host: str) -> list[tuple[str, str]] | None:
         """Run workspace volumes with their cwd label; None without a reachable daemon or a CLI."""
         rows = self._listed(
             "volume",
@@ -602,7 +605,7 @@ class DockerHost(Host):
             f"label={KIND_LABEL}",
             "--format",
             VOLUME_FORMAT,
-            host=endpoint(),
+            host=host,
         )
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
@@ -610,7 +613,7 @@ class DockerHost(Host):
         """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
         Then a session at cwd whose workspace another daemon still holds, or may hold, refuses.
         """
-        rows = self._workspaces()
+        rows = self._workspaces(endpoint())
         if rows is None:
             raise SessionError(
                 f"host {self.name}: workspaces unknown ({_no_daemon((endpoint(),))})"
@@ -623,7 +626,7 @@ class DockerHost(Host):
             except SessionError as error:
                 raise SessionError(f"docker workspace {volume} kept: {error}") from None
         if sessions := _sessions_at(anchor):
-            current = self._current(f"host {self.name}")
+            current = self._current(f"host {self.name}", endpoint())
             for name in sessions:
                 if (owner := self._owner(name, current)) and (
                     held := self._held(name, *owner)
@@ -632,7 +635,7 @@ class DockerHost(Host):
         return removed
 
     def _reclaim(self) -> None:
-        rows = self._workspaces()
+        rows = self._workspaces(endpoint())
         if rows is None:
             return
         gone = [
@@ -700,10 +703,10 @@ class DockerHost(Host):
     ) -> None:
         """With an environment: cwd and handshake; start does lock and credential checks."""
         self._check_resume(name, metadata)
-        self._credentials(name, metadata or {})
+        secrets = env_items(self._credentials(name, metadata or {}))
         environment = self._environment(name, metadata)
         if environment is None:
-            self.validate(name, launch, missing_ok=True)
+            self._prebuild(name, launch, secrets, missing_ok=True)
             return
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=True)
@@ -716,9 +719,9 @@ class DockerHost(Host):
     ) -> None:
         """With an environment: cwd and handshake; the start builds and locks."""
         self._check_resume(name, metadata)
-        self._credentials(name, metadata or {})
+        secrets = env_items(self._credentials(name, metadata or {}))
         if self._environment(name, metadata) is None:
-            self.validate(name, launch)
+            self._prebuild(name, launch, secrets)
             return
         self._check_cwd(name, launch)
         self.broker.version()
@@ -759,9 +762,15 @@ class DockerHost(Host):
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:
         """The preflight, before any container: cwd (`missing_ok`: or none yet) and build."""
+        self._prebuild(name, launch, (), missing_ok=missing_ok)
+
+    def _prebuild(
+        self, name: str, launch: Launch, secrets: Sequence[str], *, missing_ok: bool = False
+    ) -> None:
+        """validate's checks, building on the daemon a worker given env `secrets` runs on."""
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=missing_ok)
-        self._image(name)
+        self._image(name, secrets=secrets)
         laps("preflight")
         laps.report(f"docker timing {name}")
 
@@ -778,9 +787,15 @@ class DockerHost(Host):
             raise ConfigError(f"Docker cwd {cwd}: no such directory")
 
     def _image(
-        self, name: str, environment: EnvironmentSpec | None = None
+        self,
+        name: str,
+        environment: EnvironmentSpec | None = None,
+        *,
+        secrets: Sequence[str] = (),
     ) -> tuple[str, str, tuple[str, str]]:
-        """(hook path, plugin root, (image, digest)); an environment's image and plugins added."""
+        """(hook path, plugin root, (image, digest)); an environment's image and plugins added;
+        built where a worker given env `secrets` runs.
+        """
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
@@ -788,7 +803,7 @@ class DockerHost(Host):
         root = plugin_root(hook)
         with start_phase("building the worker image", TIMEOUT):
             if environment is None:
-                return hook, root, self.broker.build(root, plugins=self.plugins)
+                return hook, root, self.broker.build(root, plugins=self.plugins, secrets=secrets)
             sources = [p for p in environment.plugins if PLUGIN_SOURCE.fullmatch(p)]
             built = self.broker.build(
                 root,
@@ -797,14 +812,14 @@ class DockerHost(Host):
                 if environment.image == EnvironmentSpec.WORKER
                 else environment.image,
                 image_plugins=tuple(p for p in environment.plugins if p not in sources),
+                secrets=secrets,
             )
         return hook, root, built
 
-    def _current(self, subject: str) -> DockerAccess:
-        """The current target and its daemon's ID, looked up now: an address may reach another
-        daemon later. A failure names `subject`, what the lookup is for.
+    def _current(self, subject: str, host: str) -> DockerAccess:
+        """Daemon `host` and its ID, looked up now: an address may reach another daemon later. A
+        failure names `subject`, what the lookup is for.
         """
-        host = endpoint()
         try:
             return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
         except SessionError as error:
@@ -852,24 +867,33 @@ class DockerHost(Host):
 
     def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
         if (metadata or {}).get("resume") == "1":
-            self._check_target(name, self._current(f"docker session {name}"))
+            secrets = env_items(self._credentials(name, metadata or {}))
+            self._check_target(name, self._current(f"docker session {name}", placement(secrets)))
 
     def _check_target(self, name: str, current: DockerAccess) -> None:
         if owner := self._owner(name, current):
             raise ConfigError(_refusal(name, "resume", *owner, current))
 
-    def _drop_state(self, name: str) -> None:
-        """A new start's empty client home: its readers and state volume go; the broker makes it."""
+    def _drop_state(self, name: str, host: str) -> None:
+        """A new start's empty client home on daemon `host`: its readers and state volume go; the
+        broker makes it.
+        """
         why = f"docker session {name}: cannot reset its client state"
         listed = self._state_call(
-            why, "ps", "--all", "--quiet", "--filter", f"label={STATE_READER_LABEL}={name}"
+            why,
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label={STATE_READER_LABEL}={name}",
+            host=host,
         )
         if readers := listed.split():
-            self._state_call(why, "rm", "--force", *readers)
-        self._state_call(why, "volume", "rm", state_volume(name), absent_ok=True)
+            self._state_call(why, "rm", "--force", *readers, host=host)
+        self._state_call(why, "volume", "rm", state_volume(name), host=host, absent_ok=True)
 
-    def _state_call(self, why: str, *args: str, absent_ok: bool = False) -> str:
-        argv, env = docker_call(self.docker, *args, host=endpoint())
+    def _state_call(self, why: str, *args: str, host: str, absent_ok: bool = False) -> str:
+        argv, env = docker_call(self.docker, *args, host=host)
         try:
             result = self.run(argv, env, timeout=RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -881,13 +905,15 @@ class DockerHost(Host):
             )
         return result.stdout
 
-    def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
-        """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
-        anchor = next((a for v, a in self._workspaces() or () if v == volume), cwd)
+    def _move_workspace(self, name: str, volume: str, cwd: str, host: str) -> None:
+        """Deletes a new start's workspace volume on daemon `host` made at another cwd, unless it
+        has unsaved work.
+        """
+        anchor = next((a for v, a in self._workspaces(host) or () if v == volume), cwd)
         if anchor == cwd:
             return
         try:
-            self.broker.workspace_rm(volume, host=endpoint())
+            self.broker.workspace_rm(volume, host=host)
         except BrokerError as error:
             if error.code == "workspace_dirty":
                 raise ConfigError(
@@ -935,7 +961,8 @@ class DockerHost(Host):
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
-        current = self._current(f"docker session {name}")
+        secrets = env_items(metadata)
+        current = self._current(f"docker session {name}", placement(secrets))
         if resume == "1":
             self._check_target(name, current)
         try:
@@ -945,7 +972,7 @@ class DockerHost(Host):
         if resume == "1":
             _check_history(name, home, home_dir, launch.transcript)
         laps("checks")
-        hook, root, (image, digest) = self._image(name, environment)
+        hook, root, (image, digest) = self._image(name, environment, secrets=secrets)
         volume = workspace_volume(name)
         cwd = os.path.realpath(launch.cwd)
         persistent = json.loads(metadata.get("home_persistent") or "null")
@@ -956,8 +983,8 @@ class DockerHost(Host):
                     f"docker session {name}: home file {file} is outside its kept dirs"
                 )
         if resume == "0":
-            self._move_workspace(name, volume, cwd)
-            self._drop_state(name)
+            self._move_workspace(name, volume, cwd, current.host)
+            self._drop_state(name, current.host)
         seeds = {os.path.join(home, f): text for f, text in files.items()} if resume == "0" else {}
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
@@ -1010,13 +1037,14 @@ class DockerHost(Host):
         container = container_name(name, generation)
         stops.check(f"docker session {name}: ")
         began = timestamp()
+        started = None
         try:
             started = self.broker.start(manifest, clients=clients)
             _accept_started(name, generation, started, container, current.daemon)
             ended = timestamp()
             laps("start")
             created = _Container(
-                container, generation, hook, image, cwd, started, began, ended, seeds
+                container, generation, hook, image, cwd, started, began, ended, seeds, current.host
             )
             _save_result(name, created, laps.phases)
         except BrokerError as error:
@@ -1024,10 +1052,14 @@ class DockerHost(Host):
                 raise SessionBusy(environment.lock, _holder_text(error.holder)) from error
             if error.cleanup == "failed" and error.container:
                 with contextlib.suppress(SessionError):
-                    self.broker.close(error.container, host=endpoint())
+                    self.broker.close(error.container, host=current.host)
             raise
         except (SessionError, OSError) as error:
-            cleanup = self._roll_back(container)
+            # A reply from another daemon than the session's started its container there.
+            host = current.host
+            if started is not None and started.endpoint in daemons():
+                host = started.endpoint
+            cleanup = self._roll_back(container, host)
             raise SessionError(f"docker session {name}: {error}{cleanup}") from error
         return created
 
@@ -1138,12 +1170,12 @@ class DockerHost(Host):
     ) -> DockerWorker:
         laps = _Laps()
         created = self._container(name, launch, stops, laps, metadata, environment=environment)
-        container, generation, hook, _, _, _, _, _, seeds = created
+        container, generation, hook, _, _, _, _, _, seeds, host = created
         handle = proc = None
         try:
             stops.check()
-            self._stage_files(container, metadata)
-            self._stage_staged_files(container, metadata, seeds)
+            self._stage_files(container, metadata, host)
+            self._stage_staged_files(container, metadata, seeds, host)
             _save_record(
                 name,
                 {
@@ -1175,7 +1207,7 @@ class DockerHost(Host):
                 "size": "{}x{}".format(*self.tui_settings().hidden_size),
             }
             argv, docker_env = docker_call(
-                self.docker, "attach", "--sig-proxy=false", container, host=endpoint()
+                self.docker, "attach", "--sig-proxy=false", container, host=host
             )
             proc = subprocess.Popen(
                 argv,
@@ -1199,7 +1231,7 @@ class DockerHost(Host):
                 hooks=HookWorker([hook, "hook", "--serve", tui_dir])
                 if metadata.get("owner")
                 else None,
-                remove=lambda: self._remove(container, endpoint()),
+                remove=lambda: self._remove(container, host),
                 owner=owner,
                 maintenance=functools.partial(
                     maintenance.Maintenance,
@@ -1228,7 +1260,7 @@ class DockerHost(Host):
             else:
                 if proc is not None:
                     kill_group(proc)
-                cleanup = self._roll_back(container)
+                cleanup = self._roll_back(container, host)
             if not isinstance(error, (SessionError, OSError, ValueError)):
                 raise
             raise SessionError(f"docker session {name}: {error}{cleanup}") from error
@@ -1310,7 +1342,7 @@ class DockerHost(Host):
             return Liveness.ABSENT
         return Liveness.LIVE if word == "live" else Liveness.UNKNOWN
 
-    def _stage_files(self, container: str, metadata: Mapping[str, str]) -> None:
+    def _stage_files(self, container: str, metadata: Mapping[str, str], host: str) -> None:
         files = metadata.get("runtime_files")
         if not files or files == "{}":
             return
@@ -1325,7 +1357,7 @@ class DockerHost(Host):
             "-I",
             "/opt/ensemble/lib/bootstrap.py",
             "runtime-files",
-            host=endpoint(),
+            host=host,
         )
         try:
             result = self.run(argv, env, input=files, timeout=RUN_TIMEOUT)
@@ -1335,7 +1367,7 @@ class DockerHost(Host):
             raise SessionError("staging client runtime failed")
 
     def _stage_staged_files(
-        self, container: str, metadata: Mapping[str, str], seeds: Mapping[str, str]
+        self, container: str, metadata: Mapping[str, str], seeds: Mapping[str, str], host: str
     ) -> None:
         """As the container's agent user, with a new start's home files."""
         staged = metadata.get(STAGED)
@@ -1346,7 +1378,7 @@ class DockerHost(Host):
             self.docker,
             *("exec", "-i", "--user", "agent", container),
             *(IMAGE_PYTHON, "-I", "-c", FILES_STAGE),
-            host=endpoint(),
+            host=host,
         )
         try:
             result = self.run(argv, env, input=files, timeout=RUN_TIMEOUT)
@@ -1358,9 +1390,9 @@ class DockerHost(Host):
                 f"staging files: {why[-1] if why else f'exit status {result.returncode}'}"
             )
 
-    def _roll_back(self, container: str) -> str:
+    def _roll_back(self, container: str, host: str) -> str:
         try:
-            self.broker.close(container, host=endpoint())
+            self.broker.close(container, host=host)
         except SessionError as error:
             return f"; close {container}: {error}"
         return ""

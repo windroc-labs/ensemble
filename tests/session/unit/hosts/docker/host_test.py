@@ -181,9 +181,9 @@ class FakeBroker:
         if "version" in self.failing:
             raise self.failing["version"]
 
-    def build(self, package, *, plugins=(), **environment):
+    def build(self, package, *, plugins=(), secrets=(), **environment):
         self.order.append(("build", package))
-        self.plugins, self.built = plugins, environment
+        self.plugins, self.built, self.secrets = plugins, environment, secrets
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
@@ -625,7 +625,7 @@ class StartTest(StartBase):
                     ),
                     self.assertRaises(SessionError) as raised,
                 ):
-                    self.host._stage_files(CONTAINER, {"runtime_files": files})
+                    self.host._stage_files(CONTAINER, {"runtime_files": files}, self.ep)
                 self.assertNotIn("private", str(raised.exception))
 
     def test_runtime_projection_and_initial_expiry_are_staged_before_client(self):
@@ -683,7 +683,7 @@ class StartTest(StartBase):
                 ),
                 self.assertRaisesRegex(SessionError, want) as raised,
             ):
-                self.host._stage_staged_files(CONTAINER, metadata, {})
+                self.host._stage_staged_files(CONTAINER, metadata, {}, self.ep)
             self.assertNotIn("private", str(raised.exception))
 
     def test_a_failed_stage_rolls_the_start_back(self):
@@ -2695,6 +2695,65 @@ class TwoDaemonsTest(Base):
         self.host._row_liveness("mini", GEN)
         self.assertTrue(self.docker.execs())
         self.assertFalse([c for c in self.remote.calls if c[0][0] == "exec"])
+
+
+MINI_CREDENTIALS = json.dumps({"env": [{"item": MINI, "file": "mini-password"}]})
+
+
+class LocalPlacementTest(StartBase):
+    """A remote target; a worker given MINI stays on the local Docker Desktop."""
+
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(self.account, daemon.TARGET_FILE)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            json.dump({"host": REMOTE, "local_secrets": [MINI]}, f)
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.remote = FakeDocker(REMOTE, self.order)
+        self.remote.daemons = {REMOTE: REMOTE_DAEMON}
+        self.docker.others[REMOTE] = self.remote
+        self.history()
+
+    def remote_work(self):
+        """The remote daemon's calls other than inventory listings."""
+        return [call for call, _ in self.remote.calls if call[:2] != ["ps", "-a"]]
+
+    def test_local_placed_start_uses_local_daemon_throughout(self):
+        handle = self.start(environment_credentials=MINI_CREDENTIALS)
+        self.assertEqual(daemon.load_access("w"), DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
+        self.assertEqual(self.broker.secrets, (MINI,))
+        [(argv, _, _)] = self.execs
+        self.assertEqual(argv[:3], [DOCKER, "--host", self.ep])
+        self.assertEqual(self.remote_work(), [])
+        self.close_quietly(handle)
+        self.handle = None
+        self.assertEqual(self.broker.close_hosts, [self.ep])
+        self.assertEqual(self.remote_work(), [])
+
+    def test_a_caller_s_credentials_place_too(self):
+        self.start(credentials=MINI_CREDENTIALS)
+        self.assertEqual(daemon.load_access("w").host, self.ep)
+
+    def test_resume_of_a_local_placed_session_with_a_remote_target(self):
+        self.start(environment_credentials=MINI_CREDENTIALS)
+        self.close_quietly(self.handle)
+        self.handle = None
+        metadata = {**self.METADATA, "resume": "1", "environment_credentials": MINI_CREDENTIALS}
+        self.host._preflight("w", self.launch, metadata)
+        self.host._validate("w", self.launch, metadata)
+        self.order.clear()
+        self.start(resume="1", environment_credentials=MINI_CREDENTIALS)
+        self.assertIn("guard", self.order)
+        self.assertEqual(self.remote_work(), [])
+
+    def test_a_reply_from_another_daemon_rolls_back_there(self):
+        self.broker.started = replace(self.broker.started, endpoint=REMOTE, daemon=REMOTE_DAEMON)
+        with self.assertRaisesRegex(SessionError, "want ensemble-w-.* on daemon"):
+            self.start(environment_credentials=MINI_CREDENTIALS)
+        self.assertEqual(self.broker.close_hosts, [REMOTE])
 
 
 class RemoteAttachTargetTest(Base):
