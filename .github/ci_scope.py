@@ -200,6 +200,7 @@ def selected(root: Path, directories: list[str]) -> list[str]:
 SUCCESS = frozenset({"success"})
 SKIPPED = frozenset({"skipped"})
 ANY = frozenset({"success", "failure", "cancelled", "skipped"})
+REPO_GUARDS = ("github-dir-pr", "go", "jscpd")
 
 
 def gate(needs: dict, event: str) -> list[str]:
@@ -248,6 +249,11 @@ def gate(needs: dict, event: str) -> list[str]:
         "go": SUCCESS,
         "jscpd": SUCCESS,
     }
+    if not any(job in needs for job in REPO_GUARDS):
+        # An org ruleset runs main's ci.yml for pull requests and queue groups, so until main calls
+        # repo-guards, the change that adds these jobs runs without them.
+        for job in REPO_GUARDS:
+            del expected[job]
     for job, wanted in expected.items():
         data = needs.get(job)
         actual = data.get("result") if isinstance(data, dict) else None

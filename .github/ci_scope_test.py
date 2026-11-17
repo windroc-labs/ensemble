@@ -26,7 +26,7 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
-REPO_GUARDS = ("github-dir-pr", "go", "jscpd")
+REPO_GUARDS = scope.REPO_GUARDS
 
 
 def bumped(text, version="0.4.0"):
@@ -546,6 +546,14 @@ class Aggregate(unittest.TestCase):
                 self.assertEqual(scope.gate(needs, "push"), [])
                 self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
 
+    def test_push_without_a_coverage_result_fails(self):
+        needs = self.needs(event="push")
+        del needs["coverage"]
+        self.assertEqual(
+            scope.gate(needs, "push"),
+            ["coverage: expected cancelled or failure or skipped or success, got None"],
+        )
+
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
         needs = self.needs(full=False)
         needs["changes"]["outputs"]["broker"] = "true"
@@ -602,6 +610,22 @@ class Aggregate(unittest.TestCase):
         needs = self.needs(full=False)
         needs["changes"]["result"] = "failure"
         self.assertTrue(scope.gate(needs, "pull_request"))
+
+    def test_ci_without_any_repo_guards_job_passes_but_a_partial_set_fails(self):
+        for event in ("pull_request", "push", "merge_group"):
+            needs = self.needs(event=event)
+            for job in REPO_GUARDS:
+                del needs[job]
+            with self.subTest(event=event):
+                self.assertEqual(scope.gate(needs, event), [])
+            for job in REPO_GUARDS:
+                needs = self.needs(event=event)
+                del needs[job]
+                with self.subTest(event=event, missing=job):
+                    self.assertEqual(len(scope.gate(needs, event)), 1)
+                    self.assertRegex(
+                        scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
+                    )
 
     def test_a_needed_job_without_an_expectation_fails(self):
         for event in ("pull_request", "push", "merge_group"):
