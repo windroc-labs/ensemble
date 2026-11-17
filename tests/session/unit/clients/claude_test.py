@@ -27,6 +27,7 @@ from tests.session.unit.clients.claude.support import (
     fixture,
     reference,
 )
+from tests.session.unit.clients.support import opened_below
 
 
 class ConfigTest(Base):
@@ -273,3 +274,26 @@ class WritableDirsTest(Base):
                         resume=resume,
                     )
                     self.assertEqual(ClaudeClient(CONFIG).writable_dirs(spec), dirs)
+
+
+class AccountOfTest(Base):
+    def test_a_transcript_names_its_account_by_text_under_the_dir_or_its_target(self):
+        real = os.path.join(self.home, "accounts", "real")
+        linked = os.path.join(self.home, "accounts", "linked")
+        os.makedirs(real)
+        os.symlink(real, linked)
+        client = ClaudeClient({**CONFIG, "accounts": {"a": {"dir": linked}}})
+        for transcript in (f"{linked}/projects/p/s.jsonl", f"{real}/projects/p/s.jsonl"):
+            with self.subTest(transcript=transcript):
+                self.assertEqual(client._account_of(transcript), "a")
+        self.assertEqual(client._account_of(f"{self.home}/accounts/realer/s.jsonl"), "")
+
+    def test_a_docker_transcript_touches_no_path_below_its_home(self):
+        account = os.path.join(self.home, "accounts", "a")
+        os.makedirs(account)
+        client = ClaudeClient({**CONFIG, "accounts": {"a": {"dir": account}}})
+        docker = os.path.join(self.home, ".ensemble", "docker-state", "w", "claude")
+        os.makedirs(os.path.join(docker, "projects", "p"))
+        with opened_below(docker, itself=True) as touched:
+            found = client._account_of(os.path.join(docker, "projects", "p", "s.jsonl"))
+        self.assertEqual((found, touched), ("", []))

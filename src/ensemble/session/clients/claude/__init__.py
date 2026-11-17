@@ -84,11 +84,12 @@ class ClaudeClient(Client):
     def _account_of(self, transcript):
         if not printable_abs(transcript):
             return ""
-        path = os.path.realpath(transcript)
+        path = os.path.normpath(transcript)
         for name in sorted(self.common.accounts):
-            root = os.path.realpath(self.common.accounts[name].dir)
-            if os.path.commonpath((path, root)) == root:
-                return name
+            configured = self.common.accounts[name].dir
+            for root in {os.path.normpath(configured), os.path.realpath(configured)}:
+                if os.path.commonpath((path, root)) == root:
+                    return name
         return ""
 
     def _executable(self, *, container=False):
