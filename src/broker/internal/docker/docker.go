@@ -1,4 +1,4 @@
-// Package docker is the only code that runs the Docker CLI: fixed binary, fixed endpoint, clean environment.
+// Package docker is the only code that runs the Docker CLI: fixed binary, the user's one Docker target, clean environment.
 package docker
 
 import (
@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
+	systemPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 	Path       = "/Applications/Docker.app/Contents/Resources/bin/docker"
 	pluginDir  = "/Applications/Docker.app/Contents/Resources/cli-plugins"
 	RunDir     = "/run/ensemble"
@@ -106,10 +108,16 @@ func TempDir(home, pattern string) (string, error) {
 type CLI struct {
 	path, buildx, home, config string
 	Progress                   io.Writer // nil: none; gets each docker build's stderr as it arrives
+	target                     Target
+	targetErr                  error  // an invalid TargetFile: every Run's error
+	sshDir                     string // SSHDir; tests' own
+	mu                         sync.Mutex
+	probed                     bool
+	probeErr                   error
 }
 
-// New writes a private CLI config that ignores ~/.docker; Run checks Docker Desktop's executables,
-// so a command's local validation fails first.
+// New writes a private CLI config that ignores ~/.docker and reads the Docker target; Run checks Docker Desktop's
+// executables, so a command's local validation fails first.
 func New(home string) (*CLI, func(), error) {
 	dir, err := TempDir(home, "ensemble-docker-")
 	if err != nil {
@@ -121,16 +129,30 @@ func New(home string) (*CLI, func(), error) {
 		clean()
 		return nil, nil, err
 	}
-	return &CLI{path: Path, buildx: filepath.Join(pluginDir, "docker-buildx"), home: home, config: dir}, clean, nil
+	target, targetErr := LoadTarget(home)
+	return &CLI{path: Path, buildx: filepath.Join(pluginDir, "docker-buildx"), home: home, config: dir, target: target,
+		targetErr: targetErr, sshDir: SSHDir}, clean, nil
 }
 
 func (c *CLI) Endpoint() string {
+	if c.target.Remote() {
+		return c.target.Host
+	}
 	return "unix://" + filepath.Join(c.home, ".docker/run/docker.sock")
 }
 
+// Command is docker's argv and environment; a remote target's also put the ssh wrapper first on PATH and pass the
+// ssh agent's socket, the one variable added for ssh.
 func (c *CLI) Command(args []string) (string, []string, []string) {
 	argv := append([]string{"--config", c.config, "--host", c.Endpoint()}, args...)
-	env := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
+	path := systemPath
+	if c.target.Remote() {
+		path = c.sshDir + ":" + systemPath
+	}
+	env := []string{"PATH=" + path, "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
+	if sock := os.Getenv("SSH_AUTH_SOCK"); c.target.Remote() && sock != "" {
+		env = append(env, "SSH_AUTH_SOCK="+sock)
+	}
 	return c.path, argv, env
 }
 
@@ -145,13 +167,86 @@ func (b *capped) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0
+}
+
+// Run runs docker args against the target. A remote target is first probed once: reached over ssh, with docker on
+// the remote and an Engine of at least minEngine; once the probe fails, no docker process runs again.
 func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
+	if c.targetErr != nil {
+		return nil, c.targetErr
+	}
 	for _, path := range []string{c.path, c.buildx} {
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		if !executable(path) {
 			return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker Desktop executable unavailable: " + path + startDesktop}
 		}
 	}
+	if c.target.Remote() {
+		if wrapper := filepath.Join(c.sshDir, "ssh"); !executable(wrapper) {
+			return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "ssh wrapper unavailable: " + wrapper + "; reinstall the broker"}
+		}
+		if err := c.probe(ctx); err != nil {
+			return nil, err
+		}
+	}
+	out, stderr, err := c.exec(ctx, args, stdin)
+	if err == nil {
+		return out, nil
+	}
+	if u := c.unreachable(stderr, false); u != nil {
+		return nil, u
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && ctx.Err() == nil {
+		return nil, &CommandError{Exit: exit.ExitCode(), Stderr: stderr}
+	}
+	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
+}
+
+// probe checks a remote target once per CLI; its diagnostic comes from docker version, never a container.
+func (c *CLI) probe(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.probed {
+		return c.probeErr
+	}
+	c.probed = true
+	out, stderr, err := c.exec(ctx, []string{"version", "--format", "{{.Server.Version}}"}, nil)
+	switch {
+	case err != nil:
+		u := c.unreachable(stderr, true)
+		if u == nil {
+			u = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (" + connectDetail(stderr) + ")"}
+		}
+		c.probeErr = u
+	case engine(out) != "":
+		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: engine(out)}
+	}
+	return c.probeErr
+}
+
+// unreachable classifies a failed docker's stderr by target: nil when the daemon answered.
+func (c *CLI) unreachable(stderr string, detailed bool) *Unreachable {
+	if !c.target.Remote() {
+		if strings.Contains(stderr, "Cannot connect to the Docker daemon") || strings.Contains(stderr, "docker.sock: connect:") {
+			return &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker daemon not running" + startDesktop}
+		}
+		return nil
+	}
+	if !strings.Contains(stderr, "error during connect") && !strings.Contains(stderr, "Cannot connect to the Docker daemon") {
+		return nil
+	}
+	reason := remoteReason(stderr)
+	if detailed {
+		reason += " (" + connectDetail(stderr) + ")"
+	}
+	return &Unreachable{Endpoint: c.Endpoint(), Reason: reason}
+}
+
+// exec runs docker args: its stdout, its stderr's tail, and the run's error.
+func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, string, error) {
 	path, argv, env := c.Command(args)
 	cmd := exec.CommandContext(ctx, path, argv...)
 	cmd.Env = env
@@ -168,16 +263,5 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 		}()
 	}
 	err := cmd.Run()
-	if err == nil {
-		return stdout.data, nil
-	}
-	text := string(stderr.data)
-	if strings.Contains(text, "Cannot connect to the Docker daemon") || strings.Contains(text, "docker.sock: connect:") {
-		return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker daemon not running" + startDesktop}
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && ctx.Err() == nil {
-		return nil, &CommandError{Exit: exit.ExitCode(), Stderr: text}
-	}
-	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
+	return stdout.data, string(stderr.data), err
 }
