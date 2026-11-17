@@ -20,7 +20,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "39"
+PROTOCOL = "40"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -33,7 +33,10 @@ TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
 IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
-ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
+ENDPOINT = re.compile(
+    r"^(unix:///[^\u0000-\u001f\u007f]+/\.docker/run/docker\.sock"
+    r"|ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?)$"
+)
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,31}")
 COMMANDS = frozenset(

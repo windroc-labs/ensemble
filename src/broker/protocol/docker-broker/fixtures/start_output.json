@@ -90,6 +90,96 @@
     }
   },
   {
+    "name": "start-output-remote-endpoint",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "ssh://agent@pc.tail1234.ts.net:2222",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-endpoint-trailing-newline",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "ssh://pc\n",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
+    "name": "start-output-endpoint-option",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "ssh://-oProxyCommand=x",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
+    "name": "start-output-endpoint-path",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "ssh://pc/var/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
     "name": "start-output-codex",
     "valid": true,
     "expected": {

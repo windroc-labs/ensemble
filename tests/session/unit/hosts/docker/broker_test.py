@@ -322,6 +322,15 @@ class ResponseTest(Case):
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)
 
+    def test_endpoint_pattern_is_the_schemas(self):
+        with open(os.path.join(REPO, broker.SCHEMA)) as f:
+            pattern = json.load(f)["$defs"]["endpoint"]["pattern"]
+        self.assertEqual(broker.ENDPOINT.pattern, pattern)
+        started = Broker(FakeBroker(success("start-output-remote-endpoint"))).start(
+            MANIFEST, clients=KEYS
+        )
+        self.assertEqual(started.endpoint, "ssh://agent@pc.tail1234.ts.net:2222")
+
     def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached"))
         Broker(fake).build("/opt/ensemble")

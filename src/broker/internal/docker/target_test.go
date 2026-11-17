@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -255,5 +256,26 @@ func TestRemoteCommandLosingTheTarget(t *testing.T) {
 	var ce *CommandError
 	if !errors.As(err, &ce) || errors.Is(err, ErrUnreachable) {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestTargetPatternMatchesSchema(t *testing.T) {
+	data, err := os.ReadFile("../../protocol/docker-broker/protocol.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			Endpoint struct {
+				Pattern string `json:"pattern"`
+			} `json:"endpoint"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	want := `^(unix:///[^\u0000-\u001f\u007f]+/\.docker/run/docker\.sock|` + TargetPattern + `)$`
+	if schema.Defs.Endpoint.Pattern != want {
+		t.Fatalf("schema endpoint pattern %q, want %q", schema.Defs.Endpoint.Pattern, want)
 	}
 }
