@@ -63,6 +63,10 @@ __all__ = [
     "SessionRow",
     "SessionStatus",
     "Spec",
+    "StateEntry",
+    "StateFile",
+    "StateKind",
+    "StateStat",
     "Stderr",
     "Tier",
     "TurnEnd",
@@ -175,6 +179,30 @@ class HookCallback:
 
 def _no_files() -> Mapping[str, str]:
     return {}
+
+
+class StateFile(NamedTuple):
+    session: str
+    client: str
+    rel: str
+
+
+class StateStat(NamedTuple):
+    size: int
+    mtime: float
+
+
+class StateKind(StrEnum):
+    DIR = "dir"
+    FILE = "file"
+    OTHER = "other"
+
+
+class StateEntry(NamedTuple):
+    name: str
+    kind: StateKind
+    size: int
+    mtime: float
 
 
 @dataclass(frozen=True)

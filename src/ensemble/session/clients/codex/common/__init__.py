@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import fnmatch
 import hashlib
@@ -37,10 +38,12 @@ from ensemble.session.clients.common import (
     check_config,
     docker_config,
     docker_config_path,
+    located,
     mode_flags,
     scan,
     split_flags,
 )
+from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
     COMMAND,
     ClientHome,
@@ -51,11 +54,12 @@ from ensemble.session.engine.types import (
     SessionInfo,
     SessionStatus,
     Spec,
+    StateFile,
+    StateKind,
     Usage,
     Window,
 )
 from ensemble.utils import (
-    DOCKER_STATE,
     LOCAL_ENV_VARS,
     STATE,
     drop_stale,
@@ -108,6 +112,8 @@ VALUED = {
 MCP_OFF = "mcp_servers={}"
 SYSTEM_CONFIG = "/etc/codex/config.toml"
 DOCKER_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-config.toml")
+HOME_DIR = "codex"  # a Docker session home's dir and CODEX_HOME's last part there
+METADATA_MAX = 128 * 1024
 WORKER_CONFIG = "config/config.toml"  # CODEX_HOME/config.toml links here, in a bind-mounted dir
 _SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
@@ -214,9 +220,37 @@ def inside(path: str, root: str) -> bool:
 
 
 def read_metadata(path: str) -> SessionFile:
+    line, mtime = _first_line(path)
     try:
+        metadata = json.loads(line)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise RecoveryError(f"malformed Codex session metadata: {path}") from exc
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("type") != "session_meta"
+        or not isinstance(metadata.get("payload"), dict)
+    ):
+        raise RecoveryError(f"malformed Codex session metadata: {path}")
+    payload = metadata["payload"]
+    if (
+        not native_id(payload.get("id"))
+        or not path.endswith("-" + payload["id"] + ".jsonl")
+        or absolute_path(payload.get("cwd"), "session cwd") != payload["cwd"]
+    ):
+        raise RecoveryError(f"mismatched Codex session metadata: {path}")
+    return SessionFile(
+        path, mtime, NativeMetadata(payload["id"], payload["cwd"], _parent_identifier(payload))
+    )
+
+
+def _first_line(path: str) -> tuple[str | bytes, float]:
+    """A session file's first line, METADATA_MAX at most, and its mtime; FileNotFoundError: none."""
+    try:
+        found = located(path, HOME_DIR)
+        if found is not None:
+            return _state_first_line(found, path)
         fd = open_beneath("/", path)
-    except FileNotFoundError:
+    except (FileNotFoundError, RecoveryError):
         raise
     except OSError as exc:
         raise RecoveryError(f"cannot read Codex session file {path}: {exc}") from exc
@@ -227,30 +261,64 @@ def read_metadata(path: str) -> SessionFile:
         with os.fdopen(fd, "r", encoding="utf-8") as stream:
             fd = -1
             try:
-                metadata = json.loads(stream.readline(128 * 1024))
-            except (ValueError, UnicodeError, RecursionError) as exc:
+                return stream.readline(METADATA_MAX), info.st_mtime
+            except UnicodeError as exc:
                 raise RecoveryError(f"malformed Codex session metadata: {path}") from exc
-        if (
-            not isinstance(metadata, dict)
-            or metadata.get("type") != "session_meta"
-            or not isinstance(metadata.get("payload"), dict)
-        ):
-            raise RecoveryError(f"malformed Codex session metadata: {path}")
-        payload = metadata["payload"]
-        if (
-            not native_id(payload.get("id"))
-            or not path.endswith("-" + payload["id"] + ".jsonl")
-            or absolute_path(payload.get("cwd"), "session cwd") != payload["cwd"]
-        ):
-            raise RecoveryError(f"mismatched Codex session metadata: {path}")
-        return SessionFile(
-            path,
-            info.st_mtime,
-            NativeMetadata(payload["id"], payload["cwd"], _parent_identifier(payload)),
-        )
     finally:
         if fd >= 0:
             os.close(fd)
+
+
+def _state_first_line(found: StateFile, path: str) -> tuple[bytes, float]:
+    try:
+        info = client_state.stat(found)
+        data = client_state.read(found, limit=METADATA_MAX) if info is not None else None
+    except OSError as exc:
+        if exc.errno == errno.EINVAL:  # client_state: not a regular file
+            raise RecoveryError(f"not a regular Codex session file: {path}") from exc
+        raise
+    if info is None or data is None:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+    return data.split(b"\n", 1)[0], info.mtime
+
+
+def read_session(path: str, *, offset: int = 0, limit: int | None = None) -> bytes | None:
+    """read_beneath("/", path, …); a Docker session home's through client_state, READ_MAX at most."""
+    try:
+        found = located(path, HOME_DIR)
+        if found is not None:
+            return client_state.read(found, offset=offset, limit=limit)
+    except OSError:
+        return None
+    return read_beneath("/", path, offset=offset, limit=limit)
+
+
+def session_size(path: str) -> int | None:
+    """A Docker session home's session file size, 0 when absent or refused; None: a local path."""
+    try:
+        found = located(path, HOME_DIR)
+        if found is None:
+            return None
+        info = client_state.stat(found)
+    except OSError:
+        return 0
+    return info.size if info is not None else 0
+
+
+def _listing(directory: str) -> list[tuple[str, bool]]:
+    """`directory`'s names, each with whether it is a dir (no link followed); a Docker session
+    home's through client_state, [] when absent there.
+    """
+    found = located(directory, HOME_DIR)
+    if found is not None:
+        listed = client_state.entries(found) or ()
+        return [(entry.name, entry.kind is StateKind.DIR) for entry in listed]
+    fd = open_beneath("/", directory, directory=True)
+    try:
+        with os.scandir(fd) as entries:
+            return [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
+    finally:
+        os.close(fd)
 
 
 def _parent_identifier(payload) -> str | None:
@@ -264,40 +332,22 @@ def _parent_identifier(payload) -> str | None:
 
 def session_paths(snapshot: Snapshot, identifier: str = "*") -> list[str]:
     root = os.path.join(snapshot.codex_home, "sessions")
-    if not os.path.exists(root):
+    if located(root, HOME_DIR) is None and not os.path.exists(root):
         return []
     directories = [root]
     for length in (4, 2, 2):
-        children = []
-        for directory in directories:
-            fd = open_beneath("/", directory, directory=True)
-            try:
-                entries = os.scandir(fd)
-                with entries:
-                    for entry in entries:
-                        if (
-                            len(entry.name) == length
-                            and entry.name.isascii()
-                            and entry.name.isdigit()
-                            and entry.is_dir(follow_symlinks=False)
-                        ):
-                            children.append(os.path.join(directory, entry.name))
-            finally:
-                os.close(fd)
-        directories = children
-    matches = []
-    for directory in directories:
-        fd = open_beneath("/", directory, directory=True)
-        try:
-            with os.scandir(fd) as entries:
-                matches.extend(
-                    os.path.join(directory, entry.name)
-                    for entry in entries
-                    if fnmatch.fnmatchcase(entry.name, f"rollout-*-{identifier}.jsonl")
-                )
-        finally:
-            os.close(fd)
-    return matches
+        directories = [
+            os.path.join(directory, name)
+            for directory in directories
+            for name, is_dir in _listing(directory)
+            if len(name) == length and name.isascii() and name.isdigit() and is_dir
+        ]
+    return [
+        os.path.join(directory, name)
+        for directory in directories
+        for name, _ in _listing(directory)
+        if fnmatch.fnmatchcase(name, f"rollout-*-{identifier}.jsonl")
+    ]
 
 
 def session_file(snapshot: Snapshot, identifier: str, *, recorded: str = "") -> SessionFile | None:
@@ -808,10 +858,13 @@ def _docker_files() -> dict[str, str]:
     return {WORKER_CONFIG: text}
 
 
-def _docker_home(home: str) -> bool:
-    """Whether real path `home` is a Docker worker's Codex home, seen from the host."""
-    state = os.path.realpath(os.path.expanduser(DOCKER_STATE))
-    return os.path.dirname(os.path.dirname(home)) == state and os.path.basename(home) == "codex"
+def _container_home(home: str) -> bool:
+    """Whether real path `home` is a Docker worker's Codex home itself, seen from the host."""
+    try:
+        found = located(os.path.join(home, WORKER_CONFIG), HOME_DIR)
+    except OSError:
+        return False
+    return found is not None and found.rel == WORKER_CONFIG
 
 
 def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
@@ -821,7 +874,7 @@ def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
     the host's system config never reaches it.
     """
     home = os.path.realpath(snapshot.codex_home)
-    if not _docker_home(home):
+    if not _container_home(home):
         layers = [SYSTEM_CONFIG, os.path.join(home, "config.toml")]
     elif resume:
         layers = [os.path.join(home, WORKER_CONFIG)]
@@ -841,11 +894,16 @@ def _read_layer(path: str, home: str) -> dict:
     """
     if path != os.path.join(home, WORKER_CONFIG):
         return load_config(path)
-    data = read_beneath(home, path, limit=DOCKER_CONFIG_MAX + 1)
-    if data is None or len(data) > DOCKER_CONFIG_MAX:
-        if not os.path.lexists(path):
-            raise FileNotFoundError(path)
-        raise ConfigError(f"{path}: want a regular file of at most 2 MiB")
+    refused = ConfigError(f"{path}: want a regular file of at most 2 MiB")
+    try:
+        found = located(path, HOME_DIR)
+        data = client_state.read(found, limit=DOCKER_CONFIG_MAX + 1) if found else None
+    except OSError:
+        raise refused from None
+    if data is None:
+        raise FileNotFoundError(path)
+    if len(data) > DOCKER_CONFIG_MAX:
+        raise refused
     return load_config_text(data.decode())
 
 
@@ -854,7 +912,7 @@ def _mcp_servers(snapshot: Snapshot, *, resume: bool = False) -> dict[str, tuple
     found = {}
     home = os.path.realpath(snapshot.codex_home)
     for path in _config_layers(snapshot, resume=resume):
-        if not os.path.lexists(path):
+        if path != os.path.join(home, WORKER_CONFIG) and not os.path.lexists(path):
             continue
         try:
             servers = _read_layer(path, home).get("mcp_servers", {})
@@ -1013,7 +1071,7 @@ class CodexCommon:
     def home(self) -> ClientHome:
         return ClientHome(
             "codex_dir",
-            "codex",
+            HOME_DIR,
             "CODEX_HOME",
             "codex-access-token",
             files=_docker_files,

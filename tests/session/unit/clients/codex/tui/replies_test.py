@@ -7,13 +7,14 @@ import io
 import json
 import os
 import time
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import tui
 from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.types import HookCall
-from ensemble.utils import STALE_AGE, file_lock, read_reply
+from ensemble.utils import STALE_AGE, docker_home, file_lock, read_reply
 from tests.session.case import SPAWNS
 from tests.session.unit.clients.codex.support import NATIVE, Base, said
 from tests.utils.clock import FakeClock
@@ -367,6 +368,38 @@ class ScanTest(RepliesBase):
         os.mkfifo(self.path)
         got = self.hook("Stop", turn_id="t1", last_assistant_message="end")
         self.assertEqual(got["hook_event_name"], "Stop")
+        self.assertEqual(self.lines(), [])
+
+
+class DockerRolloutTest(RepliesBase):
+    """Steer replies from a Docker session's Codex home, read through client_state."""
+
+    def prepare(self):
+        self.codex_home = Path(docker_home("w", "codex"))
+        self.codex_home.mkdir(parents=True)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
+        return super().prepare()
+
+    def test_a_steer_is_answered_from_the_rollout(self):
+        self.assertTrue(str(self.path).startswith(docker_home("w", "codex") + os.sep))
+        self.open_turn()
+        self.steer("status?")
+        self.append(said("user", "status?"), said("assistant", "answer"))
+        self.pump()
+        (reply_id,) = self.reply_ids()
+        self.assertEqual(read_reply(self.events, reply_id), "answer")
+
+    def test_the_rollout_size_and_a_linked_rollout(self):
+        self.assertEqual(replies._size(str(self.path)), self.path.stat().st_size)
+        self.open_turn()
+        self.steer("status?")
+        other = self.root / "other.jsonl"
+        lines = (said("user", "status?"), said("assistant", "leak"))
+        other.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+        self.path.unlink()
+        self.path.symlink_to(other)
+        self.assertEqual(replies._size(str(self.path)), 0)
+        self.hook("Stop", turn_id="t1", last_assistant_message="end")
         self.assertEqual(self.lines(), [])
 
 

@@ -11,6 +11,7 @@ import sys
 import sysconfig
 import time
 from datetime import datetime
+from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -37,7 +38,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.session.modes.tui import TuiMode
-from ensemble.utils import LOCAL_ENV_VARS
+from ensemble.utils import LOCAL_ENV_VARS, docker_home
 from tests.session.case import PACKAGE_ROOTS, ROOTS, SRC
 from tests.session.codex_tui import PlanCase
 from tests.session.fakes.terminal import MemoryHost
@@ -1243,6 +1244,45 @@ REFUSED = (
     ("--config=sandbox_workspace_write.network_access=true",),
     ("-csandbox_workspace_write.writable_roots=[]",),
 )
+
+
+class DockerHomeObserveTest(Base):
+    """A tui over a Docker session's Codex home reads its session file through client_state."""
+
+    launch = TuiTest.launch
+    payload = TuiTest.payload
+    bound = TuiTest.bound
+
+    def setUp(self):
+        super().setUp()
+        self.codex_home = Path(docker_home("w", "codex"))
+        self.codex_home.mkdir(parents=True)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
+
+    def test_observe_reads_the_docker_session_file(self):
+        run, path = self.bound()
+        self.assertTrue(str(path).startswith(docker_home("w", "codex") + os.sep))
+        _append(path, said("user", "go"), said("assistant", "done"))
+        self.assertEqual(run.observe(), [Reply("done")])
+        self.assertEqual(run.offset, path.stat().st_size)
+
+    def test_a_resume_starts_after_the_docker_session_files_end(self):
+        self.prepare()
+        self.common.bind(str(self.work), self.spec.sid, NATIVE)
+        path = self.rollout()
+        _append(path, said("user", "earlier"), said("assistant", "old"))
+        run, _, _ = self.launch(resume=True)
+        self.assertEqual((run.start, run.offset), (path.stat().st_size,) * 2)
+        self.assertEqual(run.observe(), [])
+
+    def test_a_linked_session_file_is_not_read(self):
+        run, path = self.bound()
+        other = self.root / "other.jsonl"
+        other.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        _append(other, said("user", "go"), said("assistant", "leak"))
+        path.unlink()
+        path.symlink_to(other)
+        self.assertEqual(run.observe(), [])
 
 
 class SuppliedFlagsTest(Base):
