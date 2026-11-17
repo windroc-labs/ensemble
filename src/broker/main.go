@@ -481,8 +481,7 @@ func system() app {
 				return nil, err
 			}
 			defer clean()
-			var u *docker.Unreachable
-			if errors.As(d.TargetErr(), &u) {
+			if u, ok := errors.AsType[*docker.Unreachable](d.TargetErr()); ok {
 				return nil, protocol.New(protocol.DockerUnreachable, u.Error())
 			}
 			return launcher.Host{Home: k.Home, Daemons: daemons(d)}.Target(ctx), nil
@@ -506,11 +505,21 @@ func system() app {
 			})
 		},
 		close: func(ctx context.Context, k keys, container, daemon string) (any, error) {
-			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, daemon, container) })
+			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) {
+				d, err := h.Find(ctx, daemon, protocol.CloseFailed)
+				if err != nil {
+					return nil, err
+				}
+				return h.Close(ctx, d, container)
+			})
 		},
 		workspaceRm: func(ctx context.Context, k keys, volume string, force bool, daemon string) (any, error) {
 			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) {
-				return h.WorkspaceRm(ctx, daemon, volume, force)
+				d, err := h.Find(ctx, daemon, protocol.WorkspaceFailed)
+				if err != nil {
+					return nil, err
+				}
+				return h.WorkspaceRm(ctx, d, volume, force)
 			})
 		},
 		login: func(k keys, account string, out io.Writer) error {

@@ -121,10 +121,10 @@ func TestAnUnconfiguredDaemonFailsEveryCommand(t *testing.T) {
 	_, err := h.Start(ctx, editedManifest(t, onDaemon(unknown)))
 	check("start", err, rd, ld)
 	h, rd, ld = twoDaemons(&world{labels: goodLabels()}, localWorld(), &fakeEnv{})
-	_, err = h.Close(ctx, unknown, container)
+	_, err = h.Find(ctx, unknown, protocol.CloseFailed)
 	check("close", err, rd, ld)
 	h, rd, ld = twoDaemons(&world{labels: goodLabels()}, localWorld(), &fakeEnv{})
-	_, err = h.WorkspaceRm(ctx, unknown, "ensemble-ws-w", true)
+	_, err = h.Find(ctx, unknown, protocol.WorkspaceFailed)
 	check("workspace-rm", err, rd, ld)
 	h, rd, ld = twoDaemons(&world{labels: goodLabels()}, localWorld(), &fakeEnv{})
 	_, err = h.Build(ctx, "/nonexistent", BuildSpec{Daemon: unknown}, -1)
@@ -133,7 +133,7 @@ func TestAnUnconfiguredDaemonFailsEveryCommand(t *testing.T) {
 
 func TestAnUnreachableDaemonComesBeforeAMiss(t *testing.T) {
 	h, _, ld := twoDaemons(&world{labels: goodLabels(), unreachable: true}, localWorld(), &fakeEnv{})
-	_, err := h.Close(context.Background(), testDaemon, container)
+	_, err := h.Find(context.Background(), testDaemon, protocol.CloseFailed)
 	if e := protoErr(t, err); e.Code != protocol.DockerUnreachable || e.Message != "Cannot reach Docker target ssh://u@pc: host key mismatch." {
 		t.Fatalf("%+v", e)
 	}

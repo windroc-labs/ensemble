@@ -142,10 +142,18 @@ func (h Host) identify(ctx context.Context, d Daemon, code protocol.Code) (Daemo
 	case errors.As(err, &u):
 		return Daemon{}, records{}, failure(err, code, "")
 	case err != nil:
-		return Daemon{}, records{}, protocol.New(code, err.(*protocol.Error).Message)
+		return Daemon{}, records{}, protocol.New(code, why(err))
 	}
 	d.ID = id
 	return d, records{filepath.Join(h.dockerPath("images"), id)}, nil
+}
+
+// why is a failure's message: a protocol error's own, else its text.
+func why(err error) string {
+	if e, ok := errors.AsType[*protocol.Error](err); ok {
+		return e.Message
+	}
+	return err.Error()
 }
 
 // daemonID is d's daemon's ID: a *docker.Unreachable when d cannot be reached, else a *protocol.Error whose message

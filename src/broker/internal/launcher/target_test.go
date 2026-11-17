@@ -19,8 +19,7 @@ func identified(id string, err error) *fakeDocker {
 		if err != nil {
 			return nil, err
 		}
-		out, _ := json.Marshal(id)
-		return out, nil
+		return json.Marshal(id)
 	}}
 }
 
@@ -65,9 +64,12 @@ func TestTargetListsTheConfiguredDaemons(t *testing.T) {
 }
 
 func TestTargetOutputMatchesItsFixture(t *testing.T) {
-	out, _ := json.Marshal(TargetResult{Default: DaemonRemote, Daemons: []TargetDaemon{
+	out, err := json.Marshal(TargetResult{Default: DaemonRemote, Daemons: []TargetDaemon{
 		{Name: DaemonRemote, Endpoint: remoteEndpoint, Remote: true, Path: sshPath, Unreachable: "why"},
 		{Name: DaemonLocal, Endpoint: localEndpoint, Path: "/usr/bin", ID: "L1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := `{"default":"remote","daemons":[{"name":"remote","endpoint":"ssh://u@pc","remote":true,"path":"` + sshPath +
 		`","unreachable":"why"},{"name":"local","endpoint":"` + localEndpoint + `","remote":false,"path":"/usr/bin","id":"L1"}]}`
 	if string(out) != want {

@@ -118,7 +118,7 @@ func TestCloseRemovesWhenReadFails(t *testing.T) {
 func closeOn(h Host, container string) (CloseResult, error) {
 	h.Daemons = slices.Clone(h.Daemons)
 	h.Daemons[0].Runner = identifiedRunner{testDaemon, h.Daemons[0].Runner}
-	return h.Close(context.Background(), testDaemon, container)
+	return h.Close(context.Background(), h.Daemons[0], container)
 }
 
 // identifiedRunner answers the daemon ID query with id and passes every other call to r.
@@ -138,7 +138,7 @@ func TestCloseOnLocalDaemon(t *testing.T) {
 	remote := &fakeDocker{}
 	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(container + "\n"), nil }}
 	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
-	got, err := h.Close(context.Background(), localDaemon, container)
+	got, err := h.Close(context.Background(), h.Daemons[1], container)
 	if err != nil || !got.Removed || len(remote.calls) != 0 || !slices.ContainsFunc(local.calls, func(c []string) bool { return c[0] == "rm" }) {
 		t.Fatalf("%+v %v; remote %q local %q", got, err, remote.calls, local.calls)
 	}
@@ -148,7 +148,7 @@ func TestCloseOnUnreachableDaemon(t *testing.T) {
 	remote := &fakeDocker{}
 	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
 	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, local)
-	if _, err := h.Close(context.Background(), localDaemon, container); protoErr(t, err).Code != protocol.DockerUnreachable {
+	if _, err := h.Close(context.Background(), h.Daemons[1], container); protoErr(t, err).Code != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
 	if len(remote.calls) != 0 {

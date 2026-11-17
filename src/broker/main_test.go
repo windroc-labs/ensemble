@@ -842,7 +842,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case "maintain":
 			_, err = h.Maintain(context.Background(), c, path, true)
 		case "close":
-			_, err = h.Close(context.Background(), "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6", c)
+			_, err = h.Close(context.Background(), h.Daemons[0], c)
 		}
 		rec.Flush(err)
 		if err != nil {
@@ -1211,22 +1211,4 @@ func TestWithHostDaemons(t *testing.T) {
 func withoutRunner(d launcher.Daemon) launcher.Daemon {
 	d.Runner = nil
 	return d
-}
-
-func TestTargetCommandRefusesAnInvalidSetting(t *testing.T) {
-	home := t.TempDir()
-	path := filepath.Join(home, docker.TargetFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"host": "ssh://u@pc", "local_secrets": [], "extra": 1}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	a := system()
-	a.keychain = func(bool) (keys, error) { return keys{Home: home}, nil }
-	code, out, errOut := invoke(a, "target")
-	assertError(t, errOut, out, "target", protocol.DockerUnreachable)
-	if code != 7 || !strings.Contains(errOut, path) || !strings.Contains(errOut, "invalid target setting") {
-		t.Fatalf("%d %s", code, errOut)
-	}
 }

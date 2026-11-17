@@ -118,7 +118,7 @@ func (h Host) Target(ctx context.Context) TargetResult {
 		case errors.As(err, &u):
 			t.Unreachable = u.Reason
 		default:
-			t.Unreachable = err.(*protocol.Error).Message
+			t.Unreachable = why(err)
 		}
 		result.Daemons = append(result.Daemons, t)
 	}
@@ -183,6 +183,12 @@ func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, 
 	}
 	return Daemon{}, records{}, protocol.Newf(protocol.DockerUnreachable, "Docker daemon %s is not configured; the configured daemons: %s.",
 		id, strings.Join(configured, ", "))
+}
+
+// Find is the configured daemon whose ID is id, by find's rule.
+func (h Host) Find(ctx context.Context, id string, code protocol.Code) (Daemon, error) {
+	d, _, err := h.find(ctx, id, code)
+	return d, err
 }
 
 // localOnly refuses a start that would give a remote daemon d any of the environment secrets that stay on the local

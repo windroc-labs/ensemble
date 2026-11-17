@@ -218,8 +218,9 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 			return nil, err
 		}
 		if c.probedID != "" && slices.Equal(args, InfoID) {
-			id, _ := json.Marshal(c.probedID)
-			return append(id, '\n'), nil
+			if id, err := json.Marshal(c.probedID); err == nil {
+				return append(id, '\n'), nil
+			}
 		}
 	}
 	out, stderr, err := c.exec(ctx, args, stdin)
