@@ -57,6 +57,43 @@ board. It installs the selected dependencies/plugins, requests the needed logins
 Rerun it to finish an interrupted install. For options, use `bash scripts/install.sh --help` in a checkout;
 for an existing installation, read [Upgrading](docs/upgrading.md) first.
 
+### Docker sessions from before state volumes
+
+A Docker session started before broker protocol 40 keeps its client state in the Mac directory
+`~/.ensemble/docker-state/<name>/<client>` (`<client>`: `claude`, `codex` or `opencode`), which workers no longer
+read. A session with no target record, as such a session has, belongs to the local Docker Desktop: its resume on a
+remote target fails, naming the local Docker Desktop as its target. To keep its conversation, copy that directory into
+its state volume once, with the Docker target unset (no `~/.ensemble/docker/target.json`) and the session closed.
+In a Mac terminal, set `name` and `client`, then run the block as a whole; it stops at the first failing step:
+
+```sh
+name=<name> client=<client>
+(
+  set -eu
+  docker() { command docker --host "unix://$HOME/.docker/run/docker.sock" "$@"; }  # never DOCKER_HOST or a context
+  docker info --format '{{.ID}}'  # the local Docker Desktop answers, or nothing below runs
+  from="$HOME/.ensemble/docker-state/$name/$client"
+  [ -d "$from" ]
+  [ ! -L "$from" ]
+  if docker volume inspect "ensemble-state-$name" >/dev/null 2>&1; then exit 1; fi  # a new start made one
+  image=$(docker image ls --filter reference=ensemble-worker --format '{{.Repository}}:{{.Tag}}' | head -n 1)
+  owner=$(docker image inspect --format \
+    '{{index .Config.Labels "ensemble.agent-uid"}}:{{index .Config.Labels "ensemble.agent-gid"}}' "$image")
+  docker volume create --label "ensemble.state=$name" --label "ensemble.state-owner=$owner" "ensemble-state-$name"
+  docker run --rm --pull never --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE \
+    --cap-add FOWNER --security-opt no-new-privileges --user 0:0 \
+    --mount "type=bind,source=$from,target=/from,readonly" \
+    --mount "type=volume,source=ensemble-state-$name,target=/state" \
+    --entrypoint /bin/sh "$image" -c 'mkdir -p "/state/$1" && cp -a /from/. "/state/$1/" && chown -hR "$2" /state' \
+    sh "$client" "$owner"
+)
+```
+
+The copy runs in a container from the worker image already on the Mac, with no network, reading the directory
+read-only: its content was written by a worker, so its links are copied as links and never followed. Then resume the
+session as usual (`ensemble-crew resume <name>`); once its conversation continues, delete
+`~/.ensemble/docker-state/<name>/<client>`.
+
 Use the model account/provider required by your selected client. OpenCode provider and network setup lives
 in [Customizing roles and tasks](docs/customizing-roles-and-tasks.md#opencode-sessions).
 Host `gh` needs push/PR access to target repositories: classic tokens need `repo`, `read:org` and `gist`;

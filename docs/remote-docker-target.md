@@ -12,7 +12,9 @@ flowchart LR
 ```
 
 Do the steps in this order. The rules for `~/.ensemble/docker/target.json` (address form, SSH options, the check
-before each start) are in [Upgrading › Broker protocol 40](upgrading.md#broker-protocol-40-docker-target).
+before each start) are in [Upgrading › Broker protocol 40](upgrading.md#broker-protocol-40-docker-target). A session
+stays on the daemon that made it: switching the target to another machine leaves earlier sessions there, to resume or
+reclaim after switching back ([Upgrading › Broker protocol 41](upgrading.md#broker-protocol-41-a-docker-target-is-its-daemon)).
 
 The target needs Docker Engine 26 or newer, an SSH server that accepts only keys, and `docker` on the PATH of the SSH
 login shell: `docker --host ssh://…` runs `ssh <host> docker system dial-stdio` there. It needs no bash, `gh`, GitHub
