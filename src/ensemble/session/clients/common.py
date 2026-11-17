@@ -1,14 +1,19 @@
 """What the Claude, Codex and OpenCode clients share."""
 
-import errno
 import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ensemble.session.engine import client_state
-from ensemble.session.engine.types import ConfigError, Effort, Permission, StateFile, Tier
+from ensemble.session.engine.types import (
+    ClientContext,
+    ConfigError,
+    Effort,
+    HomeStore,
+    Permission,
+    Tier,
+)
 from ensemble.utils import STATE, environment_ok, read_regular
 
 DOCKER_CONFIG = f"{STATE}/docker-config"
@@ -32,14 +37,11 @@ def question(titles) -> str:
     return f"question: {'; '.join(found)}" if found else "question"
 
 
-def located(path: str, client: str) -> StateFile | None:
-    """`path`'s StateFile in `client`'s Docker session home; None: no Docker state path, read it
-    locally; OSError (EXDEV): a Docker state path anywhere else.
-    """
-    found = client_state.locate(path)
-    if found is not None and found.client != client:
-        raise OSError(errno.EXDEV, f"not below a {client} home", path)
-    return found
+def home_of(context: ClientContext) -> HomeStore:
+    """The home-store its Host picked for the session `context` runs in."""
+    if context.home is None:
+        raise ConfigError("no client home store: the Host hands one at session start")
+    return context.home
 
 
 def docker_config_path(client: str, name: str, default: str) -> str:

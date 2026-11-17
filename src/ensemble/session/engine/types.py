@@ -4,11 +4,12 @@ import os
 import re
 import signal
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, NamedTuple, Self
+from typing import ClassVar, NamedTuple, Protocol, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -214,6 +215,29 @@ class StateEntry(NamedTuple):
     mtime: float
 
 
+class HomePath(NamedTuple):
+    root: str
+    rel: str
+
+
+class HomeStore(Protocol):
+    """A client home its Host picked once: None absent, OSError refused."""
+
+    def read(
+        self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
+    ) -> bytes | None: ...
+
+    def stat(self, path: HomePath) -> StateStat | None: ...
+
+    def entries(self, path: HomePath, *, limit: int = ...) -> tuple[StateEntry, ...] | None: ...
+
+    def snapshot(
+        self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
+    ) -> AbstractContextManager[str | None]: ...
+
+    def persisted(self) -> dict[str, str]: ...
+
+
 @dataclass(frozen=True)
 class ClientHome:
     """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
@@ -251,6 +275,7 @@ class ClientContext:
     host_address: str
     permission: Permission
     container: Container | None = None
+    home: HomeStore | None = None
 
 
 LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)

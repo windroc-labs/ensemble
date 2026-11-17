@@ -10,7 +10,7 @@ from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude.common import TABLE, ClaudeCommon, added_dirs
 from ensemble.session.clients.claude.headless import ClaudeHeadless
 from ensemble.session.clients.claude.tui import ClaudeTui
-from ensemble.session.engine.types import ConfigError, SessionInfo, Spec
+from ensemble.session.engine.types import ConfigError, HomeStore, SessionInfo, Spec
 from ensemble.utils import LOCAL_ENV_VARS, printable_abs
 
 
@@ -84,11 +84,12 @@ class ClaudeClient(Client):
     def _account_of(self, transcript):
         if not printable_abs(transcript):
             return ""
-        path = os.path.realpath(transcript)
+        path = os.path.normpath(transcript)
         for name in sorted(self.common.accounts):
-            root = os.path.realpath(self.common.accounts[name].dir)
-            if os.path.commonpath((path, root)) == root:
-                return name
+            configured = self.common.accounts[name].dir
+            for root in {os.path.normpath(configured), os.path.realpath(configured)}:
+                if os.path.commonpath((path, root)) == root:
+                    return name
         return ""
 
     def _executable(self, *, container=False):
@@ -106,8 +107,16 @@ class ClaudeClient(Client):
     def resume_main(self, argv):
         return self.common.resume_main(argv)
 
-    def session_status(self, info: SessionInfo, *, env: Mapping[str, str] = MappingProxyType({})):
-        return self.common.session_status(info.sid, info.cwd, transcript=info.transcript, env=env)
+    def session_status(
+        self,
+        info: SessionInfo,
+        *,
+        env: Mapping[str, str] = MappingProxyType({}),
+        home: HomeStore,
+    ):
+        return self.common.session_status(
+            info.sid, info.cwd, transcript=info.transcript, env=env, home=home
+        )
 
     def writable_dirs(self, spec: Spec):
         cwd = spec.access.cwd

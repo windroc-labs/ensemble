@@ -52,7 +52,7 @@ class FakeClient(Client):
 
 
 class InspectClient(FakeClient):
-    def session_status(self, info: SessionInfo, *, env=MappingProxyType({})):
+    def session_status(self, info: SessionInfo, *, env=MappingProxyType({}), home):
         return SessionStatus("yes", 1.5, f"{info.sid} {info.cwd} {info.transcript} {info.resume}")
 
 

@@ -59,6 +59,7 @@ from ensemble.session.engine.types import (
     Container,
     DockerAccess,
     EnvironmentSpec,
+    HomeStore,
     Launch,
     Liveness,
     SessionBusy,
@@ -238,12 +239,11 @@ def _check_history(name: str, home: str, client: str, transcript: str) -> None:
     """A resume's native history, read from the state volume with no container running."""
     missing = f"docker session {name}: no native history to resume in {home}"
     try:
-        found = client_state.locate(os.path.join(home, transcript))
-        present = (
-            found is not None
-            and (found.session, found.client) == (name, client)
-            and client_state.read(found, limit=0) is not None
-        )
+        path = client_state.home_path(home, os.path.join(home, transcript))
+    except OSError:
+        raise ConfigError(missing) from None
+    try:
+        present = client_state.VolumeHome(name, client).read(path, limit=0) is not None
     except OSError as error:
         raise ConfigError(f"{missing}: {error.strerror or error}") from None
     if not present:
@@ -741,6 +741,11 @@ class DockerHost(Host):
                 f"client {client or '(unnamed)'}: not supported on the Docker Host yet"
             )
         return {home.env: docker_home(name, home.dir)}
+
+    def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
+        if home is None:
+            raise ConfigError("client home: not supported on the Docker Host yet")
+        return client_state.VolumeHome(name, home.dir)
 
     def _resume_argv(self, name: str) -> tuple[str, ...]:
         return (*RESUME, name)

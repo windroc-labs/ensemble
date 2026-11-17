@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import stat
 import sys
 import time
@@ -25,16 +24,24 @@ from ensemble.session.clients.codex.common import (
     mcp_off,
     read_metadata,
     read_session,
+    session_file,
     session_paths,
     session_size,
     snapshot_data,
     validate_snapshot,
 )
 from ensemble.session.clients.codex.common.types import Snapshot
-from ensemble.session.engine.types import Access, ConfigError, SessionInfo, SessionStatus
+from ensemble.session.engine.client_state import LocalHome, VolumeHome
+from ensemble.session.engine.types import (
+    Access,
+    ConfigError,
+    HomePath,
+    SessionInfo,
+    SessionStatus,
+)
 from ensemble.utils import docker_home
 from tests.session.case import Case
-from tests.session.state_volumes import record, serve
+from tests.session.state_volumes import serve
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -45,6 +52,7 @@ from tests.session.unit.clients.codex.support import (
     committed_headless,
     committed_tui,
 )
+from tests.session.unit.clients.support import homed
 from tests.utils.sandbox import scratch
 
 
@@ -52,7 +60,7 @@ class LaunchLifecycleTest(Base):
     def test_preparation_and_commands_are_pure_until_commit_in_both_modes(self):
         for mode in ("headless", "tui"):
             spec = replace(self.spec, sid=mode, prompt="hello")
-            run = self.client.headless() if mode == "headless" else self.client.tui()
+            run = homed(self.client.headless()) if mode == "headless" else homed(self.client.tui())
             with mock.patch("shutil.which", return_value="/protected/codex"):
                 if mode == "headless":
                     run.launch(spec)
@@ -65,7 +73,7 @@ class LaunchLifecycleTest(Base):
     def test_invalid_launches_write_no_recovery_or_run_records(self):
         for mode in ("headless", "tui"):
             spec = replace(self.spec, sid=mode, prompt="bad\0prompt")
-            run = self.client.headless() if mode == "headless" else self.client.tui()
+            run = homed(self.client.headless()) if mode == "headless" else homed(self.client.tui())
             with (
                 self.subTest(mode=mode),
                 mock.patch("shutil.which", return_value="/protected/codex"),
@@ -84,7 +92,7 @@ class CommonTest(Base):
         linked.symlink_to(self.extra, target_is_directory=True)
         spec = replace(self.spec, access=replace(self.spec.access, dirs=(str(linked),)))
         with mock.patch("os.path.realpath", wraps=os.path.realpath) as realpath:
-            state = self.common.prepare(spec)
+            state = self.common.prepare(spec, LocalHome())
         self.assertEqual(state.snapshot.dirs, (str(self.extra),))
         self.assertIn(str(self.extra), state.writable_roots)
         self.assertEqual(realpath.call_args_list.count(mock.call(str(linked))), 1)
@@ -98,7 +106,7 @@ class CommonTest(Base):
         ):
             spec = replace(self.spec, access=replace(self.spec.access, **fields))
             with self.subTest(fields=fields), self.assertRaisesRegex(ConfigError, message):
-                self.common.prepare(spec)
+                self.common.prepare(spec, LocalHome())
             self.assertFalse((self.home / ".ensemble").exists())
 
     def test_the_env_attributes(self):
@@ -158,7 +166,7 @@ class CommonTest(Base):
         ):
             spec = dataclasses.replace(self.spec, **changed)
             with self.subTest(changed=changed), self.assertRaises(ConfigError) as caught:
-                self.common.save(self.common.prepare(spec))
+                self.common.save(self.common.prepare(spec, LocalHome()))
             self.assertEqual(str(caught.exception), message)
 
     def test_resume_uses_saved_effective_settings(self):
@@ -175,7 +183,7 @@ class CommonTest(Base):
         spec = dataclasses.replace(
             self.spec, access=Access(cwd=self.spec.workdir, project=True), tier=None, effort=None
         )
-        resumed = other.common.prepare(dataclasses.replace(spec, resume=True))
+        resumed = other.common.prepare(dataclasses.replace(spec, resume=True), LocalHome())
         self.assertEqual(resumed.snapshot, saved.snapshot)
         launch = committed_headless(other, dataclasses.replace(spec, prompt="again", resume=True))
         self.assertIn("gpt-test", launch.argv)
@@ -214,7 +222,7 @@ class CommonTest(Base):
                     sid=f"project-{saved}",
                     access=dataclasses.replace(self.spec.access, project=saved),
                 )
-                self.common.save(self.common.prepare(spec))
+                self.common.save(self.common.prepare(spec, LocalHome()))
                 self.common.bind(str(self.work), spec.sid, NATIVE)
                 path = self.rollout()
                 requested = dataclasses.replace(
@@ -226,7 +234,7 @@ class CommonTest(Base):
                         self.subTest(mode=mode),
                         mock.patch("shutil.which", return_value="/fake/codex"),
                     ):
-                        run = getattr(self.client, mode)()
+                        run = homed(getattr(self.client, mode)())
                         launch = (
                             run.launch(dataclasses.replace(requested, prompt="again", resume=True))
                             if mode == "headless"
@@ -258,34 +266,37 @@ class CommonTest(Base):
                 self.assertIn(NATIVE, launch.resume)
                 self.assertEqual(self.common.load(worker, spec.sid), replace(run, workdir=worker))
         self.assertEqual(self.common.load(str(self.work), self.spec.sid), run)
-        self.assertEqual(self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "yes")
+        self.assertEqual(
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).resumable,
+            "yes",
+        )
         elsewhere = dataclasses.replace(
             spec, workdir=str(self.root / "workers" / "x"), access=Access(cwd=str(self.extra))
         )
         with self.assertRaisesRegex(ConfigError, "missing Codex recovery state"):
-            self.common.prepare(elsewhere)
+            self.common.prepare(elsewhere, LocalHome())
 
     def test_metadata_resolves_the_sids_binding_from_the_store(self):
         info = SessionInfo(self.spec.sid, str(self.cwd), project=False, transcript="", resume="")
-        self.assertEqual(self.client.session_metadata(info), info)
+        self.assertEqual(self.client.session_metadata(info, home=LocalHome()), info)
         self.prepare()
-        self.assertEqual(self.client.session_metadata(info), info)
+        self.assertEqual(self.client.session_metadata(info, home=LocalHome()), info)
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        bound = self.client.session_metadata(info)
+        bound = self.client.session_metadata(info, home=LocalHome())
         self.assertEqual(bound.transcript, "")
         self.assertIn(NATIVE, bound.resume)
         path = self.rollout()
-        resolved = self.client.session_metadata(bound)
+        resolved = self.client.session_metadata(bound, home=LocalHome())
         self.assertEqual(resolved.transcript, str(path))
         for unknown in (
             dataclasses.replace(resolved, cwd=str(self.extra)),
             dataclasses.replace(resolved, sid="unknown"),
         ):
-            self.assertEqual(self.client.session_metadata(unknown), unknown)
+            self.assertEqual(self.client.session_metadata(unknown, home=LocalHome()), unknown)
         with mock.patch("os.scandir", side_effect=PermissionError("denied")):
-            self.assertEqual(self.client.session_metadata(resolved), resolved)
+            self.assertEqual(self.client.session_metadata(resolved, home=LocalHome()), resolved)
         with mock.patch("os.stat", side_effect=PermissionError("denied")):
-            self.assertEqual(self.client.session_metadata(resolved), resolved)
+            self.assertEqual(self.client.session_metadata(resolved, home=LocalHome()), resolved)
 
     def test_metadata_resume_replays_the_session_env(self):
         access = dataclasses.replace(self.spec.access, env={"PYTHONPATH": "/a b;c"})
@@ -293,7 +304,7 @@ class CommonTest(Base):
         self.prepare()
         state = self.common.bind(str(self.work), self.spec.sid, NATIVE)
         info = SessionInfo(self.spec.sid, str(self.cwd), project=False, transcript="", resume="")
-        resume = self.client.session_metadata(info).resume
+        resume = self.client.session_metadata(info, home=LocalHome()).resume
         self.assertEqual(resume, self.common.resume_command(state))
         self.assertNotIn("/a b;c", resume)
         self.assertEqual(self.common.resume_launch(state).env["PYTHONPATH"], "/a b;c")
@@ -307,13 +318,13 @@ class CommonTest(Base):
 
     def test_missing_recovery_and_session_fail_before_launch(self):
         with self.assertRaisesRegex(ConfigError, "missing.*state"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
         self.prepare()
         with self.assertRaisesRegex(ConfigError, "missing.*ID"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         with self.assertRaisesRegex(ConfigError, "missing.*file"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
 
     def test_fifo_record_is_nonblocking(self):
         self.prepare()
@@ -322,7 +333,7 @@ class CommonTest(Base):
         os.mkfifo(path, 0o600)
         before = time.monotonic()
         with self.assertRaisesRegex(ConfigError, "not a regular"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
         self.assertLess(time.monotonic() - before, 0.5)
 
     def test_record_size_and_json_guards(self):
@@ -377,7 +388,8 @@ class CommonTest(Base):
                     self.common.prepare(
                         dataclasses.replace(
                             self.spec, access=Access(cwd=self.spec.workdir, dirs=(str(grant),))
-                        )
+                        ),
+                        LocalHome(),
                     )
                 )
         with (
@@ -389,7 +401,7 @@ class CommonTest(Base):
     def test_configured_tmpdir_cannot_grant_store_on_fresh_prepare(self):
         client = CodexClient(self.client.config | {"env": {"TMPDIR": str(self.home)}})
         with self.assertRaisesRegex(ConfigError, "writable"):
-            client.common.save(client.common.prepare(self.spec))
+            client.common.save(client.common.prepare(self.spec, LocalHome()))
         self.assertFalse((self.home / ".ensemble").exists())
 
     def test_configured_tmpdir_cannot_grant_store_on_resumed_prepare(self):
@@ -399,7 +411,10 @@ class CommonTest(Base):
         saved = self.record().read_bytes()
         client = CodexClient(self.client.config | {"env": {"TMPDIR": str(self.home)}})
         self.assertEqual(
-            client.common.prepare(dataclasses.replace(self.spec, resume=True)).native_id, NATIVE
+            client.common.prepare(
+                dataclasses.replace(self.spec, resume=True), LocalHome()
+            ).native_id,
+            NATIVE,
         )
         self.assertEqual(self.record().read_bytes(), saved)
 
@@ -409,11 +424,13 @@ class CommonTest(Base):
         outside = dataclasses.replace(
             self.spec, access=dataclasses.replace(self.spec.access, cwd=str(agent))
         )
-        self.assertEqual(self.common.save(self.common.prepare(outside)).snapshot.cwd, str(agent))
+        self.assertEqual(
+            self.common.save(self.common.prepare(outside, LocalHome())).snapshot.cwd, str(agent)
+        )
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         self.rollout(cwd=str(agent))
         resumed = dataclasses.replace(outside, resume=True)
-        self.assertEqual(self.common.prepare(resumed).native_id, NATIVE)
+        self.assertEqual(self.common.prepare(resumed, LocalHome()).native_id, NATIVE)
 
         settings = agent / ".codex"
         settings.mkdir()
@@ -421,7 +438,7 @@ class CommonTest(Base):
         with self.assertRaisesRegex(
             ConfigError, f"project Codex settings at {re.escape(str(settings))} "
         ):
-            self.common.prepare(nested)
+            self.common.prepare(nested, LocalHome())
         settings.rmdir()
 
         added = self.root / "added"
@@ -438,7 +455,7 @@ class CommonTest(Base):
             )
             with self.subTest(home=home):
                 with self.assertRaises(ConfigError) as caught:
-                    self.common.prepare(spec)
+                    self.common.prepare(spec, LocalHome())
                 self.assertIn(f"CODEX_HOME {home} ", str(caught.exception))
                 self.assertIn(root, str(caught.exception))
 
@@ -456,7 +473,7 @@ class CommonTest(Base):
             ConfigError,
             f"CODEX_HOME {re.escape(str(self.codex_home))} .*writable root {re.escape(str(homes))}",
         ):
-            self.common.prepare(resumed)
+            self.common.prepare(resumed, LocalHome())
 
     def test_bad_mapping_and_environment_keys_and_values_name_the_table(self):
         cases = (
@@ -509,7 +526,7 @@ class CommonTest(Base):
                     client = CodexClient(self.client.config | {key: {source: target}})
                     given = int(source) if field == "tier" else source
                     spec = replace(self.spec, tier=None, effort=None, prompt="hi")
-                    argv = client.headless().launch(replace(spec, **{field: given})).argv
+                    argv = homed(client.headless()).launch(replace(spec, **{field: given})).argv
                     self.assertIn(
                         (option[0], option[1].format(target)),
                         list(zip(argv, argv[1:], strict=False)),
@@ -635,7 +652,7 @@ class EnvironmentTest(Base):
                 "CODEX_THREAD_ID": NATIVE,
             },
         ):
-            resumed = changed.common.prepare(dataclasses.replace(spec, resume=True))
+            resumed = changed.common.prepare(dataclasses.replace(spec, resume=True), LocalHome())
             self.assertEqual(resumed.snapshot, saved.snapshot)
             roots = changed.writable_dirs(dataclasses.replace(spec, resume=True))
             self.assertIn(second_tmp, roots)
@@ -661,7 +678,7 @@ class EnvironmentTest(Base):
         client = CodexClient(self.client.config | {"env": {"CODEX_HOME": ""}})
         with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}):
             inspected = client.writable_dirs(self.spec)
-            state = client.common.prepare(self.spec)
+            state = client.common.prepare(self.spec, LocalHome())
             self.assertEqual(state.snapshot.env, {"CODEX_HOME": ""})
             self.assertEqual(state.snapshot.codex_home, str(self.codex_home))
             self.assertEqual(
@@ -742,7 +759,7 @@ class WritableDirsTest(Base):
         spec = dataclasses.replace(self.spec, access=dataclasses.replace(self.spec.access, env=env))
         fresh = self.client.writable_dirs(self.spec)
         self.assertEqual(self.client.writable_dirs(spec), fresh)
-        self.common.save(self.common.prepare(spec))
+        self.common.save(self.common.prepare(spec, LocalHome()))
         self.assertEqual(self.client.writable_dirs(dataclasses.replace(spec, resume=True)), fresh)
 
     def test_a_resume_without_saved_state_is_refused(self):
@@ -759,7 +776,7 @@ class WritableDirsTest(Base):
         client = CodexClient(self.client.config | {"env": {"TMPDIR": str(self.root / "tmp-link")}})
         self.assertNotIn(str(target), self.client.writable_dirs(self.spec))
         self.assertIn(str(target), client.writable_dirs(self.spec))
-        client.common.save(client.common.prepare(self.spec))
+        client.common.save(client.common.prepare(self.spec, LocalHome()))
         self.assertIn(
             str(target), client.writable_dirs(dataclasses.replace(self.spec, resume=True))
         )
@@ -786,23 +803,32 @@ class SessionStatusTest(Base):
     def test_inspection_queries_saved_cwd_in_one_store(self):
         self.bound()
         path = self.rollout()
-        info = self.common.session_status(self.spec.sid, str(self.cwd))
+        info = self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome())
         self.assertEqual((info.resumable, info.last_active), ("yes", 100))
         command = shlex.split(info.resume_command)
         self.assertIn(NATIVE, command)
         self.assertIn(str(self.cwd), command)
-        self.assertEqual(self.common.session_status(self.spec.sid, str(self.work)).resumable, "no")
+        self.assertEqual(
+            self.common.session_status(self.spec.sid, str(self.work), home=LocalHome()).resumable,
+            "no",
+        )
         path.unlink()
-        self.assertEqual(self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "no")
+        self.assertEqual(
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).resumable,
+            "no",
+        )
 
     def test_inspection_missing_malformed_unsafe_and_ambiguous(self):
-        self.assertEqual(self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "no")
+        self.assertEqual(
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).resumable,
+            "no",
+        )
         self.bound()
         self.rollout()
         path = self.record()
         path.write_text("not json")
         with contextlib.redirect_stderr(io.StringIO()):
-            status = self.common.session_status(self.spec.sid, str(self.cwd))
+            status = self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome())
         self.assertEqual(status.resumable, "unknown")
 
     def test_a_bad_recovery_file_hides_no_other_run(self):
@@ -812,8 +838,8 @@ class SessionStatusTest(Base):
         bad.write_text("not json")
         bad.chmod(0o600)
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            found = self.common.session_status(self.spec.sid, str(self.cwd))
-            unrecorded = self.common.session_status("unrecorded", str(self.cwd))
+            found = self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome())
+            unrecorded = self.common.session_status("unrecorded", str(self.cwd), home=LocalHome())
         self.assertEqual(found.resumable, "yes")
         self.assertEqual(unrecorded.resumable, "unknown")
         line = f"codex recovery: malformed recovery state: {bad}"
@@ -826,23 +852,32 @@ class SessionStatusTest(Base):
         bad.chmod(0o600)
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(
-                self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "no"
+                self.common.session_status(
+                    self.spec.sid, str(self.cwd), home=LocalHome()
+                ).resumable,
+                "no",
             )
         (line,) = err.getvalue().splitlines()
         self.assertTrue(line.startswith(f"codex recovery: {bad}: invalid"), line)
 
     def test_a_missing_recorded_transcript_is_no_without_discovery_fallback(self):
         self.bound()
-        resume = self.common.session_status(self.spec.sid, str(self.cwd)).resume_command
+        resume = self.common.session_status(
+            self.spec.sid, str(self.cwd), home=LocalHome()
+        ).resume_command
         path = self.rollout()
         path.rename(path.with_name("rollout-other-" + NATIVE + ".jsonl"))
-        status = self.common.session_status(self.spec.sid, str(self.cwd), transcript=str(path))
+        status = self.common.session_status(
+            self.spec.sid, str(self.cwd), transcript=str(path), home=LocalHome()
+        )
         self.assertEqual(status, SessionStatus("no", None, resume))
 
     def test_an_unreadable_recorded_transcript_is_unknown(self):
         self.bound()
         path = self.rollout()
-        resume = self.common.session_status(self.spec.sid, str(self.cwd)).resume_command
+        resume = self.common.session_status(
+            self.spec.sid, str(self.cwd), home=LocalHome()
+        ).resume_command
         original = os.open
 
         def opening(location, *args, **kwargs):
@@ -853,17 +888,23 @@ class SessionStatusTest(Base):
             return original(location, *args, **kwargs)
 
         with mock.patch("os.open", side_effect=opening):
-            status = self.common.session_status(self.spec.sid, str(self.cwd), transcript=str(path))
+            status = self.common.session_status(
+                self.spec.sid, str(self.cwd), transcript=str(path), home=LocalHome()
+            )
         self.assertEqual(status, SessionStatus("unknown", None, resume))
 
     def test_malformed_recorded_transcript_paths_are_unknown(self):
         self.bound()
         self.rollout()
-        resume = self.common.session_status(self.spec.sid, str(self.cwd)).resume_command
+        resume = self.common.session_status(
+            self.spec.sid, str(self.cwd), home=LocalHome()
+        ).resume_command
         for path in ("relative.jsonl", "\0"):
             with self.subTest(path=path):
                 self.assertEqual(
-                    self.common.session_status(self.spec.sid, str(self.cwd), transcript=path),
+                    self.common.session_status(
+                        self.spec.sid, str(self.cwd), transcript=path, home=LocalHome()
+                    ),
                     SessionStatus("unknown", None, resume),
                 )
 
@@ -876,7 +917,10 @@ class SessionStatusTest(Base):
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 self.assertEqual(
-                    self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+                    self.common.session_status(
+                        self.spec.sid, str(self.cwd), home=LocalHome()
+                    ).resumable,
+                    "unknown",
                 )
         path = self.rollout()
         original = os.open
@@ -890,7 +934,10 @@ class SessionStatusTest(Base):
 
         with mock.patch("os.open", side_effect=opening):
             self.assertEqual(
-                self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+                self.common.session_status(
+                    self.spec.sid, str(self.cwd), home=LocalHome()
+                ).resumable,
+                "unknown",
             )
 
     def test_transcript_fifo_mismatch_and_duplicate(self):
@@ -900,17 +947,17 @@ class SessionStatusTest(Base):
         os.mkfifo(path)
         before = time.monotonic()
         with self.assertRaisesRegex(ConfigError, "not a regular"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
         self.assertLess(time.monotonic() - before, 0.5)
         path.unlink()
         path = self.rollout(cwd=str(self.extra))
         with self.assertRaisesRegex(ConfigError, "mismatched"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
         path = self.rollout()
         duplicate = path.with_name("rollout-other-" + NATIVE + ".jsonl")
         duplicate.write_text(path.read_text())
         with self.assertRaisesRegex(ConfigError, "duplicate"):
-            self.common.prepare(dataclasses.replace(self.spec, resume=True))
+            self.common.prepare(dataclasses.replace(self.spec, resume=True), LocalHome())
 
     def test_last_activity_includes_validated_descendants(self):
         self.bound()
@@ -918,7 +965,10 @@ class SessionStatusTest(Base):
         self.rollout(CHILD, parent=NATIVE, stamp=200)
         self.rollout("bbbbbbbb-2222-3333-4444-555555555555", parent=CHILD, stamp=300)
         self.rollout("cccccccc-2222-3333-4444-555555555555", stamp=999)
-        self.assertEqual(self.common.session_status(self.spec.sid, str(self.cwd)).last_active, 300)
+        self.assertEqual(
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).last_active,
+            300,
+        )
 
     def test_duplicate_descendant_is_not_validated_activity(self):
         self.bound()
@@ -927,7 +977,8 @@ class SessionStatusTest(Base):
         duplicate = child.with_name("rollout-copy-" + CHILD + ".jsonl")
         duplicate.write_text(child.read_text())
         self.assertEqual(
-            self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).resumable,
+            "unknown",
         )
 
     def test_ambiguous_sid_and_cwd_is_unknown(self):
@@ -939,11 +990,13 @@ class SessionStatusTest(Base):
             self.common.prepare(
                 dataclasses.replace(
                     self.spec, workdir=str(other), access=Access(cwd=str(self.cwd), project=True)
-                )
+                ),
+                LocalHome(),
             )
         )
         self.assertEqual(
-            self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+            self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome()).resumable,
+            "unknown",
         )
 
 
@@ -960,7 +1013,7 @@ class GrantTest(Base):
                     cwd=str(self.cwd), project=True, dirs=(str(record),) if granted else ()
                 ),
             )
-            state = self.common.save(self.common.prepare(spec))
+            state = self.common.save(self.common.prepare(spec, LocalHome()))
             with self.subTest(granted=granted):
                 self.assertEqual(str(record) in state.writable_roots, granted)
                 self.assertEqual(
@@ -969,7 +1022,7 @@ class GrantTest(Base):
                 )
                 self.common.bind(str(record), spec.sid, NATIVE)
                 self.rollout()
-                resumed = self.common.prepare(dataclasses.replace(spec, resume=True))
+                resumed = self.common.prepare(dataclasses.replace(spec, resume=True), LocalHome())
                 self.assertEqual(str(record) in resumed.writable_roots, granted)
                 self.assertEqual(
                     str(record)
@@ -980,7 +1033,7 @@ class GrantTest(Base):
     def test_access_and_flag_roots_are_combined_and_resume_ignores_new_flags(self):
         added = self.root / "added"
         spec = dataclasses.replace(self.spec, flags=("--add-dir", str(added)))
-        state = self.common.save(self.common.prepare(spec))
+        state = self.common.save(self.common.prepare(spec, LocalHome()))
         expected = [
             str(self.cwd),
             str(self.codex_home),
@@ -992,7 +1045,9 @@ class GrantTest(Base):
         self.rollout()
         changed = dataclasses.replace(spec, flags=("--add-dir", "/changed"))
         self.assertEqual(
-            self.common.prepare(dataclasses.replace(changed, resume=True)).writable_roots,
+            self.common.prepare(
+                dataclasses.replace(changed, resume=True), LocalHome()
+            ).writable_roots,
             tuple(expected),
         )
         self.assertNotIn(
@@ -1012,7 +1067,7 @@ class GrantTest(Base):
         spec = dataclasses.replace(
             self.spec, access=dataclasses.replace(self.spec.access, project=True)
         )
-        self.common.save(self.common.prepare(spec))
+        self.common.save(self.common.prepare(spec, LocalHome()))
 
 
 class SavedFlags(Base):
@@ -1053,7 +1108,7 @@ BAD = (
 class SnapshotEnvTest(Base):
     def snapshot(self, **fields):
         return {
-            **snapshot_data(self.common.prepare(self.spec).snapshot),
+            **snapshot_data(self.common.prepare(self.spec, LocalHome()).snapshot),
             **fields,
         }
 
@@ -1161,7 +1216,7 @@ class StoreRootTest(Base):
         self.assertEqual(SessionStore().load(state.workdir, state.sid), state)
 
     def test_a_record_only_in_the_old_directory_is_neither_read_nor_moved(self):
-        state = self.common.prepare(self.spec)
+        state = self.common.prepare(self.spec, LocalHome())
         old = self.home / ".ensemble" / "core-new-sessions" / "codex"
         SessionStore(str(old)).save(state)
         before = {path: path.read_bytes() for path in old.iterdir()}
@@ -1173,7 +1228,7 @@ class StoreRootTest(Base):
         self.assertFalse((self.home / ".ensemble" / "sessions").exists())
 
     def test_invalid_save_does_not_create_the_store(self):
-        state = self.common.prepare(self.spec)
+        state = self.common.prepare(self.spec, LocalHome())
         unsafe = replace(state, writable_roots=(*state.writable_roots, str(self.home)))
         with self.assertRaisesRegex(RecoveryError, "writable"):
             SessionStore().save(unsafe)
@@ -1274,20 +1329,23 @@ class CodecTest(Base):
             }
             path.write_text(json.dumps({"type": "session_meta", "payload": payload}) + "\n")
             with self.subTest(parent=parent, origin=origin):
-                metadata = read_metadata(str(path)).metadata
+                found = HomePath(str(self.codex_home), f"sessions/2026/10/11/{path.name}")
+                metadata = read_metadata(LocalHome(), found).metadata
                 self.assertEqual(metadata, NativeMetadata(NATIVE, str(self.cwd), expected))
 
 
 class DockerSessionFilesTest(Case):
-    """A Docker session's Codex home: its session files read through the client-state interface."""
+    """A Docker session's Codex home: its session files read through its state volume's store."""
 
     def setUp(self):
         self.enterContext(serve())
+        self.store = VolumeHome("w", "codex")
         self.codex_home = docker_home("w", "codex")
         self.cwd = os.path.realpath(scratch(self))
         self.day = os.path.join(self.codex_home, "sessions", "2026", "11", "17")
         os.makedirs(self.day)
         self.rollout = os.path.join(self.day, f"rollout-2026-11-17T00-00-00-{NATIVE}.jsonl")
+        self.path = self.at(os.path.basename(self.rollout))
         meta = {"type": "session_meta", "payload": {"id": NATIVE, "cwd": self.cwd}}
         with open(self.rollout, "w", encoding="utf-8") as f:
             f.write(json.dumps(meta) + "\n" + '{"type": "x"}\n')
@@ -1304,54 +1362,56 @@ class DockerSessionFilesTest(Case):
             env={},
         )
 
+    def at(self, name):
+        return HomePath(self.codex_home, f"sessions/2026/11/17/{name}")
+
     def test_session_files_are_listed_and_their_metadata_read(self):
-        self.assertEqual(session_paths(self.snapshot, NATIVE), [self.rollout])
-        found = read_metadata(self.rollout)
+        self.assertEqual(session_paths(self.store, self.snapshot, NATIVE), [self.path])
+        found = read_metadata(self.store, self.path)
         self.assertEqual((found.path, found.mtime), (self.rollout, 200))
         self.assertEqual(found.metadata, NativeMetadata(NATIVE, self.cwd, None))
+        recorded = session_file(self.store, self.snapshot, NATIVE, recorded=self.rollout)
+        self.assertEqual(recorded, found)
 
     def test_linked_day_dirs_and_rollouts_are_not_followed(self):
         outside = os.path.join(scratch(self), "outside")
         os.makedirs(os.path.join(outside, "18"))
         os.symlink(os.path.join(outside, "18"), os.path.join(os.path.dirname(self.day), "18"))
-        link = os.path.join(self.day, f"rollout-link-{CHILD}.jsonl")
-        os.symlink(self.rollout, link)
-        self.assertEqual(session_paths(self.snapshot), sorted([self.rollout, link]))
+        os.symlink(self.rollout, os.path.join(self.day, f"rollout-link-{CHILD}.jsonl"))
+        link = self.at(f"rollout-link-{CHILD}.jsonl")
+        self.assertEqual(session_paths(self.store, self.snapshot), sorted([self.path, link]))
         with self.assertRaisesRegex(RecoveryError, "^cannot read Codex session file"):
-            read_metadata(link)
-        self.assertIsNone(read_session(link))
-        self.assertEqual(session_size(link), 0)
+            read_metadata(self.store, link)
+        self.assertIsNone(read_session(self.store, link))
+        self.assertEqual(session_size(self.store, link), 0)
 
     def test_a_missing_sessions_dir_or_file(self):
         empty = replace(self.snapshot, codex_home=docker_home("v", "codex"))
-        self.assertEqual(session_paths(empty), [])
+        self.assertEqual(session_paths(VolumeHome("v", "codex"), empty), [])
+        gone = self.at(f"rollout-gone-{CHILD}.jsonl")
         with self.assertRaises(FileNotFoundError):
-            read_metadata(os.path.join(self.day, f"rollout-gone-{CHILD}.jsonl"))
+            read_metadata(self.store, gone)
+        self.assertEqual(session_size(self.store, gone), 0)
 
     def test_a_directory_named_as_a_rollout_is_not_regular(self):
-        path = os.path.join(self.day, f"rollout-dir-{CHILD}.jsonl")
-        os.mkdir(path)
+        os.mkdir(os.path.join(self.day, f"rollout-dir-{CHILD}.jsonl"))
         with self.assertRaisesRegex(RecoveryError, "^not a regular Codex session file"):
-            read_metadata(path)
+            read_metadata(self.store, self.at(f"rollout-dir-{CHILD}.jsonl"))
 
     def test_rollout_bytes_and_size(self):
-        data = read_session(self.rollout)
+        data = read_session(self.store, self.path)
         assert data is not None
-        self.assertEqual(session_size(self.rollout), len(data))
-        self.assertEqual(read_session(self.rollout, offset=len(data) - 14), b'{"type": "x"}\n')
-        self.assertEqual(read_session(self.rollout, offset=0, limit=1), b"{")
-        local = os.path.join(scratch(self), "local.jsonl")
-        with open(local, "wb") as f:
-            f.write(b"abc")
-        self.assertEqual((read_session(local), session_size(local)), (b"abc", None))
+        self.assertEqual(session_size(self.store, self.path), len(data))
+        self.assertEqual(
+            read_session(self.store, self.path, offset=len(data) - 14), b'{"type": "x"}\n'
+        )
+        self.assertEqual(read_session(self.store, self.path, offset=0, limit=1), b"{")
 
-    def test_another_clients_docker_home_is_refused(self):
-        path = os.path.join(docker_home("w", "claude"), "r.jsonl")
-        os.makedirs(os.path.dirname(path))
-        with open(path, "wb") as f:
-            f.write(b"x")
-        self.assertIsNone(read_session(path))
-        self.assertEqual(session_size(path), 0)
+    def test_a_recorded_transcript_outside_the_codex_home_is_refused(self):
+        path = os.path.join(docker_home("w", "claude"), "sessions", f"rollout-{NATIVE}.jsonl")
+        with self.assertRaises(OSError) as caught:
+            session_file(self.store, self.snapshot, NATIVE, recorded=path)
+        self.assertEqual(caught.exception.errno, errno.EXDEV)
 
 
 SECRETS = {"CFG_TOKEN": "cfg-secret-1", "ACCESS_TOKEN": "access-secret-2", "SPEC_TOKEN": "spec-3"}
@@ -1387,8 +1447,8 @@ class ResumeReferenceTest(Base):
         self.assertEqual(command, f"cd {shlex.quote(str(self.cwd))} && {shlex.join(argv)}")
         self.assert_public(command)
         info = SessionInfo(self.spec.sid, str(self.cwd), project=False, transcript="", resume="")
-        self.assertEqual(self.client.session_metadata(info).resume, command)
-        status = self.common.session_status(self.spec.sid, str(self.cwd))
+        self.assertEqual(self.client.session_metadata(info, home=LocalHome()).resume, command)
+        status = self.common.session_status(self.spec.sid, str(self.cwd), home=LocalHome())
         self.assertEqual(status.resume_command, command)
 
     def test_resumed_launches_publish_the_reference(self):
@@ -1397,8 +1457,8 @@ class ResumeReferenceTest(Base):
         resumed = dataclasses.replace(self.spec, prompt="again", resume=True)
         with mock.patch("shutil.which", return_value="/fake/codex"):
             launches = {
-                "headless": self.client.headless().launch(resumed),
-                "tui": self.client.tui().launch(resumed, ("/fake/hook",)),
+                "headless": homed(self.client.headless()).launch(resumed),
+                "tui": homed(self.client.tui()).launch(resumed, ("/fake/hook",)),
             }
         for mode, launch in launches.items():
             with self.subTest(mode):
@@ -1585,17 +1645,24 @@ class McpOffTest(Base):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
+    def off(self, flags, snapshot, *, container=False, resume=False):
+        """mcp_off for a launch in a Docker worker (`container`) over session w's state volume, else
+        on this machine.
+        """
+        home = VolumeHome("w", "codex") if container else LocalHome()
+        return mcp_off(flags, snapshot, home=home, container=container, resume=resume)
+
     def snapshot(self, *, project=False):
         access = replace(self.spec.access, project=project)
-        return self.common.prepare(replace(self.spec, access=access)).snapshot
+        return self.common.prepare(replace(self.spec, access=access), LocalHome()).snapshot
 
     def test_without_the_flag_flags_and_servers_stay(self):
         self.write(self.codex_home / "config.toml", '[mcp_servers.tickets]\ncommand = "t"\n')
         flags = ["-c", 'model="m"', "--enable", "web"]
-        self.assertEqual(mcp_off(flags, self.snapshot()), flags)
+        self.assertEqual(self.off(flags, self.snapshot()), flags)
 
     def test_with_no_config_the_flag_is_dropped(self):
-        self.assertEqual(mcp_off(["-a", *OFF, "-b"], self.snapshot()), ["-a", "-b"])
+        self.assertEqual(self.off(["-a", *OFF, "-b"], self.snapshot()), ["-a", "-b"])
 
     def test_each_user_server_is_turned_off_with_its_own_transport_in_place(self):
         self.write(
@@ -1604,7 +1671,7 @@ class McpOffTest(Base):
             '[mcp_servers.tickets]\ncommand = "/bin/t"\nargs = ["a"]\n',
         )
         self.assertEqual(
-            mcp_off(["-a", f"--config={OFF[1]}", "-b"], self.snapshot()),
+            self.off(["-a", f"--config={OFF[1]}", "-b"], self.snapshot()),
             [
                 "-a",
                 *("-c", "mcp_servers.tickets.enabled=false"),
@@ -1622,11 +1689,11 @@ class McpOffTest(Base):
         self.write(self.work / ".codex" / "config.toml", '[mcp_servers.p]\ncommand = "up"\n')
         self.write(self.cwd / ".codex" / "config.toml", '[mcp_servers.p]\nurl = "https://p"\n')
         self.assertEqual(
-            mcp_off(list(OFF), untrusted),
+            self.off(list(OFF), untrusted),
             ["-c", "mcp_servers.s.enabled=false", "-c", 'mcp_servers.s.command="user"'],
         )
         self.assertEqual(
-            mcp_off(list(OFF), self.snapshot(project=True)),
+            self.off(list(OFF), self.snapshot(project=True)),
             [
                 *("-c", "mcp_servers.p.enabled=false", "-c", 'mcp_servers.p.url="https://p"'),
                 *("-c", "mcp_servers.s.enabled=false", "-c", 'mcp_servers.s.command="user"'),
@@ -1636,7 +1703,7 @@ class McpOffTest(Base):
     def docker_snapshot(self):
         home = docker_home("w", "codex")
         spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
-        snapshot = self.common.prepare(spec).snapshot
+        snapshot = self.common.prepare(spec, LocalHome()).snapshot
         docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex", "config.toml")
         return snapshot, docker, Path(snapshot.codex_home, "config", "config.toml")
 
@@ -1651,22 +1718,32 @@ class McpOffTest(Base):
         self.write(self.system, '[mcp_servers.system]\ncommand = "s"\n')
         self.write(docker, '[mcp_servers.github]\ncommand = "fresh"\n')
         self.write(copy, '[mcp_servers.github]\ncommand = "kept"\n')
-        self.assertEqual(mcp_off(list(OFF), snapshot), self.github("fresh"))
-        self.assertEqual(mcp_off(list(OFF), snapshot, resume=True), self.github("kept"))
+        self.assertEqual(self.off(list(OFF), snapshot, container=True), self.github("fresh"))
         self.assertEqual(
-            launch_flags(snapshot, interactive=True, mode=(), configured=OFF, resume=True)[:4],
-            self.github("kept"),
+            self.off(list(OFF), snapshot, container=True, resume=True), self.github("kept")
         )
+        flags = launch_flags(
+            snapshot,
+            interactive=True,
+            mode=(),
+            configured=OFF,
+            home=VolumeHome("w", "codex"),
+            unattended=True,
+            resume=True,
+        )
+        self.assertEqual(flags[:4], self.github("kept"))
 
     def test_each_start_reads_only_the_layer_it_loads_so_the_other_cannot_fail_it(self):
         snapshot, docker, copy = self.docker_snapshot()
         self.write(docker, "[mcp_servers\n")
         self.write(copy, '[mcp_servers.github]\ncommand = "kept"\n')
-        self.assertEqual(mcp_off(list(OFF), snapshot, resume=True), self.github("kept"))
+        self.assertEqual(
+            self.off(list(OFF), snapshot, container=True, resume=True), self.github("kept")
+        )
         self.write(docker, '[mcp_servers.github]\ncommand = "fresh"\n')
         copy.unlink()
         copy.symlink_to(self.system)
-        self.assertEqual(mcp_off(list(OFF), snapshot), self.github("fresh"))
+        self.assertEqual(self.off(list(OFF), snapshot, container=True), self.github("fresh"))
 
     def test_a_resumed_copy_is_read_without_following_a_link_and_within_its_limit(self):
         snapshot, _, copy = self.docker_snapshot()
@@ -1685,16 +1762,16 @@ class McpOffTest(Base):
                 with self.assertRaisesRegex(
                     ConfigError, f"^{re.escape(str(copy))}: want a regular file of at most 2 MiB$"
                 ):
-                    mcp_off(list(OFF), snapshot, resume=True)
+                    self.off(list(OFF), snapshot, container=True, resume=True)
         copy.write_text("[mcp_servers\n")
         with self.assertRaisesRegex(ConfigError, f"^{re.escape(str(copy))}: invalid TOML"):
-            mcp_off(list(OFF), snapshot, resume=True)
+            self.off(list(OFF), snapshot, container=True, resume=True)
         copy.unlink()
-        self.assertEqual(mcp_off(["-a", *OFF], snapshot, resume=True), ["-a"])
+        self.assertEqual(self.off(["-a", *OFF], snapshot, container=True, resume=True), ["-a"])
 
     def test_a_dangling_user_config_link_is_no_layer(self):
         (self.codex_home / "config.toml").symlink_to("config/config.toml")
-        self.assertEqual(mcp_off(["-a", *OFF], self.snapshot()), ["-a"])
+        self.assertEqual(self.off(["-a", *OFF], self.snapshot()), ["-a"])
 
     def test_a_docker_home_turns_off_the_docker_configs_servers_not_the_hosts(self):
         self.write(self.codex_home / "config.toml", '[mcp_servers.host]\ncommand = "h"\n')
@@ -1702,10 +1779,10 @@ class McpOffTest(Base):
         self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "github-mcp"\n')
         home = docker_home("w", "codex")
         spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
-        snapshot = self.common.prepare(spec).snapshot
+        snapshot = self.common.prepare(spec, LocalHome()).snapshot
         self.assertEqual(snapshot.codex_home, os.path.realpath(home))
         self.assertEqual(
-            mcp_off(list(OFF), snapshot),
+            self.off(list(OFF), snapshot, container=True),
             [
                 "-c",
                 "mcp_servers.github.enabled=false",
@@ -1714,28 +1791,31 @@ class McpOffTest(Base):
             ],
         )
 
-    def test_a_docker_home_under_a_linked_state_dir_is_still_one(self):
-        state = os.path.join(os.environ["HOME"], ".ensemble")
-        os.makedirs(state, exist_ok=True)
-        shutil.rmtree(os.path.join(state, "docker-state"))
-        os.symlink(scratch(self), os.path.join(state, "docker-state"))
-        record("w")
-        docker = Path(state, "docker-config", "codex")
-        self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "g"\n')
-        home = docker_home("w", "codex")
-        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
-        snapshot = self.common.prepare(spec).snapshot
-        self.assertNotEqual(snapshot.codex_home, home)
-        self.assertEqual(
-            mcp_off(list(OFF), snapshot)[:2], ["-c", "mcp_servers.github.enabled=false"]
-        )
+    def test_the_container_flag_picks_the_layers_whatever_the_home_is_named(self):
+        self.write(self.system, '[mcp_servers.system]\ncommand = "s"\n')
+        self.write(self.codex_home / "config.toml", '[mcp_servers.host]\ncommand = "h"\n')
+        snapshot, docker, copy = self.docker_snapshot()
+        self.write(docker, '[mcp_servers.github]\ncommand = "fresh"\n')
+        self.write(copy, '[mcp_servers.github]\ncommand = "kept"\n')
+        self.write(Path(snapshot.codex_home, "config.toml"), '[mcp_servers.own]\ncommand = "o"\n')
+        system = ["-c", "mcp_servers.system.enabled=false", "-c", 'mcp_servers.system.command="s"']
+        own = ["-c", "mcp_servers.own.enabled=false", "-c", 'mcp_servers.own.command="o"']
+        host = ["-c", "mcp_servers.host.enabled=false", "-c", 'mcp_servers.host.command="h"']
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                self.assertEqual(self.off(list(OFF), snapshot, resume=resume), own + system)
+                self.assertEqual(
+                    self.off(list(OFF), self.snapshot(), container=True, resume=resume),
+                    self.github("kept" if resume else "fresh"),
+                )
+                self.assertEqual(self.off(list(OFF), self.snapshot(), resume=resume), host + system)
 
     def test_a_table_with_no_transport_adds_nothing(self):
         self.write(self.system, '[mcp_servers.s]\ncommand = "system"\n')
         self.write(self.codex_home / "config.toml", "[mcp_servers.s]\nenabled = true\n")
         self.write(self.codex_home / "other.toml", "")
         self.assertEqual(
-            mcp_off(list(OFF), self.snapshot()),
+            self.off(list(OFF), self.snapshot()),
             ["-c", "mcp_servers.s.enabled=false", "-c", 'mcp_servers.s.command="system"'],
         )
 
@@ -1751,13 +1831,13 @@ class McpOffTest(Base):
         ):
             self.write(path, text)
             with self.subTest(text=text), self.assertRaisesRegex(ConfigError, message) as raised:
-                mcp_off(list(OFF), snapshot)
+                self.off(list(OFF), snapshot)
             self.assertIn(str(path), str(raised.exception))
         with (
             mock.patch("builtins.open", side_effect=PermissionError("denied")),
             self.assertRaisesRegex(ConfigError, f"{path}.*denied"),
         ):
-            mcp_off(list(OFF), snapshot)
+            self.off(list(OFF), snapshot)
 
     def test_every_launch_rereads_the_layers(self):
         self.spec = replace(self.spec, flags=OFF)

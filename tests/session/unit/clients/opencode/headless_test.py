@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.clients.opencode import OpenCodeClient, launcher
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
@@ -35,7 +36,7 @@ from tests.session.unit.clients.opencode.support import (
     packaged_table,
     titled_session,
 )
-from tests.session.unit.clients.support import holds
+from tests.session.unit.clients.support import holds, homed
 
 MODEL = "ollama/qwen3.6:35b-mlx"
 STRATA = {"strata": {"base_url": "http://10.0.0.5:8080/v1", "models": ["m"]}}
@@ -67,7 +68,7 @@ class Base(Case):
     def launch(self, spec: Spec, context: ClientContext = LOCAL_CONTEXT, client=None) -> Launch:
         run = (client or self.client).headless()
         assert run is not None
-        run._context = context
+        run._context = replace(context, home=LocalHome())
         return run.launch(spec)
 
     def made(self, name: str) -> str:
@@ -670,6 +671,7 @@ class EventsTest(Base):
     def events(self, *lines: str, spec: Spec | None = None) -> list:
         run = self.client.headless()
         assert run is not None
+        homed(run)
         run.launch(spec or self.spec())
         return list(run.events(lines))
 

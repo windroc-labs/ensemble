@@ -18,12 +18,14 @@ from ensemble.session.clients.opencode.common import (
     OpenCodeCommon,
     worktree,
 )
+from ensemble.session.engine.client_state import LocalHome, VolumeHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
     ClientHome,
     ConfigError,
     Effort,
+    HomePath,
     Permission,
     Resumable,
     SessionInfo,
@@ -43,8 +45,10 @@ from tests.session.unit.clients.opencode.support import (
     packaged_table,
     titled_session,
 )
+from tests.session.unit.clients.support import opened_below
 
 STRATA = {"base_url": "http://10.0.0.5:8080/v1", "models": ["m"]}
+DB = "opencode/opencode.db"
 
 
 def common(**config) -> OpenCodeCommon:
@@ -264,7 +268,7 @@ class SessionStatusTest(Case):
         self.info = SessionInfo("run-1", self.cwd, project=False, transcript="", resume="")
 
     def status(self, **env):
-        return self.client.session_status(self.info, env=env)
+        return self.client.session_status(self.info, env=env, home=LocalHome())
 
     def test_a_bound_session_in_the_db_is_resumable(self):
         self.client.common.bind(self.cwd, "run-1", SES)
@@ -313,10 +317,31 @@ class SessionStatusTest(Case):
         make_db(docker, {SES: 1000})
         self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
         info = replace(self.info, transcript=docker)
-        self.assertEqual(self.client.session_status(info).resumable, Resumable.YES)
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()).resumable, Resumable.YES
+        )
         make_db(self.db, {SES: 1000})
         os.unlink(docker)
-        self.assertEqual(self.client.session_status(info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(info, home=LocalHome()).resumable, Resumable.UNKNOWN
+        )
+
+    def test_status_and_lookup_snapshot_the_db_through_the_home_store(self):
+        titled_session(self.db, SES, "ensemble-run-1", 1_760_000_000_250)
+        store = Snapshots()
+        found = self.client.session_status(self.info, home=store)
+        native = self.client.common.session(self.cwd, "run-2", HomePath(self.data, DB), store)
+        self.assertEqual(found.resumable, Resumable.YES)
+        self.assertIsNone(native)
+        taken = (HomePath(self.data, DB), common_module.DB_MAX, ("-wal", "-shm"))
+        self.assertEqual(store.taken, [taken, taken])
+
+    def test_a_linked_db_on_this_machine_is_refused(self):
+        self.client.common.bind(self.cwd, "run-1", SES)
+        outside = make_db(os.path.join(self.home, "outside.db"), {SES: 1000})
+        os.makedirs(os.path.dirname(self.db))
+        os.symlink(outside, self.db)
+        self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
 
     def test_the_db_follows_the_session_env_over_the_caller(self):
         self.client.common.bind(self.cwd, "run-1", SES)
@@ -325,16 +350,34 @@ class SessionStatusTest(Case):
         self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
         self.assertEqual(self.status(XDG_DATA_HOME=other).resumable, Resumable.YES)
         configured = OpenCodeClient({**packaged_table(), "env": {"XDG_DATA_HOME": other}})
-        self.assertEqual(configured.session_status(self.info).resumable, Resumable.YES)
+        self.assertEqual(
+            configured.session_status(self.info, home=LocalHome()).resumable, Resumable.YES
+        )
+
+
+class Snapshots:
+    """A local home-store noting each snapshot asked of it."""
+
+    def __init__(self):
+        self.store, self.taken = LocalHome(), []
+
+    def snapshot(self, path, *, limit, siblings=()):
+        self.taken.append((path, limit, siblings))
+        return self.store.snapshot(path, limit=limit, siblings=siblings)
 
 
 class DockerDatabaseTest(Case):
-    """A Docker session's opencode.db is read from a snapshot, never opened where it lies."""
+    """A Docker session's opencode.db is read through its state volume's home-store, from a
+    snapshot, never opened where it lies.
+    """
 
     def setUp(self):
         self.enterContext(serve())
         self.cwd = os.path.realpath(self.home)
-        self.state_db = os.path.join(docker_home("w", "opencode"), "opencode", "opencode.db")
+        self.root = docker_home("w", "opencode")
+        self.state_db = os.path.join(self.root, "opencode", "opencode.db")
+        self.db = HomePath(self.root, DB)
+        self.store = VolumeHome("w", "opencode")
         self.client = OpenCodeClient(packaged_table())
         self.info = SessionInfo(
             "run-1", self.cwd, project=False, transcript=self.state_db, resume=""
@@ -358,8 +401,8 @@ class DockerDatabaseTest(Case):
         self.wal_db()
         real = sqlite3.connect
         with mock.patch.object(sqlite3, "connect", side_effect=real) as spy:
-            found = self.client.session_status(self.info)
-            native = self.client.common.session(self.cwd, "run-2", self.state_db)
+            found = self.client.session_status(self.info, home=self.store)
+            native = self.client.common.session(self.cwd, "run-2", self.db, self.store)
         self.assertEqual(found, SessionStatus(Resumable.YES, 1_760_000_000.25, ""))
         self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
         self.assertIsNone(native)
@@ -369,23 +412,46 @@ class DockerDatabaseTest(Case):
             self.assertNotIn(state, str(call))
 
     def test_an_absent_db(self):
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.NO)
+        self.assertEqual(
+            self.client.session_status(self.info, home=self.store).resumable, Resumable.NO
+        )
         self.client.common.bind(self.cwd, "run-1", SES)
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(self.info, home=self.store).resumable, Resumable.UNKNOWN
+        )
 
     def test_a_linked_db_is_refused(self):
         outside = make_db(os.path.join(self.home, "outside.db"), {SES: 1000})
         os.makedirs(os.path.dirname(self.state_db))
         os.symlink(outside, self.state_db)
-        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+        self.assertEqual(
+            self.client.session_status(self.info, home=self.store).resumable, Resumable.UNKNOWN
+        )
         with self.assertRaisesRegex(ConfigError, "^opencode session lookup: "):
-            self.client.common.session(self.cwd, "run-1", self.state_db)
+            self.client.common.session(self.cwd, "run-1", self.db, self.store)
 
     def test_a_bound_session_needs_no_db(self):
         os.makedirs(os.path.dirname(self.state_db))
         os.symlink(os.path.join(self.home, "missing.db"), self.state_db)
         self.client.common.bind(self.cwd, "run-1", SES)
-        self.assertEqual(self.client.common.session(self.cwd, "run-1", self.state_db), SES)
+        self.assertEqual(self.client.common.session(self.cwd, "run-1", self.db, self.store), SES)
+
+    def test_status_and_lookup_open_no_mac_path(self):
+        self.wal_db()
+        spec = Spec(
+            workdir=self.home,
+            access=Access(cwd=self.cwd, project=True),
+            sid="run-1",
+            resume=True,
+            env={"XDG_DATA_HOME": self.root},
+        )
+        context = replace(DOCKER_CONTEXT, home=self.store)
+        with opened_below(self.root, itself=True) as touched:
+            selected = self.client.common.selection(spec, context)
+            status = self.client.session_status(self.info, home=self.store)
+        self.assertEqual(selected, ("--session", SES))
+        self.assertEqual(status, SessionStatus(Resumable.YES, 1_760_000_000.25, ""))
+        self.assertEqual(touched, [])
 
 
 EXTRA = ("--prompt", "--pure")
@@ -460,22 +526,29 @@ class SelectionTest(Case):
         self.common = common()
         self.cwd = os.path.realpath(self.home)
         self.spec = Spec(workdir=self.home, access=Access(cwd=self.cwd, project=True), sid="run-1")
+        self.local = replace(LOCAL_CONTEXT, home=LocalHome())
 
     def test_a_fresh_run_selects_nothing_and_a_resume_its_bound_session(self):
         self.assertEqual(self.common.selection(self.spec, LOCAL_CONTEXT), ())
         self.common.bind(self.cwd, "run-1", SES)
-        resumed = self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT)
+        resumed = self.common.selection(replace(self.spec, resume=True), self.local)
         self.assertEqual(resumed, ("--session", SES))
 
     def test_an_unbound_resume_selects_a_fresh_session(self):
         """A run killed before OpenCode saved its session bound none."""
-        self.assertEqual(self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT), ())
+        self.assertEqual(self.common.selection(replace(self.spec, resume=True), self.local), ())
         self.assertIsNone(self.common.native(self.cwd, "run-1"))
+
+    def test_a_resume_without_a_home_store_is_refused(self):
+        self.common.bind(self.cwd, "run-1", SES)
+        with self.assertRaisesRegex(ConfigError, "^no client home store"):
+            self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT)
 
     def test_a_container_context_selects_as_a_local_one(self):
         self.assertEqual(self.common.selection(self.spec, DOCKER_CONTEXT), ())
         self.common.bind(self.cwd, "run-1", SES)
-        resumed = self.common.selection(replace(self.spec, resume=True), DOCKER_CONTEXT)
+        docker = replace(DOCKER_CONTEXT, home=VolumeHome("w", "opencode"))
+        resumed = self.common.selection(replace(self.spec, resume=True), docker)
         self.assertEqual(resumed, ("--session", SES))
 
     def test_an_isolated_host_starts_in_an_untrusted_cwd(self):

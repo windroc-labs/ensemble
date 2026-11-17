@@ -1,18 +1,20 @@
-import errno
 import os
 import re
+from dataclasses import replace
 
+from ensemble.session.clients import common
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.common import (
     check_selection,
     docker_config,
-    located,
+    home_of,
     scan,
     select,
     split_flags,
 )
-from ensemble.session.engine.types import ConfigError, StateFile
-from ensemble.utils import docker_home
+from ensemble.session.engine import client_state
+from ensemble.session.engine.client_state import LocalHome
+from ensemble.session.engine.types import LOCAL_CONTEXT, ConfigError
 from tests.session.case import SID, Case
 from tests.utils.sandbox import scratch
 
@@ -129,6 +131,19 @@ class FlagsTest(Case):
                 select(native, syntax, uuid=True, resume=False)
 
 
+class HomeOfTest(Case):
+    def test_the_contexts_home_store(self):
+        store = LocalHome()
+        self.assertIs(home_of(replace(LOCAL_CONTEXT, home=store)), store)
+
+    def test_a_context_without_one_is_a_config_error(self):
+        with self.assertRaises(ConfigError) as caught:
+            home_of(LOCAL_CONTEXT)
+        self.assertEqual(
+            str(caught.exception), "no client home store: the Host hands one at session start"
+        )
+
+
 class DockerConfigTest(Case):
     def setUp(self):
         self.default = os.path.join(scratch(self), "default.json")
@@ -150,19 +165,12 @@ class DockerConfigTest(Case):
             docker_config("x", "c.json", self.default)
 
 
-class LocatedTest(Case):
-    def test_a_path_below_the_clients_docker_home_is_its_state_file(self):
-        path = os.path.join(docker_home("w", "claude"), "projects", "p", "t.jsonl")
-        self.assertEqual(located(path, "claude"), StateFile("w", "claude", "projects/p/t.jsonl"))
-
-    def test_a_path_outside_the_docker_state_is_local(self):
-        self.assertIsNone(located(os.path.join(self.home, ".claude", "t.jsonl"), "claude"))
-
-    def test_another_clients_home_or_no_home_is_refused(self):
-        for path in (
-            os.path.join(docker_home("w", "codex"), "sessions", "r.jsonl"),
-            os.path.join(docker_home("w", os.curdir), "manifest.json"),
-        ):
-            with self.subTest(path=path), self.assertRaises(OSError) as caught:
-                located(path, "claude")
-            self.assertEqual(caught.exception.errno, errno.EXDEV)
+class OldReadersTest(Case):
+    def test_no_located(self):
+        """No client state is found by parsing a Docker state path: located, locate and the
+        module-level volume reads are gone.
+        """
+        self.assertFalse(hasattr(common, "located"))
+        for name in ("locate", "read", "stat", "entries", "snapshot"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(client_state, name))

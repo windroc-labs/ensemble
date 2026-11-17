@@ -38,7 +38,6 @@ from ensemble.session.clients.common import (
     check_config,
     docker_config,
     docker_config_path,
-    located,
     mode_flags,
     scan,
     split_flags,
@@ -48,13 +47,14 @@ from ensemble.session.engine.types import (
     COMMAND,
     ClientHome,
     ConfigError,
+    HomePath,
+    HomeStore,
     Launch,
     Permission,
     Resumable,
     SessionInfo,
     SessionStatus,
     Spec,
-    StateFile,
     StateKind,
     Usage,
     Window,
@@ -67,8 +67,6 @@ from ensemble.utils import (
     load_config,
     load_config_text,
     number,
-    open_beneath,
-    read_beneath,
     resume_command,
 )
 
@@ -219,106 +217,68 @@ def inside(path: str, root: str) -> bool:
     return os.path.commonpath((path, root)) == root
 
 
-def read_metadata(path: str) -> SessionFile:
-    line, mtime = _first_line(path)
+def read_metadata(home: HomeStore, path: HomePath) -> SessionFile:
+    named = os.path.join(path.root, path.rel)
+    line, mtime = _first_line(home, path)
     try:
         metadata = json.loads(line)
     except (ValueError, UnicodeError, RecursionError) as exc:
-        raise RecoveryError(f"malformed Codex session metadata: {path}") from exc
+        raise RecoveryError(f"malformed Codex session metadata: {named}") from exc
     if (
         not isinstance(metadata, dict)
         or metadata.get("type") != "session_meta"
         or not isinstance(metadata.get("payload"), dict)
     ):
-        raise RecoveryError(f"malformed Codex session metadata: {path}")
+        raise RecoveryError(f"malformed Codex session metadata: {named}")
     payload = metadata["payload"]
     if (
         not native_id(payload.get("id"))
-        or not path.endswith("-" + payload["id"] + ".jsonl")
+        or not path.rel.endswith("-" + payload["id"] + ".jsonl")
         or absolute_path(payload.get("cwd"), "session cwd") != payload["cwd"]
     ):
-        raise RecoveryError(f"mismatched Codex session metadata: {path}")
+        raise RecoveryError(f"mismatched Codex session metadata: {named}")
     return SessionFile(
-        path, mtime, NativeMetadata(payload["id"], payload["cwd"], _parent_identifier(payload))
+        named, mtime, NativeMetadata(payload["id"], payload["cwd"], _parent_identifier(payload))
     )
 
 
-def _first_line(path: str) -> tuple[str | bytes, float]:
+def _first_line(home: HomeStore, path: HomePath) -> tuple[bytes, float]:
     """A session file's first line, METADATA_MAX at most, and its mtime; FileNotFoundError: none."""
+    named = os.path.join(path.root, path.rel)
     try:
-        found = located(path, HOME_DIR)
-        if found is not None:
-            return _state_first_line(found, path)
-        fd = open_beneath("/", path)
-    except (FileNotFoundError, RecoveryError):
-        raise
+        info = home.stat(path)
+        data = home.read(path, limit=METADATA_MAX) if info is not None else None
     except OSError as exc:
-        raise RecoveryError(f"cannot read Codex session file {path}: {exc}") from exc
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise RecoveryError(f"not a regular Codex session file: {path}")
-        with os.fdopen(fd, "r", encoding="utf-8") as stream:
-            fd = -1
-            try:
-                return stream.readline(METADATA_MAX), info.st_mtime
-            except UnicodeError as exc:
-                raise RecoveryError(f"malformed Codex session metadata: {path}") from exc
-    finally:
-        if fd >= 0:
-            os.close(fd)
-
-
-def _state_first_line(found: StateFile, path: str) -> tuple[bytes, float]:
-    try:
-        info = client_state.stat(found)
-        data = client_state.read(found, limit=METADATA_MAX) if info is not None else None
-    except OSError as exc:
-        if exc.errno == errno.EINVAL:  # client_state: not a regular file
-            raise RecoveryError(f"not a regular Codex session file: {path}") from exc
-        raise
+        if exc.errno == errno.EINVAL:
+            raise RecoveryError(f"not a regular Codex session file: {named}") from exc
+        raise RecoveryError(f"cannot read Codex session file {named}: {exc}") from exc
     if info is None or data is None:
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), named)
     return data.split(b"\n", 1)[0], info.mtime
 
 
-def read_session(path: str, *, offset: int = 0, limit: int | None = None) -> bytes | None:
-    """read_beneath("/", path, …); a Docker session home's through client_state, READ_MAX at most."""
+def read_session(
+    home: HomeStore, path: HomePath, *, offset: int = 0, limit: int | None = None
+) -> bytes | None:
+    """READ_MAX bytes at most; None: absent or refused."""
     try:
-        found = located(path, HOME_DIR)
-        if found is not None:
-            return client_state.read(found, offset=offset, limit=limit)
+        return home.read(path, offset=offset, limit=limit)
     except OSError:
         return None
-    return read_beneath("/", path, offset=offset, limit=limit)
 
 
-def session_size(path: str) -> int | None:
-    """A Docker session home's session file size, 0 when absent or refused; None: a local path."""
+def session_size(home: HomeStore, path: HomePath) -> int:
+    """A session file's size, 0 when absent or refused."""
     try:
-        found = located(path, HOME_DIR)
-        if found is None:
-            return None
-        info = client_state.stat(found)
+        info = home.stat(path)
     except OSError:
         return 0
     return info.size if info is not None else 0
 
 
-def _listing(directory: str) -> list[tuple[str, bool]]:
-    """`directory`'s names, each with whether it is a dir (no link followed); a Docker session
-    home's through client_state, [] when absent there.
-    """
-    found = located(directory, HOME_DIR)
-    if found is not None:
-        listed = client_state.entries(found) or ()
-        return [(entry.name, entry.kind is StateKind.DIR) for entry in listed]
-    fd = open_beneath("/", directory, directory=True)
-    try:
-        with os.scandir(fd) as entries:
-            return [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
-    finally:
-        os.close(fd)
+def _listing(home: HomeStore, path: HomePath) -> list[tuple[str, bool]]:
+    """A dir's names, each with whether it is a dir (no link followed); [] when absent."""
+    return [(entry.name, entry.kind is StateKind.DIR) for entry in home.entries(path) or ()]
 
 
 def _parent_identifier(payload) -> str | None:
@@ -330,38 +290,40 @@ def _parent_identifier(payload) -> str | None:
     return parent if native_id(parent) else None
 
 
-def session_paths(snapshot: Snapshot, identifier: str = "*") -> list[str]:
-    root = os.path.join(snapshot.codex_home, "sessions")
-    if located(root, HOME_DIR) is None and not os.path.exists(root):
-        return []
-    directories = [root]
+def session_paths(home: HomeStore, snapshot: Snapshot, identifier: str = "*") -> list[HomePath]:
+    directories = [HomePath(snapshot.codex_home, "sessions")]
     for length in (4, 2, 2):
         directories = [
-            os.path.join(directory, name)
+            directory._replace(rel=f"{directory.rel}/{name}")
             for directory in directories
-            for name, is_dir in _listing(directory)
+            for name, is_dir in _listing(home, directory)
             if len(name) == length and name.isascii() and name.isdigit() and is_dir
         ]
     return [
-        os.path.join(directory, name)
+        directory._replace(rel=f"{directory.rel}/{name}")
         for directory in directories
-        for name, _ in _listing(directory)
+        for name, _ in _listing(home, directory)
         if fnmatch.fnmatchcase(name, f"rollout-*-{identifier}.jsonl")
     ]
 
 
-def session_file(snapshot: Snapshot, identifier: str, *, recorded: str = "") -> SessionFile | None:
+def session_file(
+    home: HomeStore, snapshot: Snapshot, identifier: str, *, recorded: str = ""
+) -> SessionFile | None:
+    """`recorded`: the session file's path a run recorded; OSError (EXDEV): not in the home."""
     if not native_id(identifier):
         raise RecoveryError("invalid Codex recovery native ID")
-    if recorded:
-        absolute_path(recorded, "recorded transcript")
-    matches = [recorded] if recorded else session_paths(snapshot, identifier)
+    matches = (
+        [client_state.home_path(snapshot.codex_home, recorded)]
+        if recorded
+        else session_paths(home, snapshot, identifier)
+    )
     if len(matches) > 1:
         raise RecoveryError(f"duplicate Codex session files for native ID {identifier}")
     if not matches:
         return None
     try:
-        found = read_metadata(matches[0])
+        found = read_metadata(home, matches[0])
     except FileNotFoundError:
         return None
     if found.metadata.id != identifier or found.metadata.cwd != snapshot.cwd:
@@ -858,23 +820,14 @@ def _docker_files() -> dict[str, str]:
     return {WORKER_CONFIG: text}
 
 
-def _container_home(home: str) -> bool:
-    """Whether real path `home` is a Docker worker's Codex home itself, seen from the host."""
-    try:
-        found = located(os.path.join(home, WORKER_CONFIG), HOME_DIR)
-    except OSError:
-        return False
-    return found is not None and found.rel == WORKER_CONFIG
-
-
-def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
+def _config_layers(snapshot: Snapshot, *, container: bool, resume: bool = False) -> list[str]:
     """The config files Codex may read for `snapshot`, lowest precedence first; a trusted project
-    adds each `.codex/config.toml` from / down to the cwd. A Docker home's one user layer is the
-    file Codex will load there: the Docker config a new start copies, else the worker's own copy;
-    the host's system config never reaches it.
+    adds each `.codex/config.toml` from / down to the cwd. In a Docker worker (`container`) the one
+    user layer is the file Codex will load there: the Docker config a new start copies, else the
+    worker's own copy; the host's system config never reaches it.
     """
-    home = os.path.realpath(snapshot.codex_home)
-    if not _container_home(home):
+    home = snapshot.codex_home
+    if not container:
         layers = [SYSTEM_CONFIG, os.path.join(home, "config.toml")]
     elif resume:
         layers = [os.path.join(home, WORKER_CONFIG)]
@@ -888,16 +841,15 @@ def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
     return layers
 
 
-def _read_layer(path: str, home: str) -> dict:
-    """`path`'s TOML; the worker's own copy, which its agent can write, is read with no link
-    followed and at most DOCKER_CONFIG_MAX bytes. FileNotFoundError: no such layer.
+def _read_layer(path: str, root: str, home: HomeStore) -> dict:
+    """`path`'s TOML; the worker's own copy, which its agent can write, through `home`, at most
+    DOCKER_CONFIG_MAX bytes. FileNotFoundError: no such layer.
     """
-    if path != os.path.join(home, WORKER_CONFIG):
+    if path != os.path.join(root, WORKER_CONFIG):
         return load_config(path)
     refused = ConfigError(f"{path}: want a regular file of at most 2 MiB")
     try:
-        found = located(path, HOME_DIR)
-        data = client_state.read(found, limit=DOCKER_CONFIG_MAX + 1) if found else None
+        data = home.read(HomePath(root, WORKER_CONFIG), limit=DOCKER_CONFIG_MAX + 1)
     except OSError:
         raise refused from None
     if data is None:
@@ -907,15 +859,16 @@ def _read_layer(path: str, home: str) -> dict:
     return load_config_text(data.decode())
 
 
-def _mcp_servers(snapshot: Snapshot, *, resume: bool = False) -> dict[str, tuple[str, str]]:
+def _mcp_servers(
+    snapshot: Snapshot, *, home: HomeStore, container: bool, resume: bool = False
+) -> dict[str, tuple[str, str]]:
     """Each MCP server the layers name: its transport key and value, the later layer's winning."""
-    found = {}
-    home = os.path.realpath(snapshot.codex_home)
-    for path in _config_layers(snapshot, resume=resume):
-        if path != os.path.join(home, WORKER_CONFIG) and not os.path.lexists(path):
+    found, root = {}, snapshot.codex_home
+    for path in _config_layers(snapshot, container=container, resume=resume):
+        if path != os.path.join(root, WORKER_CONFIG) and not os.path.lexists(path):
             continue
         try:
-            servers = _read_layer(path, home).get("mcp_servers", {})
+            servers = _read_layer(path, root, home).get("mcp_servers", {})
         except FileNotFoundError:
             continue
         except OSError as error:
@@ -940,10 +893,18 @@ def _mcp_servers(snapshot: Snapshot, *, resume: bool = False) -> dict[str, tuple
     return found
 
 
-def mcp_off(flags: Sequence[str], snapshot: Snapshot, *, resume: bool = False) -> list[str]:
+def mcp_off(
+    flags: Sequence[str],
+    snapshot: Snapshot,
+    *,
+    home: HomeStore,
+    container: bool,
+    resume: bool = False,
+) -> list[str]:
     """`flags` with each `-c mcp_servers={}` (MCP_OFF) replaced by flags turning off every server
     the config layers name: `-c` merges tables, so MCP_OFF alone removes none. Each also gets its
     transport, so a name no layer Codex loads defines (a Docker launch) is still valid.
+    `container`: Codex runs in a Docker worker, whose own config copy is read through `home`.
     """
     result, servers, end = [], None, 0
     for flag in scan(flags, VALUED):
@@ -952,7 +913,7 @@ def mcp_off(flags: Sequence[str], snapshot: Snapshot, *, resume: bool = False) -
             result.extend(flags[flag.start : flag.end])
             continue
         if servers is None:
-            servers = _mcp_servers(snapshot, resume=resume)
+            servers = _mcp_servers(snapshot, home=home, container=container, resume=resume)
         for name, (key, value) in sorted(servers.items()):
             result += ["-c", f"mcp_servers.{name}.enabled=false"]
             result += ["-c", f"mcp_servers.{name}.{key}={json.dumps(value, ensure_ascii=False)}"]
@@ -998,6 +959,7 @@ def launch_flags(
     interactive: bool,
     mode: Sequence[str],
     configured: Sequence[str],
+    home: HomeStore,
     unattended: bool = False,
     resume: bool = False,
 ) -> list[str]:
@@ -1007,7 +969,9 @@ def launch_flags(
     supplied, _ = split_flags(snapshot.flags)
     result = [
         *mode,
-        *mcp_off([*configured, *supplied], snapshot, resume=resume),
+        *mcp_off(
+            [*configured, *supplied], snapshot, home=home, container=unattended, resume=resume
+        ),
         *launch_options(snapshot),
         *(unattended_flags(snapshot.cwd) if unattended else ()),
     ]
@@ -1127,7 +1091,7 @@ class CodexCommon:
         return state
 
     @_recover
-    def prepare(self, spec: Spec) -> SessionState:
+    def prepare(self, spec: Spec, home: HomeStore) -> SessionState:
         if spec.resume:
             state = self._resumed(spec)
             if state.native_id is None:
@@ -1136,7 +1100,7 @@ class CodexCommon:
             refuse(snapshot.flags)
             environment = self.environment(snapshot, ambient=True)
             check_writable_roots(self.store.root, implicit_writable_roots(environment))
-            if session_file(snapshot, state.native_id) is None:
+            if session_file(home, snapshot, state.native_id) is None:
                 raise ConfigError(f"missing Codex session file for native ID {state.native_id}")
             if not snapshot.project:
                 _guard_untrusted_project(
@@ -1152,9 +1116,9 @@ class CodexCommon:
         check_writable_roots(self.store.root, implicit_writable_roots(environment))
         roots = self._new_roots(spec, environment)
         workdir, sid = session_identity(spec.workdir, spec.sid)
-        cwd, home, *_ = roots
+        cwd, codex_home, *_ = roots
         if not spec.access.project:
-            _guard_untrusted_project(workdir, cwd, home, roots[2:])
+            _guard_untrusted_project(workdir, cwd, codex_home, roots[2:])
         snapshot = _snapshot(
             {
                 "cwd": cwd,
@@ -1163,7 +1127,7 @@ class CodexCommon:
                 "commands": list(spec.access.commands),
                 "model": self._mapped("tiers", spec.tier),
                 "effort": self._mapped("efforts", spec.effort and spec.effort.value),
-                "codex_home": home,
+                "codex_home": codex_home,
                 "flags": list(spec.flags),
                 "env": explicit,
             }
@@ -1245,13 +1209,20 @@ class CodexCommon:
         return _usage(snapshot if isinstance(snapshot, dict) else result.get("rateLimits"))
 
     def resume_launch(self, state: SessionState, *, mode: Sequence[str] = ()) -> Launch:
+        """Its resume on this machine."""
         snapshot = state.snapshot
         selection = self.selector(_native_id(state), resume=True)
         _, literal = split_flags(snapshot.flags)
         argv = (
             "codex",
             *selection[:-1],
-            *launch_flags(snapshot, interactive=True, mode=mode, configured=self.flags),
+            *launch_flags(
+                snapshot,
+                interactive=True,
+                mode=mode,
+                configured=self.flags,
+                home=client_state.LocalHome(),
+            ),
             *selection[-1:],
             *literal,
         )
@@ -1293,11 +1264,11 @@ class CodexCommon:
         return self.store.lookup(sid, cwd)
 
     @_recover
-    def last_active(self, state: SessionState, found: SessionFile) -> float:
+    def last_active(self, state: SessionState, found: SessionFile, home: HomeStore) -> float:
         candidates = []
-        for path in session_paths(state.snapshot):
+        for path in session_paths(home, state.snapshot):
             try:
-                metadata = read_metadata(path)
+                metadata = read_metadata(home, path)
             except (ConfigError, RecoveryError, OSError):
                 continue
             payload = metadata.metadata
@@ -1318,12 +1289,12 @@ class CodexCommon:
             related.update(added)
             newest = max([newest, *(stamp for identifier, stamp in children)])
 
-    def session_metadata(self, info: SessionInfo) -> SessionInfo:
+    def session_metadata(self, info: SessionInfo, home: HomeStore) -> SessionInfo:
         try:
             state = self.lookup(info.sid, info.cwd)
             if state is None or not state.native_id:
                 return info
-            found = session_file(state.snapshot, state.native_id)
+            found = session_file(home, state.snapshot, state.native_id)
             return replace(
                 info,
                 transcript=found.path if found is not None else info.transcript,
@@ -1333,20 +1304,22 @@ class CodexCommon:
             return info
 
     @_recover
-    def transcript(self, state: SessionState) -> str:
-        found = session_file(state.snapshot, state.native_id) if state.native_id else None
+    def transcript(self, state: SessionState, home: HomeStore) -> str:
+        found = session_file(home, state.snapshot, state.native_id) if state.native_id else None
         return found.path if found is not None else ""
 
-    def session_status(self, sid: str, cwd: str, *, transcript: str = "") -> SessionStatus:
+    def session_status(
+        self, sid: str, cwd: str, *, transcript: str = "", home: HomeStore
+    ) -> SessionStatus:
         resume = ""
         try:
             state = self.lookup(sid, cwd)
             if state is None or state.native_id is None:
                 return SessionStatus(Resumable.NO, None, "")
             resume = self.resume_command(state)
-            found = session_file(state.snapshot, state.native_id, recorded=transcript)
+            found = session_file(home, state.snapshot, state.native_id, recorded=transcript)
             if found is None:
                 return SessionStatus(Resumable.NO, None, resume)
-            return SessionStatus(Resumable.YES, self.last_active(state, found), resume)
+            return SessionStatus(Resumable.YES, self.last_active(state, found, home), resume)
         except (ConfigError, RecoveryError, OSError):
             return SessionStatus(Resumable.UNKNOWN, None, resume)

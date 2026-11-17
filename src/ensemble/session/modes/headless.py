@@ -14,6 +14,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import replace
 from typing import Self
 
 from ensemble.session.clients.base import Client
@@ -190,7 +191,9 @@ class HeadlessMode(BaseMode):
                 spec, run._home(), host, checked_name(name), account, generation=generation
             )
         spec = cls._noted(spec, client)
-        run._context = host._client_context()
+        run._context = replace(
+            host._client_context(), home=host._home_store(name or "", run._home())
+        )
         spec, prompt_file = cls._pointed(spec, run._context, spec.workdir)
         staged = cls._staged(spec, prompt_file, spec.workdir)
         if run._context.container:

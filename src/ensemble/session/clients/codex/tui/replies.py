@@ -20,8 +20,9 @@ from ensemble.session.clients.codex.common import (
 )
 from ensemble.session.clients.codex.tui import records
 from ensemble.session.clients.replies import LIFETIME, Clock, Sleep, locked
-from ensemble.session.engine.types import HookCall
-from ensemble.utils import json_records, open_beneath, save
+from ensemble.session.engine import client_state
+from ensemble.session.engine.types import HomePath, HomeStore, HookCall
+from ensemble.utils import json_records, save
 
 PENDING_MAX = 16
 CLAIMED_MAX = 64
@@ -123,27 +124,25 @@ def _load(path: str) -> dict:
     return shared.load(path, _fresh, _valid)
 
 
-def _size(path: str) -> int:
-    if (size := session_size(path)) is not None:
-        return size
+def _rollout(path: str) -> HomePath | None:
+    """A session file's home path: the file is sessions/YYYY/MM/DD/<name> below its Codex home."""
+    root = path
+    for _ in range(5):
+        root = os.path.dirname(root)
     try:
-        fd = open_beneath("/", path)
+        return client_state.home_path(root, path)
     except OSError:
-        return 0
-    try:
-        return os.fstat(fd).st_size
-    finally:
-        os.close(fd)
+        return None
 
 
-def _resolve(state: dict) -> None:
+def _resolve(state: dict, home: HomeStore) -> None:
     if state["rollout"]:
         return
     try:
         recovery = SessionStore(state["store"]).load(state["workdir"], state["sid"])
         if recovery is None or recovery.native_id is None:
             return
-        found = session_file(recovery.snapshot, recovery.native_id)
+        found = session_file(home, recovery.snapshot, recovery.native_id)
     except (RecoveryError, OSError, ValueError):
         return
     if found is not None:
@@ -162,15 +161,15 @@ def _matches(prompt: str, text: str) -> bool:
     return not prompt or found == prompt
 
 
-def scan(state: dict, *, final: str = "", budget: int) -> dict[str, Any]:
+def scan(state: dict, home: HomeStore, *, final: str = "", budget: int) -> dict[str, Any]:
     """Each pending steer's progress through the session file, `budget` bytes in all."""
-    turn = state["turn"]
+    turn, rollout = state["turn"], _rollout(state["rollout"])
     opening, claimed, steers = turn["opening"], set(turn["claimed"]), {}
     for steer in state["steers"]:
         found = steers[steer["n"]] = {**steer, "answer": None}
         start = max(turn["start"], steer["cursor"])
         limit = min(SCAN_MAX, budget)
-        data = read_session(state["rollout"], offset=start, limit=limit) if limit else None
+        data = read_session(home, rollout, offset=start, limit=limit) if limit and rollout else None
         if not data:
             continue
         budget -= len(data)
@@ -250,6 +249,7 @@ def settle(
     budget: int,
     clock: Clock,
     sleep: Sleep,
+    home: HomeStore,
     final: str = "",
     close: bool = False,
     resolve: bool = True,
@@ -260,8 +260,8 @@ def settle(
     if not state["turn"]["open"]:
         return 0
     if resolve:
-        _resolve(state)
-    progress = scan(state, final=final, budget=budget) if state["rollout"] else None
+        _resolve(state, home)
+    progress = scan(state, home, final=final, budget=budget) if state["rollout"] else None
     with locked(path, deadline, clock, sleep):
         current = _load(path)
         if current["turn"]["open"] and _identity(current["turn"]) == _identity(state["turn"]):
@@ -274,26 +274,31 @@ def settle(
         return len(current["steers"]) if current["turn"]["open"] else 0
 
 
-def settle_pending(store: str, workdir: str, sid: str) -> None:
+def settle_pending(store: str, workdir: str, sid: str, home: HomeStore) -> None:
     path = state_path(store, workdir, sid)
     shared.pumped(
         path,
         lambda deadline: settle(
-            path, deadline=deadline, budget=HOOK_SCAN_MAX, clock=time.monotonic, sleep=time.sleep
+            path,
+            deadline=deadline,
+            budget=HOOK_SCAN_MAX,
+            clock=time.monotonic,
+            sleep=time.sleep,
+            home=home,
         ),
         "codex reply",
     )
 
 
-def on_hook(call: HookCall, *, began: float) -> None:
+def on_hook(call: HookCall, *, began: float, home: HomeStore) -> None:
     """Steer bookkeeping by `began` + its deadline; never raises."""
     try:
-        _on_hook(call, began + DEADLINES.get(call.label, DEADLINE))
+        _on_hook(call, began + DEADLINES.get(call.label, DEADLINE), home)
     except Exception as error:  # noqa: BLE001  # steer replies must never fail the hook or keep its done line
         print(f"codex reply: {error}", file=sys.stderr)
 
 
-def _on_hook(call: HookCall, deadline: float) -> None:
+def _on_hook(call: HookCall, deadline: float, home: HomeStore) -> None:
     name, events, store = call.state.get("name"), call.events, call.state.get("store")
     if call.label not in LABELS or not (isinstance(name, str) and name and events):
         return
@@ -311,6 +316,7 @@ def _on_hook(call: HookCall, deadline: float) -> None:
             budget=HOOK_SCAN_MAX,
             clock=clock,
             sleep=sleep,
+            home=home,
             final=final,
             close=True,
             resolve=False,
@@ -319,7 +325,7 @@ def _on_hook(call: HookCall, deadline: float) -> None:
     with locked(path, deadline, clock, sleep):
         state = _load(path)
     state.update(name=name, events=events, store=store, workdir=call.workdir, sid=call.sid)
-    _resolve(state)  # walks the client's sessions tree: never under the lock
+    _resolve(state, home)  # walks the client's sessions tree: never under the lock
     turn_id, now = _text(payload.get("turn_id")) or None, time.time()
     prompt = _normalized(_text(payload.get("prompt")))
     with locked(path, deadline, clock, sleep):
@@ -336,7 +342,8 @@ def _on_hook(call: HookCall, deadline: float) -> None:
             turn["count"] += 1
             current["steers"] = [*current["steers"], steer][-PENDING_MAX:]
         else:
-            start = _size(current["rollout"]) if current["rollout"] else 0
+            rollout = _rollout(current["rollout"]) if current["rollout"] else None
+            start = session_size(home, rollout) if rollout else 0
             current["turn"] = _turn(
                 open_=True, turn_id=turn_id, since=now, start=start, prompt=prompt
             )
