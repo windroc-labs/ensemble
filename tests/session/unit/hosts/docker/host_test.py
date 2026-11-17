@@ -22,8 +22,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session.engine import daemon
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
@@ -41,14 +43,12 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
-from ensemble.session.hosts.docker import daemon
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
     TIMEOUT,
     BrokerError,
     client_keys,
 )
-from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.hosts.docker.host import (
     FILES_STAGE,
     KEPT_RETRY,

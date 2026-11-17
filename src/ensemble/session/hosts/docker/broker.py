@@ -15,8 +15,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
 
+from ensemble.session.engine.daemon import TARGET, ssh_agent
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker.daemon import TARGET, ssh_agent
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 

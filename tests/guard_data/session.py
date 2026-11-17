@@ -206,7 +206,7 @@ EMBEDDED_PROGRAMS_ALLOWED = {
 }
 
 
-EMBEDDED_PROGRAM_ARGV_RETURNS = {"ensemble.session.hosts.docker.daemon.docker_call": 0}
+EMBEDDED_PROGRAM_ARGV_RETURNS = {"ensemble.session.engine.daemon.docker_call": 0}
 
 
 # (path under SESSION_SRC, word): a role name the session uses as a plain word

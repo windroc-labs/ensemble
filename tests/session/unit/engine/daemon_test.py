@@ -1,4 +1,4 @@
-"""hosts/docker/daemon.py: the capped run, over fake processes; the Docker target and its docker command line."""
+"""engine/daemon.py: the capped run, over fake processes; the Docker target and its docker command line."""
 
 import contextlib
 import os
@@ -6,9 +6,9 @@ import re
 import threading
 from unittest import mock
 
+from ensemble.session.engine import daemon
+from ensemble.session.engine.daemon import OUT_MAX, Overflow, capped
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker import daemon
-from ensemble.session.hosts.docker.daemon import OUT_MAX, Overflow, capped
 from tests.session.case import Case
 from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired

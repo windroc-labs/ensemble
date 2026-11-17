@@ -3,7 +3,8 @@
 import os
 from unittest import mock
 
-from ensemble.session.hosts.docker import daemon, mounts
+from ensemble.session.engine import daemon
+from ensemble.session.hosts.docker import mounts
 from tests.session.case import Case
 
 HOME = "/Users/example"
