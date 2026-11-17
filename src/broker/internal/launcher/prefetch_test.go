@@ -27,7 +27,6 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 func prefetchManifest(t *testing.T, h Host, edit func(map[string]any)) string {
 	t.Helper()
 	return editedManifest(t, func(f map[string]any) {
-		f["claude_dir"] = ClientHomes + "/claude"
 		f["prefetch"] = map[string]any{"repo": "acme/app", "ref": "main"}
 		if edit != nil {
 			edit(f)
@@ -123,7 +122,7 @@ func TestPrefetchRacingCreate(t *testing.T) {
 	w := &world{labels: goodLabels(), otherNonce: true, state: "matching"}
 	h, d, tokens := prefetchHost(t, w)
 	h.GitHub.(*fakeTokens).prefetch = errors.New("must not run")
-	if _, err := h.Start(context.Background(), prefetchManifest(t, h, nil)); err != nil {
+	if _, err := h.Start(context.Background(), prefetchManifest(t, h, func(f map[string]any) { f["state"] = "keep" })); err != nil {
 		t.Fatal(err)
 	}
 	if run, _ := helperRun(d); run != nil || hasCall(d, "volume rm") || slices.Contains(d.verbs(), "run --rm") {

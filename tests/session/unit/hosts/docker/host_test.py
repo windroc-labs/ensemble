@@ -753,7 +753,7 @@ class StartTest(StartBase):
         manifest = os.path.join(self.state, f"{GEN}.json")
         ps = ["ps", "-a", "--filter", "label=ensemble.session", "--format"]
         self.assertEqual(
-            [step if isinstance(step, str | tuple) else step[:5] for step in self.order][:11],
+            [step if isinstance(step, str | tuple) else step[:5] for step in self.order][:8],
             [
                 ps,
                 ps,
@@ -761,9 +761,6 @@ class StartTest(StartBase):
                 "version",
                 ("build", REPO),
                 ["volume", "ls", "--filter", "label=ensemble.kind", "--format"],
-                ["ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=w"],
-                ["volume", "ls", "--filter", "name=ensemble-state-w", "--format"],
-                ["volume", "rm", "ensemble-state-w"],
                 ("start", manifest, client_keys(REPO)),
                 "guard",
             ],
@@ -780,6 +777,7 @@ class StartTest(StartBase):
                     "image": IMAGE,
                     "cwd": self.cwd,
                     "workspace": "ensemble-ws-w",
+                    "state": "new",
                     "client": "agent",
                     "agent_dir": self.home_dir,
                     "hook_path": os.path.join(REPO, "bin", "ensemble-session"),
@@ -817,32 +815,30 @@ class StartTest(StartBase):
         "home_persistent": '["sessions"]',
     }
 
-    def test_a_new_start_drops_its_readers_and_state_volume_before_the_broker(self):
+    def state_calls(self):
+        """The docker calls this process made on state volumes or their readers."""
+        return [
+            o
+            for o in self.order
+            if isinstance(o, list)
+            and (o[:1] == ["rm"] or o[:2] == ["volume", "rm"] or any("state" in a for a in o))
+        ]
+
+    def manifest_state(self):
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            return json.load(f)["state"]
+
+    def test_a_new_start_asks_the_broker_for_a_new_state_volume(self):
         self.docker.readers = ["r1", "r2"]
         self.start()
-        steps = [o for o in self.order if isinstance(o, list) or o[0] == "start"]
-        listed = ["ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=w"]
-        removed, dropped = ["rm", "--force", "r1", "r2"], ["volume", "rm", "ensemble-state-w"]
-        start = next(n for n, o in enumerate(steps) if isinstance(o, tuple))
-        self.assertLess(steps.index(listed), steps.index(removed))
-        self.assertLess(steps.index(removed), steps.index(dropped))
-        self.assertLess(steps.index(dropped), start)
+        self.assertEqual(self.manifest_state(), "new")
+        self.assertEqual(self.state_calls(), [])
 
-    def test_an_absent_state_volume_is_dropped_already(self):
-        self.docker.states = {"ensemble-state-wx"}
-        self.start()
-        self.assertNotIn(["volume", "rm", "ensemble-state-wx"], self.order)
-        self.assertNotIn(["volume", "rm", "ensemble-state-w"], self.order)
-        self.assertIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
-
-    def test_a_state_volume_it_cannot_drop_fails_the_start_before_the_broker(self):
-        self.docker.volume_rm = (1, "", "Error response from daemon: volume is in use\n")
-        with self.assertRaisesRegex(
-            SessionError,
-            "^docker session w: cannot reset its client state: Error response from daemon: volume is in use$",
-        ):
+    def test_a_failed_new_start_leaves_state_volumes_to_the_broker(self):
+        self.broker.error = BrokerError(10, "start_failed", "boom", "not_needed", None)
+        with self.assertRaises(BrokerError):
             self.start()
-        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+        self.assertEqual(self.state_calls(), [])
 
     def test_a_daemon_it_cannot_list_fails_a_new_start_before_the_broker(self):
         self.docker.down = True
@@ -865,7 +861,8 @@ class StartTest(StartBase):
     def test_a_resume_keeps_the_state_volume(self):
         self.history()
         self.start(resume="1")
-        self.assertNotIn(["volume", "rm", "ensemble-state-w"], self.order)
+        self.assertEqual(self.manifest_state(), "keep")
+        self.assertEqual(self.state_calls(), [])
 
     def test_every_start_records_its_daemon_before_its_checks(self):
         for resume in ("0", "1"):
@@ -2842,9 +2839,6 @@ class DaemonChoiceTest(StartBase):
                     *("volume", "ls", "--filter", "label=ensemble.kind", "--format"),
                     '{{.Name}}\t{{.Label "ensemble.workspace"}}',
                 ],
-                ["ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=w"],
-                ["volume", "ls", "--filter", "name=ensemble-state-w", "--format", "{{.Name}}"],
-                ["volume", "rm", "ensemble-state-w"],
             ],
         )
         self.assertEqual([call for call, _ in self.docker.calls], [ps, ps, ps])

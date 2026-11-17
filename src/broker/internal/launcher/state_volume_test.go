@@ -60,21 +60,53 @@ func TestStateVolumeCreatedWithAgentDirs(t *testing.T) {
 	}
 }
 
+func keptState(t *testing.T) string {
+	return editedManifest(t, func(f map[string]any) { f["state"] = "keep" })
+}
+
 func TestExistingStateVolumeIsUsedAsIs(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels(), state: "matching"}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
+	h, d := startHost(&world{labels: goodLabels(), state: "matching", readers: "r1\n"}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), keptState(t)); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range d.calls {
-		if strings.Join(c[:2], " ") == "volume create" && c[len(c)-1] == stateVol || slices.Contains(c, "/bin/mkdir") {
+		if strings.Join(c[:2], " ") == "volume create" && c[len(c)-1] == stateVol || slices.Contains(c, "/bin/mkdir") ||
+			slices.Equal(c, []string{"volume", "rm", stateVol}) || c[0] == "rm" && slices.Contains(c, "r1") {
 			t.Fatalf("touched an existing state volume: %q", c)
 		}
+	}
+	if !called(d, []string{"volume", "inspect", "--format", "{{json .Labels}}", stateVol}) {
+		t.Fatalf("no inspect of %s: %q", stateVol, d.calls)
+	}
+}
+
+func TestNewStateReplacesTheVolume(t *testing.T) {
+	h, d := startHost(&world{labels: goodLabels(), state: "matching", readers: "r1\nr2\n"}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
+		t.Fatal(err)
+	}
+	helpers := stateHelpers("claude")
+	order := [][]string{
+		{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=worker_1"},
+		{"rm", "--force", "r1", "r2"},
+		{"volume", "rm", stateVol},
+		{"volume", "create", "--label", "ensemble.state=worker_1", "--label", "ensemble.state-owner=1001:1002", stateVol},
+		helpers[0], helpers[1],
+	}
+	at := 0
+	for _, c := range d.calls {
+		if at < len(order) && slices.Equal(c, order[at]) {
+			at++
+		}
+	}
+	if at != len(order) {
+		t.Fatalf("call %q missing or out of order in %q", order[at], d.calls)
 	}
 }
 
 func TestForeignStateVolumeIsRejected(t *testing.T) {
 	h, d := startHost(&world{labels: goodLabels(), state: "foreign"}, &fakeCreds{})
-	_, err := h.Start(context.Background(), validManifest(t))
+	_, err := h.Start(context.Background(), keptState(t))
 	e := protoErr(t, err)
 	if e.Code != protocol.MountRejected || !strings.Contains(e.Message, stateVol) || detached(d) != nil || called(d, []string{"volume", "rm", stateVol}) {
 		t.Fatalf("%+v %q", e, d.verbs())
@@ -96,7 +128,7 @@ func TestFailedStartRemovesTheStateVolumeItCreated(t *testing.T) {
 		t.Fatalf("%v %q", err, d.verbs())
 	}
 	h, d = startHost(&world{labels: goodLabels(), runErr: errors.New("boom"), state: "matching"}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err == nil || called(d, []string{"volume", "rm", stateVol}) {
+	if _, err := h.Start(context.Background(), keptState(t)); err == nil || called(d, []string{"volume", "rm", stateVol}) {
 		t.Fatalf("removed a state volume it did not create: %v %q", err, d.verbs())
 	}
 }

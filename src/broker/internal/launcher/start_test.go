@@ -81,6 +81,7 @@ type world struct {
 	volumeRmErr     error
 	prefetchErr     error  // the prefetch helper's run
 	state           string // the state volume: "" absent, "matching" or "foreign"
+	readers         string // the state volume's reader containers, one per line
 	stateHelperErr  error  // the state volume's chown or mkdir helper
 }
 
@@ -114,6 +115,9 @@ func (w *world) docker() *fakeDocker {
 			}
 			return []byte(`"` + testDaemon + `"` + "\n"), w.daemonErr
 		case "ps --all":
+			if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "label="+readerLabel+"=") }) {
+				return []byte(w.readers), nil
+			}
 			if w.proxies != nil {
 				return []byte(*w.proxies), w.egressErr
 			}
@@ -465,7 +469,7 @@ func TestStartVolume(t *testing.T) {
 		t.Fatalf("absent: %v %q", err, d.calls)
 	}
 	h, d = startHost(&world{labels: goodLabels(), volume: "matching", state: "matching"}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil || hasCall(d, "volume create") || hasCall(d, "run --rm") || detached(d) == nil {
+	if _, err := h.Start(context.Background(), keptState(t)); err != nil || hasCall(d, "volume create") || hasCall(d, "run --rm") || detached(d) == nil {
 		t.Fatalf("matching: %v %q", err, d.verbs())
 	}
 	if mount := "type=volume,source=" + volume + ",target=" + home + "/src/project,volume-nocopy"; !slices.Contains(detached(d), mount) {
@@ -535,14 +539,14 @@ func TestStartOrder(t *testing.T) {
 		steps = append(steps, step)
 	}
 	wantSteps := []string{"info --format", "ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
-		"volume inspect", "volume create", "volume inspect", "run --rm", "run --rm", "run --detach", "bootstrap", "hook", "credentials"}
+		"ps --all", "volume rm", "volume inspect", "volume create", "volume inspect", "run --rm", "run --rm", "run --detach", "bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, Python, "-I", credentialBatch}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot := d.calls[17]
+	boot := d.calls[slices.Index(steps, "bootstrap")]
 	if !slices.Equal(boot[8:11], []string{"claude", ClientHomes + "/claude", home + "/src/project"}) {
 		t.Fatalf("bootstrap %q", boot)
 	}
@@ -738,7 +742,7 @@ func TestManifestUnreadable(t *testing.T) {
 
 func TestHookUnderUncleanCWD(t *testing.T) {
 	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","daemon":"` + testDaemon + `","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + ClientHomes + `/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","state":"new","claude_dir":"` + ClientHomes + `/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {

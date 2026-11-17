@@ -24,7 +24,7 @@ func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string, force bo
 		if !isSession {
 			return nil
 		}
-		return h.removeStateVolume(ctx, d, session)
+		return h.removeStateVolume(ctx, d, session, protocol.WorkspaceFailed)
 	}
 	labels, err := h.volumeLabels(ctx, d, volume)
 	if docker.Absent(err) {

@@ -234,6 +234,13 @@
         "workspace": {
           "$ref": "#/$defs/workspace"
         },
+        "state": {
+          "$comment": "new: the start replaces the session's state volume; keep: it reuses it.",
+          "enum": [
+            "new",
+            "keep"
+          ]
+        },
         "claude_dir": {
           "$ref": "#/$defs/path"
         },
@@ -323,6 +330,7 @@
         "image",
         "cwd",
         "workspace",
+        "state",
         "labels",
         "client"
       ],

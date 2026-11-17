@@ -27,7 +27,6 @@ from ensemble.session.engine import client_state
 from ensemble.session.engine.daemon import (
     CLEARED,
     RUN_TIMEOUT,
-    STATE_READER_LABEL,
     attach_env,
     capped,
     client_home,
@@ -235,7 +234,7 @@ def _state_file(name: str) -> str:
 
 
 def _check_history(name: str, home: str, client: str, transcript: str) -> None:
-    """A resume's native history, read from the state volume with no container running."""
+    """A resume's history in the state volume."""
     missing = f"docker session {name}: no native history to resume in {home}"
     try:
         path = client_state.home_path(home, os.path.join(home, transcript))
@@ -928,47 +927,6 @@ class DockerHost(Host):
             return self._resumed(name)
         return None
 
-    def _drop_state(self, name: str, daemon: Daemon) -> None:
-        """A new start's empty client home: its readers and state volume go."""
-        why = f"docker session {name}: cannot reset its client state"
-        listed = self._state_call(
-            why,
-            "ps",
-            "--all",
-            "--quiet",
-            "--filter",
-            f"label={STATE_READER_LABEL}={name}",
-            daemon=daemon,
-        )
-        if readers := listed.split():
-            self._state_call(why, "rm", "--force", *readers, daemon=daemon)
-        volume = state_volume(name)
-        found = self._state_call(
-            why,
-            "volume",
-            "ls",
-            "--filter",
-            f"name={volume}",
-            "--format",
-            "{{.Name}}",
-            daemon=daemon,
-        )
-        if volume in found.split():
-            self._state_call(why, "volume", "rm", volume, daemon=daemon)
-
-    def _state_call(self, why: str, *args: str, daemon: Daemon) -> str:
-        argv, env = docker_call(self.docker, *args, daemon=daemon)
-        try:
-            result = self.run(argv, env, timeout=RUN_TIMEOUT)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise SessionError(f"{why}: {error}") from None
-        if result.returncode:
-            lines = (result.stderr or "").strip().splitlines()
-            raise SessionError(
-                f"{why}: {lines[-1] if lines else f'exit status {result.returncode}'}"
-            )
-        return result.stdout
-
     def _move_workspace(self, name: str, volume: str, cwd: str, daemon: Daemon) -> None:
         """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
         anchor = next((a for v, a in self._workspaces(daemon) or () if v == volume), cwd)
@@ -1045,7 +1003,6 @@ class DockerHost(Host):
                 )
         if resume == "0":
             self._move_workspace(name, volume, cwd, daemon)
-            self._drop_state(name, daemon)
         seeds = {os.path.join(home, f): text for f, text in files.items()} if resume == "0" else {}
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
@@ -1057,6 +1014,7 @@ class DockerHost(Host):
             image=image,
             cwd=cwd,
             workspace=volume,
+            state="new" if resume == "0" else "keep",
             home=(field, home),
             hook_path=hook,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),

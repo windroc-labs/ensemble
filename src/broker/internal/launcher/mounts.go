@@ -250,8 +250,19 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	return true, nil
 }
 
+// A manifest's state: new replaces the session's state volume and its readers, keep reuses the volume.
+const (
+	stateNew  = "new"
+	stateKeep = "keep"
+)
+
 func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
 	v := volumesOf(m.Name).State
+	if m.State == stateNew {
+		if err := h.removeStateVolume(ctx, d, m.Name, protocol.StartFailed); err != nil {
+			return false, err
+		}
+	}
 	labels, err := h.volumeLabels(ctx, d, v)
 	created = docker.Absent(err)
 	l := info.Config.Labels
@@ -289,20 +300,20 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 	return true, nil
 }
 
-// removeStateVolume removes the readers first: they mount the volume.
-func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string) error {
+// removeStateVolume removes the readers first: they mount the volume. Its failures are code's.
+func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string, code protocol.Code) error {
 	v := volumesOf(name).State
 	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
 	if err != nil {
-		return failure(err, protocol.WorkspaceFailed, "Cannot list the readers of "+v+".")
+		return failure(err, code, "Cannot list the readers of "+v+".")
 	}
 	if readers := strings.Fields(string(out)); len(readers) > 0 {
 		if _, err := d.Runner.Run(ctx, append([]string{"rm", "--force"}, readers...), nil); err != nil {
-			return failure(err, protocol.WorkspaceFailed, "Removing the readers of "+v+" failed.")
+			return failure(err, code, "Removing the readers of "+v+" failed.")
 		}
 	}
 	if _, err := d.Runner.Run(ctx, []string{"volume", "rm", v}, nil); err != nil && !docker.Absent(err) {
-		return diagnosed(err, protocol.WorkspaceFailed, "Deleting volume "+v+" failed.")
+		return diagnosed(err, code, "Deleting volume "+v+" failed.")
 	}
 	return nil
 }

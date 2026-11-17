@@ -231,6 +231,7 @@ class DockerBrokerProtocol(Case):
             "image",
             "cwd",
             "workspace",
+            "state",
             "claude_dir",
             "client",
             "codex_dir",
@@ -238,5 +239,6 @@ class DockerBrokerProtocol(Case):
             "labels",
         ):
             self.assertFalse(found[f"manifest-missing-{field}"]["valid"])
+        self.assertFalse(found["manifest-bad-state"]["valid"])
         self.assertFalse(found["manifest-unknown-field"]["valid"])
         self.assertTrue(found["manifest-no-hook"]["valid"])
