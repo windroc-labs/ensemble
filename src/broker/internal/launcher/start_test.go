@@ -81,8 +81,9 @@ type world struct {
 	volumeRmErr     error
 	prefetchErr     error  // the prefetch helper's run
 	state           string // the state volume: "" absent, "matching" or "foreign"
-	readers         string // the state volume's reader containers, one per line
-	stateHelperErr  error  // the state volume's chown or mkdir helper
+	readers         string // reader container IDs
+	readersErr      error
+	stateHelperErr  error // the state volume's chown or mkdir helper
 }
 
 func (w *world) docker() *fakeDocker {
@@ -116,7 +117,7 @@ func (w *world) docker() *fakeDocker {
 			return []byte(`"` + testDaemon + `"` + "\n"), w.daemonErr
 		case "ps --all":
 			if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "label="+readerLabel+"=") }) {
-				return []byte(w.readers), nil
+				return []byte(w.readers), w.readersErr
 			}
 			if w.proxies != nil {
 				return []byte(*w.proxies), w.egressErr

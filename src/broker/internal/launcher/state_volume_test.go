@@ -104,6 +104,23 @@ func TestNewStateReplacesTheVolume(t *testing.T) {
 	}
 }
 
+func TestNewStateThatCannotRemoveItsReadersFailsTheStart(t *testing.T) {
+	for name, w := range map[string]*world{
+		"list": {labels: goodLabels(), state: "matching", readersErr: errors.New("boom")},
+		"rm":   {labels: goodLabels(), state: "matching", readers: "r1\n", rmErr: errors.New("boom")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, d := startHost(w, &fakeCreds{})
+			_, err := h.Start(context.Background(), validManifest(t))
+			e := protoErr(t, err)
+			if e.Code != protocol.StartFailed || !strings.Contains(e.Message, "readers of "+stateVol) || called(d, []string{"volume", "rm", stateVol}) ||
+				detached(d) != nil {
+				t.Fatalf("%+v %q", e, d.verbs())
+			}
+		})
+	}
+}
+
 func TestForeignStateVolumeIsRejected(t *testing.T) {
 	h, d := startHost(&world{labels: goodLabels(), state: "foreign"}, &fakeCreds{})
 	_, err := h.Start(context.Background(), keptState(t))
