@@ -352,6 +352,21 @@ class ResponseTest(Case):
         )
         self.assertEqual(started.daemon, data("start-output-old-style-daemon")["daemon"])
 
+    def test_a_start_reply_without_a_usable_daemon_is_refused(self):
+        for case in (
+            "start-output-missing-daemon",
+            "start-output-daemon-path",
+            "start-output-daemon-empty",
+        ):
+            with (
+                self.subTest(case=case),
+                self.assertRaisesRegex(SessionError, "bad response to start"),
+            ):
+                Broker(FakeBroker((0, json.dumps(data(case)), ""))).start(MANIFEST, clients=KEYS)
+        reply = {**data("start-output"), "daemon": "a" * 129}
+        with self.assertRaisesRegex(SessionError, "bad response to start: fields"):
+            Broker(FakeBroker((0, json.dumps(reply), ""))).start(MANIFEST, clients=KEYS)
+
     def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached"))
         Broker(fake).build("/opt/ensemble")

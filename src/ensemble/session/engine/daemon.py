@@ -138,7 +138,7 @@ def daemon_id(docker: str, host: str, *, run=None) -> str:
         lines = done.stderr.strip().splitlines()
         last = lines[-1] if lines else f"exit status {done.returncode}"
         why = "unreachable: " if unreachable(done.stderr) else ""
-        raise SessionError(f"Docker target {host}: {why}{last}")
+        raise SessionError(f"Docker target {host}: {why}{last!r:.80}")
     try:
         found = json.loads(done.stdout)
     except ValueError:

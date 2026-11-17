@@ -566,18 +566,19 @@ class DockerHost(Host):
 
     def remove_workspaces(self, cwd: str) -> list[str]:
         """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
-        A session at cwd whose state is on another daemon refuses before any removal.
+        With none here, a session at cwd whose state is on another daemon refuses.
         """
         rows = self._workspaces()
         if rows is None:
             raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
         anchor, removed = os.path.realpath(cwd), []
-        sessions = _sessions_at(anchor)
-        current = self._current(sessions[0]) if sessions else None
-        for name in sessions:
-            if why := self._refusal(name, "reclaim", current):
-                raise SessionError(why)
-        for volume in sorted(v for v, a in rows if a == anchor):
+        volumes = sorted(v for v, a in rows if a == anchor)
+        if not volumes and (sessions := _sessions_at(anchor)):
+            current = self._current(f"host {self.name}")
+            for name in sessions:
+                if why := self._refusal(name, "reclaim", current):
+                    raise SessionError(why)
+        for volume in volumes:
             try:
                 if self.broker.workspace_rm(volume, force=True):
                     removed.append(volume)
@@ -754,13 +755,15 @@ class DockerHost(Host):
             )
         return hook, root, built
 
-    def _current(self, name: str) -> DockerAccess:
-        """The current target and its daemon's ID, looked up now: an address may reach another daemon later."""
+    def _current(self, subject: str) -> DockerAccess:
+        """The current target and its daemon's ID, looked up now: an address may reach another
+        daemon later. A failure names `subject`, what the lookup is for.
+        """
         host = endpoint()
         try:
             return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
         except SessionError as error:
-            raise SessionError(f"docker session {name}: {error}") from None
+            raise SessionError(f"{subject}: {error}") from None
 
     def _refusal(self, name: str, action: str, current: DockerAccess) -> str | None:
         """Why session `name` cannot `action` here: its state is on another daemon than the current
@@ -788,7 +791,7 @@ class DockerHost(Host):
 
     def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
         if (metadata or {}).get("resume") == "1":
-            self._check_target(name, self._current(name))
+            self._check_target(name, self._current(f"docker session {name}"))
 
     def _check_target(self, name: str, current: DockerAccess) -> None:
         if why := self._refusal(name, "resume", current):
@@ -871,7 +874,7 @@ class DockerHost(Host):
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
-        current = self._current(name)
+        current = self._current(f"docker session {name}")
         if resume == "1":
             self._check_target(name, current)
         try:

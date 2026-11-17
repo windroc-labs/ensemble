@@ -75,7 +75,10 @@ name=<name> client=<client>
   from="$HOME/.ensemble/docker-state/$name/$client"
   [ -d "$from" ]
   [ ! -L "$from" ]
-  if docker volume inspect "ensemble-state-$name" >/dev/null 2>&1; then exit 1; fi  # a new start made one
+  if docker volume inspect "ensemble-state-$name" >/dev/null 2>&1; then
+    echo "ensemble-state-$name exists: a start since the upgrade made it; copy nothing over it" >&2
+    exit 1
+  fi
   image=$(docker image ls --filter reference=ensemble-worker --format '{{.Repository}}:{{.Tag}}' | head -n 1)
   owner=$(docker image inspect --format \
     '{{index .Config.Labels "ensemble.agent-uid"}}:{{index .Config.Labels "ensemble.agent-gid"}}' "$image")

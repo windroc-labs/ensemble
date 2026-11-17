@@ -5,8 +5,8 @@ import errno
 import json
 import os
 import re
-import subprocess
 import threading
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine import daemon
@@ -16,6 +16,10 @@ from ensemble.utils import DOCKER_STATE
 from tests.session.case import Case
 from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
+
+
+def _done(returncode, stdout, stderr):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 class CappedTest(Case):
@@ -157,9 +161,7 @@ class DaemonIdentityTest(Case):
         wrapper.__enter__()
         self.addCleanup(wrapper.__exit__, None, None, None)
         self.calls = []
-        self.result = subprocess.CompletedProcess(
-            [], 0, '"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"\n', ""
-        )
+        self.result = _done(0, '"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"\n', "")
 
     def run_docker(self, argv, env, *, timeout):
         self.calls.append(argv)
@@ -176,7 +178,7 @@ class DaemonIdentityTest(Case):
         )
 
     def test_an_old_style_id_is_usable(self):
-        self.result = subprocess.CompletedProcess([], 0, '"ABCD:EFGH:IJKL:MNOP"\n', "")
+        self.result = _done(0, '"ABCD:EFGH:IJKL:MNOP"\n', "")
         self.assertEqual(
             daemon.daemon_id("/bin/docker", "ssh://pc", run=self.run_docker), "ABCD:EFGH:IJKL:MNOP"
         )
@@ -184,15 +186,15 @@ class DaemonIdentityTest(Case):
     def test_daemon_id_failures_name_the_target(self):
         for result, why in (
             (
-                subprocess.CompletedProcess([], 1, "", "error during connect: refused\n"),
+                _done(1, "", "error during connect: refused\n"),
                 "unreachable",
             ),
-            (subprocess.CompletedProcess([], 1, "", "permission denied\n"), "permission denied"),
-            (subprocess.CompletedProcess([], 0, "ABCD\n", ""), "no usable daemon ID"),
-            (subprocess.CompletedProcess([], 0, '"../x"\n', ""), "no usable daemon ID"),
-            (subprocess.CompletedProcess([], 0, '""\n', ""), "no usable daemon ID"),
+            (_done(1, "", "permission denied\n"), "permission denied"),
+            (_done(0, "ABCD\n", ""), "no usable daemon ID"),
+            (_done(0, '"../x"\n', ""), "no usable daemon ID"),
+            (_done(0, '""\n', ""), "no usable daemon ID"),
             (
-                subprocess.CompletedProcess([], 0, '"' + "a" * 129 + '"\n', ""),
+                _done(0, '"' + "a" * 129 + '"\n', ""),
                 "no usable daemon ID",
             ),
             (TimeoutExpired(["docker"], 10), "timed out"),

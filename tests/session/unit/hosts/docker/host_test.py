@@ -781,7 +781,7 @@ class StartTest(StartBase):
     def test_no_daemon_fails_a_new_start_before_the_broker(self):
         self.docker.down = True
         with self.assertRaisesRegex(
-            SessionError, "^docker session w: Docker target unix://.*: unreachable: Cannot connect"
+            SessionError, "^docker session w: Docker target unix://.*: unreachable: 'Cannot connect"
         ):
             self.start()
         self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
@@ -2273,8 +2273,13 @@ class RemoveWorkspacesTest(Base):
         self.addCleanup(wrapper.__exit__, None, None, None)
         self.docker.ep, self.docker.daemons["ssh://u@pc"] = "ssh://u@pc", "PC-DAEMON"
 
+    def nothing_here(self):
+        """The current target holds no workspace of the agent cwd."""
+        self.docker.volumes = [v for v in self.docker.volumes if self.agent not in v]
+
     def test_reclaim_of_another_daemons_session_is_refused(self):
         self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))
+        self.nothing_here()
         with self.assertRaisesRegex(
             SessionError,
             "^docker session pm-TASK-1-1a2b3c4d: cannot reclaim it here: its Docker target is"
@@ -2289,6 +2294,7 @@ class RemoveWorkspacesTest(Base):
         local = self.ep
         self.session("pm-TASK-1-1a2b3c4d", self.agent)
         self.remote()
+        self.nothing_here()
         with self.assertRaisesRegex(
             SessionError,
             "cannot reclaim it here: its Docker target is the local Docker Desktop"
@@ -2296,6 +2302,15 @@ class RemoveWorkspacesTest(Base):
         ):
             self.host.remove_workspaces(self.agent)
         self.assertEqual(self.removals(), [])
+
+    def test_reclaim_with_sessions_of_both_daemons_at_the_cwd_removes_the_current_ones(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
+        self.session("reviewer-aaaa", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            removed, ["ensemble-ws-engineer-TASK-1-0b6f2c1e", "ensemble-ws-pm-TASK-1-1a2b3c4d"]
+        )
+        self.assertEqual(self.docker.infos, [])
 
     def test_reclaim_on_the_same_daemon_removes(self):
         self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
