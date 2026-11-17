@@ -71,12 +71,12 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					return map[string]any{"container": container, "removed": true, "count": int64(9007199254740993)}, operationErr
 				}
 				step := func(context.Context, keys, string, io.Writer) (any, error) { return withAudit(rec, f) }
-				a := app{start: step, close: func(ctx context.Context, _ keys, c string, _ bool) (any, error) {
+				a := app{start: step, close: func(ctx context.Context, _ keys, c, _ string) (any, error) {
 					return step(ctx, keys{}, c, nil)
 				}, maintain: func(ctx context.Context, _ keys, c, _ string, _ bool) (any, error) {
 					return step(ctx, keys{}, c, nil)
 				}}
-				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}}[command]
+				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container, "--daemon", "D1"}}[command]
 				code, out, errOut := invoke(a, args...)
 				wire := out
 				if failed {

@@ -88,7 +88,7 @@ func TestLinearStartAndRollback(t *testing.T) {
 				if result.Container == "" {
 					t.Fatal("no container")
 				}
-				if _, err := h.Close(context.Background(), h.Daemons[0], result.Container); err != nil {
+				if _, err := closeOn(h, result.Container); err != nil {
 					t.Fatal(err)
 				}
 				if !slices.Contains(f.calls, "revoke") {
@@ -146,7 +146,7 @@ func TestLinearCloseIncludesStartupDelivery(t *testing.T) {
 		return nil, nil
 	}}
 	h := Host{Daemons: one(d), GitHub: &fakeTokens{}, Linear: f}
-	if _, err := h.Close(context.Background(), h.Daemons[0], container); err != nil {
+	if _, err := closeOn(h, container); err != nil {
 		t.Fatal(err)
 	}
 	if held {

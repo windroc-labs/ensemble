@@ -55,8 +55,12 @@ func (h Host) held(ctx context.Context, d Daemon, c string) (kind string, secret
 
 // Close revokes GitHub tokens read from the container, removes the container and its tmpfs, then revokes Linear
 // tokens from its retained record. Container removal proceeds even if reading or revoking GitHub tokens fails.
-func (h Host) Close(ctx context.Context, d Daemon, container string) (CloseResult, error) {
+func (h Host) Close(ctx context.Context, daemon, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)
+	d, _, err := h.find(ctx, daemon, protocol.CloseFailed)
+	if err != nil {
+		return CloseResult{}, err
+	}
 	kind, secrets := h.held(ctx, d, container)
 	h.GitHub.Revoke(ctx, container, h.agentRead(d, container))
 	removed, err := h.remove(ctx, d, container)

@@ -65,12 +65,18 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
-	d := h.placed(secretItems(m.Secrets))
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
 	h.Audit.Begin(c, facts)
 	if err := h.checkMounts(m); err != nil {
+		return StartResult{}, err
+	}
+	d, r, err := h.find(ctx, m.Daemon, protocol.StartFailed)
+	if err != nil {
+		return StartResult{}, err
+	}
+	if err := h.localOnly(d, m); err != nil {
 		return StartResult{}, err
 	}
 	px, err := h.checkProxy(ctx, d, m.Gateway)
@@ -139,11 +145,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, failure(err, protocol.StartFailed, "Cannot check for container "+c+".")
 		}
 		return StartResult{}, taken(c)
-	}
-	// The reply names the daemon the volumes are on, which the caller checks.
-	d, r, err := h.identify(ctx, d, protocol.StartFailed)
-	if err != nil {
-		return StartResult{}, err
 	}
 	lostName := false
 	created, err := h.ensureVolume(ctx, d, m, info)

@@ -657,10 +657,10 @@ class InspectTest(Base):
             ],
         )
 
-    def test_a_malformed_state_access_record_is_unknown(self):
+    def test_a_malformed_daemon_record_is_unknown(self):
         self.configure("pool", probe={"argv": ("probe-cmd", "/x")}, accounts={"default": "/d"})
         spec = dataclasses.replace(self.recorded("pool"), name="w1")
-        path = os.path.join(self.home, ".ensemble", "docker-state", "w1", "state-access.json")
+        path = os.path.join(self.home, ".ensemble", "docker-state", "w1", "daemon.json")
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as f:
             f.write("{")

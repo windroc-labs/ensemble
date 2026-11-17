@@ -26,9 +26,10 @@ from collections.abc import Iterator, Mapping
 from ensemble.session.engine import daemon
 from ensemble.session.engine.types import (
     SESSION_NAME,
-    DockerAccess,
+    DaemonRecord,
     HomePath,
     HomeStore,
+    SessionError,
     StateEntry,
     StateFile,
     StateKind,
@@ -216,10 +217,10 @@ def home_store(fields) -> HomeStore:
 
 
 def recorded_home(name: str | None, client: str) -> HomeStore:
-    """The store a Docker Host picked for session `name` when it recorded the session's state
-    access at start, else local; OSError: a malformed record.
+    """The store a Docker Host picked for session `name` when it recorded the session's daemon
+    at start, else local; OSError: a malformed record.
     """
-    if name is None or not SESSION_NAME.fullmatch(name) or daemon.load_access(name) is None:
+    if name is None or not SESSION_NAME.fullmatch(name) or daemon.load_record(name) is None:
         return LocalHome()
     return VolumeHome(name, client)
 
@@ -396,13 +397,16 @@ class _Reader:
             proc.wait(1)
 
     def _start(self) -> subprocess.Popen:
-        access = daemon.load_access(self.session)
-        if access is None:
-            raise FileNotFoundError(errno.ENOENT, "no Docker state access record", self.session)
+        recorded = daemon.load_record(self.session)
+        if recorded is None:
+            raise FileNotFoundError(errno.ENOENT, "no Docker daemon record", self.session)
         volume = daemon.state_volume(self.session)
-        labels = self._run(access, "volume", "inspect", "--format", "{{json .Labels}}", volume)
-        if labels is None:
+        listed = self._run(
+            recorded, "volume", "ls", "--filter", f"name={volume}", "--format", "{{.Name}}"
+        )
+        if volume not in listed.split():
             raise FileNotFoundError(errno.ENOENT, "no state volume", volume)
+        labels = self._run(recorded, "volume", "inspect", "--format", "{{json .Labels}}", volume)
         try:
             found = json.loads(labels)
         except ValueError:
@@ -414,24 +418,24 @@ class _Reader:
         if not isinstance(user, str) or not OWNER.fullmatch(user):
             raise OSError(errno.EIO, "state volume has no owner", volume)
         listed = self._run(
-            access,
+            recorded,
             *("image", "ls", "--filter", "reference=ensemble-worker"),
             *("--format", "{{.Repository}}:{{.Tag}}"),
         )
-        image = next((ref for ref in (listed or "").split() if IMAGE.fullmatch(ref)), None)
+        image = next((ref for ref in listed.split() if IMAGE.fullmatch(ref)), None)
         if image is None:
             raise OSError(errno.EIO, "no worker image on the Docker target")
         with open(READER, encoding="utf-8") as f:
             program = f.read()
         argv, env = daemon.docker_call(
-            access.docker,
+            recorded.docker,
             *("run", "--rm", "--interactive", "--name", f"ensemble-reader-{secrets.token_hex(8)}"),
             *("--label", f"{daemon.STATE_READER_LABEL}={self.session}", "--log-driver", "none"),
             *("--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"),
             *("--user", user, "--read-only"),
             *("--mount", f"type=volume,source={volume},target=/state,readonly,volume-nocopy"),
             *("--entrypoint", IMAGE_PYTHON, image, "-I", "-c", program, "/state"),
-            host=access.host,
+            daemon=recorded.daemon,
         )
         try:
             pipe, quiet = subprocess.PIPE, subprocess.DEVNULL
@@ -442,17 +446,15 @@ class _Reader:
             raise OSError(errno.EIO, f"state reader: {error}") from None
         return self.proc
 
-    def _run(self, access: DockerAccess, *args: str) -> str | None:
-        """`docker <args>`'s stdout; None when Docker says the volume is absent."""
-        argv, env = daemon.docker_call(access.docker, *args, host=access.host)
+    def _run(self, recorded: DaemonRecord, *args: str) -> str:
+        """`docker <args>`'s stdout."""
         try:
+            argv, env = daemon.docker_call(recorded.docker, *args, daemon=recorded.daemon)
             done = daemon.capped(argv, env)
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except (OSError, subprocess.TimeoutExpired, SessionError) as error:
             raise OSError(errno.EIO, f"docker {args[0]} {args[1]}: {error}") from None
         if done.returncode == 0:
             return done.stdout
-        if "no such volume" in done.stderr.lower():
-            return None
         lines = done.stderr.strip().splitlines()
         raise OSError(errno.EIO, f"docker {args[0]} {args[1]}: {lines[-1] if lines else 'failed'}")
 

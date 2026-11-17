@@ -118,11 +118,14 @@ func (h Host) Maintain(ctx context.Context, container, path string, renew bool) 
 	if err != nil {
 		return MaintainResult{}, err
 	}
-	d := h.placed(secretItems(m.Secrets))
 	if "ensemble-"+m.Name+"-"+m.Generation != container {
 		return MaintainResult{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: maintain needs the container's manifest.")
 	}
 	if err := h.checkMounts(m); err != nil {
+		return MaintainResult{}, err
+	}
+	d, _, err := h.find(ctx, m.Daemon, protocol.InternalError)
+	if err != nil {
 		return MaintainResult{}, err
 	}
 	now := h.now()

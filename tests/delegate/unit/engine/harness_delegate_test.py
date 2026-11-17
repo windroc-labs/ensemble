@@ -481,7 +481,7 @@ class DockerPreflightTest(HarnessCase):
             with self.subTest(mode=mode):
                 self.assertFalse(os.path.exists(self.work))
                 self.create(mode)
-                self.assertEqual(self.calls, ["version", "build"])
+                self.assertEqual(self.calls, ["version", "target", "version", "build"])
                 self.assertTrue(os.path.isdir(Layout(self.work).agent))
                 self.assertTrue(self.metadata()["plan"]["docker"])
                 shutil.rmtree(self.work)
@@ -495,7 +495,7 @@ class DockerPreflightTest(HarnessCase):
         self.failing = True
         with self.assertRaisesRegex(ConfigError, "Example build_failed"):
             self.create("headless")
-        self.assertEqual(self.calls, ["version", "build"])
+        self.assertEqual(self.calls, ["version", "target", "version", "build"])
         self.assertFalse(os.path.exists(self.work))
 
 

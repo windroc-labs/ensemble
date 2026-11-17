@@ -115,7 +115,7 @@ func TestEgressRefusals(t *testing.T) {
 					if at.endpoint != "" && strings.Contains(e.Message, "~/.egress/current/start.sh") {
 						t.Fatalf("remote message %q names the local start command", e.Message)
 					}
-					if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
+					if got := d.afterInfo().verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
 						t.Fatalf("docker calls %q, want %q", got, proxyCalls[:tc.calls])
 					}
 					if len(creds.calls)+len(tokens.calls)+len(keys.calls)+len(env.calls)+codexCreds.ready+codexCreds.injected != 0 {
@@ -209,6 +209,7 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 				if got := networkArgs(run); !slices.Equal(got, []string{workersNetwork}) {
 					t.Fatalf("--network values %q in %q", got, run)
 				}
+				d = d.afterInfo()
 				if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", workersNetwork}) {
 					t.Fatalf("proxy check first: %q", d.verbs())
 				}
@@ -298,7 +299,7 @@ func TestStartOnCallerNetwork(t *testing.T) {
 			t.Fatalf("%s=%q", key, env[key])
 		}
 	}
-	if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", miniOpNetwork}) {
+	if d := d.afterInfo(); !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", miniOpNetwork}) {
 		t.Fatalf("proxy check first: %q", d.calls[:3])
 	}
 }
@@ -341,7 +342,7 @@ func TestEgressRefusalsByKey(t *testing.T) {
 					t.Fatalf("message %q lacks %q", e.Message, want)
 				}
 			}
-			if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) || len(creds.calls) != 0 {
+			if got := d.afterInfo().verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) || len(creds.calls) != 0 {
 				t.Fatalf("docker calls %q, credential calls %q", got, creds.calls)
 			}
 		})

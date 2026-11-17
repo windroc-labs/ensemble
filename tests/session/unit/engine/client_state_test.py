@@ -18,15 +18,16 @@ from unittest import mock
 
 from ensemble.session.engine import client_state, daemon
 from ensemble.session.engine.types import (
-    DockerAccess,
+    Daemon,
+    DaemonRecord,
     HomePath,
     StateEntry,
     StateKind,
     StateStat,
 )
 from tests.session.case import Case
-from tests.session.state_volumes import DOCKER, HOST, IMAGE, serve
-from tests.session.unit.hosts.docker.support import ssh_wrapper
+from tests.session.state_volumes import DOCKER, HOST, IMAGE, LOCAL, serve
+from tests.session.unit.hosts.docker.support import ssh_dir
 
 HOME_DIR = "app"
 OPS = ("read", "stat", "entries", "snapshot")
@@ -433,10 +434,13 @@ class ReaderTest(StateCase):
         self.put("a/t")
         self.assertEqual(self.refused("read", at("a/t")).errno, errno.EIO)
 
-    def test_an_unreachable_daemon_is_refused(self):
-        self.volumes.inspect_error = "Cannot connect to the Docker daemon"
+    def test_any_failing_docker_call_is_refused_whatever_it_says(self):
         self.put("a/t")
-        self.assertEqual(self.refused("read", at("a/t")).errno, errno.EIO)
+        for error in ("Cannot connect to the Docker daemon", "Error: no such volume: x"):
+            with self.subTest(error=error):
+                self.volumes.error = error
+                self.assertEqual(self.refused("read", at("a/t")).errno, errno.EIO)
+                self.assertFalse(self.volumes.readers)
 
     def test_a_reader_that_exited_is_replaced_on_the_next_call(self):
         self.put("a/t", b"abc")
@@ -479,7 +483,7 @@ class ReaderTest(StateCase):
         self.assertEqual(STORE.read(file), b"abc")
 
 
-class AccessRecordTest(Case):
+class DaemonRecordTest(Case):
     def setUp(self):
         self.client = os.path.join(self.ensemble, "docker-state", "s1", HOME_DIR)
         os.makedirs(self.client)
@@ -487,32 +491,55 @@ class AccessRecordTest(Case):
             f.write(b"ok")
         self.volumes = self.enterContext(serve(sessions=()))
 
+    def remote(self, path):
+        found = Daemon("remote", "ssh://pc", remote=True, path=path, id="daemon-a")
+        daemon.save_record("s1", DaemonRecord(found, "/opt/docker"))
+
     def test_calls_use_the_sessions_recorded_docker_and_daemon(self):
-        daemon.save_access("s1", DockerAccess("/opt/docker", "ssh://pc", "daemon-a"))
-        with ssh_wrapper():
-            self.assertEqual(STORE.read(at("t")), b"ok")
-        self.assertTrue(self.volumes.calls)
+        self.remote(f"{ssh_dir(self.home)}{os.pathsep}/usr/bin")
+        self.assertEqual(STORE.read(at("t")), b"ok")
+        self.assertEqual(
+            [call[3:5] for call in self.volumes.calls],
+            [["volume", "ls"], ["volume", "inspect"], ["image", "ls"], ["run", "--rm"]],
+        )
         for call in self.volumes.calls:
             self.assertEqual(call[:3], ["/opt/docker", "--host", "ssh://pc"])
+
+    def test_a_remote_record_without_its_ssh_wrapper_starts_no_process(self):
+        bare = os.path.join(self.home, "bare")
+        os.makedirs(bare)
+        self.remote(f"{bare}{os.pathsep}{ssh_dir(self.home)}")
+        with self.assertRaises(OSError) as caught:
+            STORE.read(at("t"))
+        self.assertEqual(caught.exception.errno, errno.EIO)
+        self.assertIn(f"ssh wrapper unavailable: {bare}/ssh", str(caught.exception))
+        self.assertFalse(self.volumes.calls)
 
     def test_no_record_is_absent(self):
         self.assertIsNone(STORE.read(at("t")))
         self.assertFalse(self.volumes.calls)
 
-    def test_a_malformed_record_is_refused(self):
-        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.ACCESS_FILE)
+    def test_a_malformed_record_is_refused_naming_it_and_never_read_locally(self):
+        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.RECORD_FILE)
+        good = {"name": "local", "id": "daemon-a", "endpoint": HOST, "path": "/usr/bin"}
         for text in (
             "[]",
-            '{"docker": "docker", "host": "unix:///s"}',
-            '{"docker": "/d", "host": "tcp://x:2375"}',
-            '{"docker": "/d", "host": "unix:///s", "extra": "x"}',
             "{",
+            json.dumps({**good, "docker": "docker"}),
+            json.dumps({**good, "docker": "/d", "name": "pc"}),
+            json.dumps({**good, "docker": "/d", "id": "../x"}),
+            json.dumps({**good, "docker": "/d", "endpoint": ""}),
+            json.dumps({**good, "docker": "/d", "extra": "x"}),
+            json.dumps(good),
         ):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
             with self.subTest(text=text), self.assertRaises(OSError) as caught:
                 STORE.read(at("t"))
-            self.assertEqual(caught.exception.errno, errno.EINVAL)
+            self.assertEqual(
+                (caught.exception.errno, caught.exception.filename), (errno.EINVAL, path)
+            )
+        self.assertFalse(self.volumes.calls)
 
 
 class BrokenReplyTest(StateCase):
@@ -808,8 +835,8 @@ class HomeStoreFieldsTest(Case):
 
 
 class RecordedHomeTest(Case):
-    def test_a_docker_access_record_gives_the_sessions_volume(self):
-        daemon.save_access("s1", DockerAccess(DOCKER, HOST, "daemon-a"))
+    def test_a_daemon_record_gives_the_sessions_volume(self):
+        daemon.save_record("s1", DaemonRecord(LOCAL, DOCKER))
         found = client_state.recorded_home("s1", "claude")
         self.assertEqual(found.persisted(), {"kind": "volume", "session": "s1", "client": "claude"})
 
@@ -822,14 +849,14 @@ class RecordedHomeTest(Case):
     def test_an_invalid_name_is_local_even_with_a_record_at_its_path(self):
         os.makedirs(os.path.join(self.ensemble, "docker-state", "a"))
         for name in ("../x", "a/b"):
-            daemon.save_access(name, DockerAccess(DOCKER, HOST, "daemon-a"))
+            daemon.save_record(name, DaemonRecord(LOCAL, DOCKER))
         for name in ("../x", "", "a/b"):
             with self.subTest(name=name):
                 found = client_state.recorded_home(name, "c")
                 self.assertEqual(found.persisted(), {"kind": "local"})
 
     def test_a_malformed_record_is_refused(self):
-        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.ACCESS_FILE)
+        path = os.path.join(self.ensemble, "docker-state", "s1", daemon.RECORD_FILE)
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as f:
             f.write("{")

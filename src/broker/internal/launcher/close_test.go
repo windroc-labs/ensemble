@@ -50,7 +50,7 @@ func TestCloseMakesNoCodexCall(t *testing.T) {
 			return []byte(container + "\n"), removal
 		}}
 		h := Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: &fakeTokens{}, Codex: &fakeCodexCreds{log: &log}}
-		got, err := h.Close(context.Background(), h.Daemons[0], container)
+		got, err := closeOn(h, container)
 		if !slices.Equal(log, []string{"rm"}) {
 			t.Fatalf("calls %q", log)
 		}
@@ -114,16 +114,31 @@ func TestCloseRemovesWhenReadFails(t *testing.T) {
 	}
 }
 
-// closeOn closes container on h's default daemon.
+// closeOn closes container on h's default daemon, which answers its ID query as testDaemon.
 func closeOn(h Host, container string) (CloseResult, error) {
-	return h.Close(context.Background(), h.Daemons[0], container)
+	h.Daemons = slices.Clone(h.Daemons)
+	h.Daemons[0].Runner = identifiedRunner{testDaemon, h.Daemons[0].Runner}
+	return h.Close(context.Background(), testDaemon, container)
+}
+
+// identifiedRunner answers the daemon ID query with id and passes every other call to r.
+type identifiedRunner struct {
+	id string
+	r  docker.Runner
+}
+
+func (i identifiedRunner) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
+	if slices.Equal(args, docker.InfoID) {
+		return []byte(`"` + i.id + `"` + "\n"), nil
+	}
+	return i.r.Run(ctx, args, stdin)
 }
 
 func TestCloseOnLocalDaemon(t *testing.T) {
 	remote := &fakeDocker{}
 	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(container + "\n"), nil }}
-	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, remote, local)
-	got, err := h.Close(context.Background(), h.Daemons[1], container)
+	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
+	got, err := h.Close(context.Background(), localDaemon, container)
 	if err != nil || !got.Removed || len(remote.calls) != 0 || !slices.ContainsFunc(local.calls, func(c []string) bool { return c[0] == "rm" }) {
 		t.Fatalf("%+v %v; remote %q local %q", got, err, remote.calls, local.calls)
 	}
@@ -132,8 +147,8 @@ func TestCloseOnLocalDaemon(t *testing.T) {
 func TestCloseOnUnreachableDaemon(t *testing.T) {
 	remote := &fakeDocker{}
 	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, remote, local)
-	if _, err := h.Close(context.Background(), h.Daemons[1], container); protoErr(t, err).Code != protocol.DockerUnreachable {
+	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, local)
+	if _, err := h.Close(context.Background(), localDaemon, container); protoErr(t, err).Code != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
 	if len(remote.calls) != 0 {

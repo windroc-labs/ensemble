@@ -3,6 +3,7 @@
 package launcher
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -124,57 +126,79 @@ func (h Host) Target(ctx context.Context) TargetResult {
 }
 
 type Host struct {
-	Home     string
-	IsDir    func(string) bool
-	Safe     func(string) error
-	Daemons  []Daemon                    // every configured daemon, the default first; never empty
-	Place    func(items []string) Daemon // the daemon a worker given environment secret items runs on; nil: the default
-	Creds    Credentials
-	Codex    CodexCredentials
-	Opencode ProviderKeys
-	Env      EnvSecrets
-	Schedule Schedule // nil: no token record, as tests without one; every token provider is then always due
-	GitHub   Tokens
-	Linear   LinearTokens
-	Versions CodexVersions
-	Releases Releases                          // nil: a build that must rebuild fails
-	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
-	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
-	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
-	Now      func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
-	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
+	Home      string
+	IsDir     func(string) bool
+	Safe      func(string) error
+	Daemons   []Daemon // every configured daemon, the default first; never empty
+	LocalOnly []string // environment secret items no remote daemon is given
+	Creds     Credentials
+	Codex     CodexCredentials
+	Opencode  ProviderKeys
+	Env       EnvSecrets
+	Schedule  Schedule // nil: no token record, as tests without one; every token provider is then always due
+	GitHub    Tokens
+	Linear    LinearTokens
+	Versions  CodexVersions
+	Releases  Releases                          // nil: a build that must rebuild fails
+	Progress  io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
+	Lock      func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
+	Audit     *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
+	Now       func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
+	Spawn     func() error                      // nil: none; starts check-clients detached, for a build
 }
 
-// Placement is the rule a worker's daemon follows: one given any of localSecrets, environment secret items, runs on
-// the local daemon when another is configured beside it; every other runs on the default, daemons[0].
-func Placement(daemons []Daemon, localSecrets []string) func(items []string) Daemon {
-	return func(items []string) Daemon {
-		if len(daemons) > 1 && slices.ContainsFunc(items, func(item string) bool { return slices.Contains(localSecrets, item) }) {
-			if local, ok := named(daemons, DaemonLocal); ok {
-				return local
-			}
+// ValidDaemon is whether id can name a Docker daemon.
+func ValidDaemon(id string) bool { return daemonPattern.MatchString(id) }
+
+// find is the configured daemon whose ID is id, identified, and its image records; the local Docker Desktop is asked
+// first, so a local ID opens no ssh connection. With no daemon of that ID: the first daemon that could not be
+// identified fails it (an unreachable one docker_unreachable, else code), else docker_unreachable names id and every
+// configured daemon.
+func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, records, error) {
+	order := slices.Clone(h.Daemons)
+	slices.SortStableFunc(order, func(a, b Daemon) int {
+		switch {
+		case a.Remote == b.Remote:
+			return 0
+		case a.Remote:
+			return 1
 		}
-		return daemons[0]
+		return -1
+	})
+	var failed error
+	configured := make([]string, 0, len(order))
+	for _, d := range order {
+		found, r, err := h.identify(ctx, d, code)
+		switch {
+		case err == nil && found.ID == id:
+			return found, r, nil
+		case err == nil:
+			configured = append(configured, d.Name+" "+d.Endpoint+" ("+found.ID+")")
+		default:
+			failed = cmp.Or(failed, err)
+		}
 	}
+	if failed != nil {
+		return Daemon{}, records{}, failed
+	}
+	return Daemon{}, records{}, protocol.Newf(protocol.DockerUnreachable, "Docker daemon %s is not configured; the configured daemons: %s.",
+		id, strings.Join(configured, ", "))
 }
 
-// placed is the daemon a worker given environment secret items runs on.
-func (h Host) placed(items []string) Daemon {
-	if h.Place == nil {
-		return h.Daemons[0]
+// localOnly refuses a start that would give a remote daemon d any of the environment secrets that stay on the local
+// Docker Desktop: the manifest names the daemon, so this rule never trusts its naming, only d.Remote.
+func (h Host) localOnly(d Daemon, m Manifest) error {
+	if !d.Remote {
+		return nil
 	}
-	return h.Place(items)
-}
-
-// Named is the configured daemon called name.
-func (h Host) Named(name string) (Daemon, bool) { return named(h.Daemons, name) }
-
-func named(daemons []Daemon, name string) (Daemon, bool) {
-	i := slices.IndexFunc(daemons, func(d Daemon) bool { return d.Name == name })
-	if i < 0 {
-		return Daemon{}, false
+	for _, s := range m.Secrets {
+		if slices.Contains(h.LocalOnly, s.Item) {
+			return protocol.Newf(protocol.ManifestRejected,
+				"Manifest rejected: environment secret %s stays on the local Docker Desktop (local_secrets in ~/%s); this worker's daemon is %s %s.",
+				s.Item, docker.TargetFile, d.Name, d.Endpoint)
+		}
 	}
-	return daemons[i], true
+	return nil
 }
 
 // secretItems are secrets' keychain items.

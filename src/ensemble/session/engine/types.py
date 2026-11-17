@@ -64,7 +64,10 @@ __all__ = [
     "SessionRow",
     "SessionStatus",
     "Spec",
-    "DockerAccess",
+    "Daemon",
+    "DaemonName",
+    "DaemonRecord",
+    "Target",
     "StateEntry",
     "StateFile",
     "StateKind",
@@ -183,12 +186,36 @@ def _no_files() -> Mapping[str, str]:
     return {}
 
 
-class DockerAccess(NamedTuple):
-    """A session's docker CLI and daemon."""
+class DaemonName(StrEnum):
+    LOCAL = "local"  # the Mac's Docker Desktop
+    REMOTE = "remote"  # the Docker target
 
+
+class Daemon(NamedTuple):
+    """A Docker daemon the broker's target command lists: its ID once reached, else why not."""
+
+    name: str  # "local", the Mac's Docker Desktop, or "remote", the Docker target
+    endpoint: str
+    remote: bool
+    path: str  # the PATH docker runs with to reach it
+    id: str | None = None
+    unreachable: str | None = None
+
+
+class Target(NamedTuple):
+    """The configured daemons, `default` naming the one a new session takes unless its
+    environment names another.
+    """
+
+    default: str
+    daemons: tuple[Daemon, ...]
+
+
+class DaemonRecord(NamedTuple):
+    """The daemon a session's first start chose, and the docker CLI that reaches it."""
+
+    daemon: Daemon
     docker: str
-    host: str
-    daemon: str
 
 
 class StateFile(NamedTuple):

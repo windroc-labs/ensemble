@@ -18,18 +18,18 @@ import (
 )
 
 type Manifest struct {
-	Linear                                                                                      *credential.LinearRequest // the requested role app token and board config; nil without linear
-	Name, Generation, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
-	HasHook                                                                                     bool
-	Labels                                                                                      map[string]string
-	GitHubApp                                                                                   string            // the declared App; "": no github credential
-	GitHubPermissions                                                                           map[string]string // the declared repository permissions; nil without github
-	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
-	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
-	Secrets                                                                                     []Secret          // the merged env request; nil without env
-	Lock, LockOwner                                                                             string            // optional lock name and readable owner
-	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
-	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
+	Linear                                                                                              *credential.LinearRequest // the requested role app token and board config; nil without linear
+	Name, Generation, Daemon, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
+	HasHook                                                                                             bool
+	Labels                                                                                              map[string]string
+	GitHubApp                                                                                           string            // the declared App; "": no github credential
+	GitHubPermissions                                                                                   map[string]string // the declared repository permissions; nil without github
+	OpencodeProviders                                                                                   []string          // the providers whose API keys an opencode container gets
+	ClaudeAccount                                                                                       string            // the account whose setup-token a claude container gets; "" for other clients
+	Secrets                                                                                             []Secret          // the merged env request; nil without env
+	Lock, LockOwner                                                                                     string            // optional lock name and readable owner
+	Gateway                                                                                             string            // the egress proxy's caller network key; workers without the field
+	Prefetch                                                                                            *Prefetch         // the repo cloned into a new workspace; nil without the field
 }
 
 // Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
@@ -125,7 +125,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("%s", err)
 	}
 	var m Manifest
-	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "image": &m.Image,
+	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "daemon": &m.Daemon, "image": &m.Image,
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
 		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
@@ -140,7 +140,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 			return reject("field %q must be a string without control characters", key)
 		}
 	}
-	for _, key := range []string{"name", "generation", "image", "cwd", "workspace", "client", "labels"} {
+	for _, key := range []string{"name", "generation", "daemon", "image", "cwd", "workspace", "client", "labels"} {
 		if _, ok := fields[key]; !ok {
 			return reject("missing field %q", key)
 		}
@@ -162,6 +162,8 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("invalid name")
 	case !generationPattern.MatchString(m.Generation):
 		return reject("invalid generation")
+	case !ValidDaemon(m.Daemon):
+		return reject("invalid daemon")
 	case !imagePattern.MatchString(m.Image):
 		return reject("image must be ensemble-worker:<64 hex>")
 	case m.Workspace != "ensemble-ws-"+m.Name:
