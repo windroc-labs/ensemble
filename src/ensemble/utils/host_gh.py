@@ -209,7 +209,8 @@ def run_child(real: str, argv: list[str], state: str, broker: str, *, every: flo
         os.read(woken, 512)
     stop.set()
     if code < 0:
-        signal.signal(-code, signal.SIG_DFL)
+        if -code != signal.SIGKILL:  # SIGKILL's disposition is fixed: setting it raises
+            signal.signal(-code, signal.SIG_DFL)
         os.kill(os.getpid(), -code)
         sys.exit(128 - code)
     sys.exit(code)

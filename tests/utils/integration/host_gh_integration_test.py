@@ -78,9 +78,11 @@ class HostGhChild(Case):
         self.assertEqual(self.notes(self.broker_log), [])
 
     def test_a_child_killed_by_a_signal_ends_the_wrapper_by_it(self):
-        proc = self.start("api", "x", FAKE_GH_MODE=f"die:{int(signal.SIGTERM)}")
-        _, err = proc.communicate(timeout=30)
-        self.assertEqual(proc.returncode, -signal.SIGTERM, err)
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signum.name):
+                proc = self.start("api", "x", FAKE_GH_MODE=f"die:{int(signum)}")
+                _, err = proc.communicate(timeout=30)
+                self.assertEqual(proc.returncode, -signum, err)
 
     def test_sigterm_is_forwarded_once_and_the_terminals_signals_are_left_to_the_group(self):
         proc = self.start("run", "watch", "7", FAKE_GH_MODE="wait:2")
