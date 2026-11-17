@@ -26,6 +26,7 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
+REPO_GUARDS = scope.REPO_GUARDS
 
 
 def bumped(text, version="0.4.0"):
@@ -484,6 +485,7 @@ class Aggregate(unittest.TestCase):
                 "integration",
                 "mini-op",
                 "broker",
+                *REPO_GUARDS,
             )
         }
         result["changes"]["outputs"] = {
@@ -498,6 +500,29 @@ class Aggregate(unittest.TestCase):
         result["integration"]["result"] = "skipped" if docs or version else "success"
         result["broker"]["result"] = "success" if full else "skipped"
         return result
+
+    def test_repo_guards_jobs_must_succeed_and_only_pull_requests_run_github_dir_pr(self):
+        for event in ("pull_request", "push", "merge_group"):
+            for job in REPO_GUARDS:
+                for outcome in ("success", "failure", "cancelled", "skipped", None):
+                    needs = self.needs(event=event)
+                    needs[job]["result"] = outcome
+                    passes = outcome == "success" or (
+                        outcome == "skipped" and job == "github-dir-pr" and event != "pull_request"
+                    )
+                    with self.subTest(event=event, job=job, outcome=outcome):
+                        self.assertEqual(scope.gate(needs, event) == [], passes)
+        needs = self.needs()
+        needs["github-dir-pr"]["result"] = "skipped"
+        self.assertEqual(
+            scope.gate(needs, "pull_request"), ["github-dir-pr: expected success, got 'skipped'"]
+        )
+        needs = self.needs(event="push")
+        needs["github-dir-pr"]["result"] = "failure"
+        self.assertEqual(
+            scope.gate(needs, "push"),
+            ["github-dir-pr: expected skipped or success, got 'failure'"],
+        )
 
     def test_expected_full_upper_and_push_results_pass(self):
         for full, event in ((True, "pull_request"), (False, "pull_request"), (True, "push")):
@@ -520,6 +545,14 @@ class Aggregate(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 self.assertEqual(scope.gate(needs, "push"), [])
                 self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
+
+    def test_push_without_a_coverage_result_fails(self):
+        needs = self.needs(event="push")
+        del needs["coverage"]
+        self.assertEqual(
+            scope.gate(needs, "push"),
+            ["coverage: expected cancelled or failure or skipped or success, got None"],
+        )
 
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
         needs = self.needs(full=False)
@@ -577,6 +610,29 @@ class Aggregate(unittest.TestCase):
         needs = self.needs(full=False)
         needs["changes"]["result"] = "failure"
         self.assertTrue(scope.gate(needs, "pull_request"))
+
+    def test_ci_without_any_repo_guards_job_passes_but_a_partial_set_fails(self):
+        for event in ("pull_request", "push", "merge_group"):
+            needs = self.needs(event=event)
+            for job in REPO_GUARDS:
+                del needs[job]
+            with self.subTest(event=event):
+                self.assertEqual(scope.gate(needs, event), [])
+            for job in REPO_GUARDS:
+                needs = self.needs(event=event)
+                del needs[job]
+                with self.subTest(event=event, missing=job):
+                    self.assertEqual(len(scope.gate(needs, event)), 1)
+                    self.assertRegex(
+                        scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
+                    )
+
+    def test_a_needed_job_without_an_expectation_fails(self):
+        for event in ("pull_request", "push", "merge_group"):
+            needs = self.needs(event=event)
+            needs["python"] = {"result": "failure"}
+            with self.subTest(event=event):
+                self.assertEqual(scope.gate(needs, event), ["python: not gated"])
 
     def test_missing_or_malformed_needs_and_non_full_push_fail(self):
         for needs in ({}, [], {"changes": None}, {**self.needs(), "unit": "success"}):
@@ -725,9 +781,30 @@ class Workflow(unittest.TestCase):
         self.assertIn("    name: CI\n", ci)
         jobs = set(re.findall(r"(?m)^  ([\w-]+):$", text.split("\njobs:\n", 1)[1]))
         self.assertLessEqual({"changes", "lint", "unit", "mini-op", "ci"}, jobs)
-        for name in jobs - {"changes", "mini-op", "ci"}:
+        for name in jobs - {"changes", "mini-op", "ci", *REPO_GUARDS}:
             with self.subTest(job=name):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
+
+    def test_repo_guards_jobs_call_main_with_no_secrets_or_permissions(self):
+        calls = {"github-dir-pr": "github-dir-pr.yml", "go": "go.yml", "jscpd": "jscpd.yml"}
+        self.assertEqual(set(calls), set(REPO_GUARDS))
+        for name, workflow in calls.items():
+            body = job(name)
+            with self.subTest(job=name):
+                self.assertIn(
+                    f"    uses: windroc-labs/repo-guards/.github/workflows/{workflow}@main\n", body
+                )
+                self.assertIn("      runs-on: '\"ubuntu-24.04\"'\n", body)
+                for key in ("secrets", "permissions", "needs", "if"):
+                    self.assertNotRegex(body, rf"(?m)^    {key}:")
+        needs = re.search(r"(?m)^    needs: \[(.*)\]$", job("ci"))[1].split(", ")
+        self.assertEqual(
+            needs,
+            ["changes", "lint", "repository", "unit", "coverage", "integration", "broker"]
+            + ["mini-op", *REPO_GUARDS],
+        )
+        self.assertNotIn(".github changes in their own PR", job("lint"))
+        self.assertIn("      working-directory: src/broker\n", job("go"))
 
     def test_root_tests_run_in_every_code_scope(self):
         condition = "if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}"
