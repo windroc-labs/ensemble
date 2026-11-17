@@ -246,6 +246,7 @@ def gate(needs: dict, event: str) -> list[str]:
         # Its one job runs on pull requests only.
         "github-dir-pr": SUCCESS if event == "pull_request" else SUCCESS | SKIPPED,
         "go": SUCCESS,
+        "jscpd": SUCCESS,
     }
     for job, wanted in expected.items():
         data = needs.get(job)

@@ -26,7 +26,7 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
-REPO_GUARDS = ("github-dir-pr", "go")
+REPO_GUARDS = ("github-dir-pr", "go", "jscpd")
 
 
 def bumped(text, version="0.4.0"):
@@ -762,7 +762,7 @@ class Workflow(unittest.TestCase):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
 
     def test_repo_guards_jobs_call_main_with_no_secrets_or_permissions(self):
-        calls = {"github-dir-pr": "github-dir-pr.yml", "go": "go.yml"}
+        calls = {"github-dir-pr": "github-dir-pr.yml", "go": "go.yml", "jscpd": "jscpd.yml"}
         self.assertEqual(set(calls), set(REPO_GUARDS))
         for name, workflow in calls.items():
             body = job(name)

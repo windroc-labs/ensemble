@@ -448,9 +448,14 @@ jobs:
       runs-on: '"ubuntu-24.04"'
       working-directory: src/broker
 
+  jscpd:
+    uses: windroc-labs/repo-guards/.github/workflows/jscpd.yml@main
+    with:
+      runs-on: '"ubuntu-24.04"'
+
   ci:
     name: CI
-    needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op, github-dir-pr, go]
+    needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op, github-dir-pr, go, jscpd]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
