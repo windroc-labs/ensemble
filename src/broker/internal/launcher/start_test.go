@@ -106,6 +106,8 @@ func (w *world) docker() *fakeDocker {
 			return []byte(args[len(args)-1] + "\n"), nil
 		}
 		switch strings.Join(args[:2], " ") {
+		case "info --format":
+			return []byte(`"` + testDaemon + `"` + "\n"), nil
 		case "ps --all":
 			if w.proxies != nil {
 				return []byte(*w.proxies), w.egressErr

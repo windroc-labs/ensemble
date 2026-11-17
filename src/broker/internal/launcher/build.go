@@ -323,6 +323,10 @@ func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp strin
 // than maxAge ago is reused (maxAge < 0: of any age; 0: never). A rebuild installs each client's latest release; both
 // stages rebuild without cache to refresh plugins. spec's plugins are part of the key.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
+	h, err := h.onDaemon(ctx, protocol.BuildFailed)
+	if err != nil {
+		return BuildResult{}, err
+	}
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")
 	if err != nil {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
@@ -399,7 +403,7 @@ func leaseFailed() *protocol.Error {
 }
 
 func (h Host) leasePath(key string) string {
-	return filepath.Join(h.Home, ".ensemble/docker/images", key)
+	return h.imagePath(key)
 }
 
 // lease marks key's images as in use by a build from now on.
@@ -500,7 +504,7 @@ const (
 	pendingGrace = 2 * time.Hour
 )
 
-// replacedImage is an entry of images/<key>.replaced: an image ID a rebuild took key's tag from, and when; Pending
+// replacedImage is an entry of <key>.replaced in a daemon's image records: an image ID a rebuild took key's tag from, and when; Pending
 // while that rebuild still runs.
 type replacedImage struct {
 	ID      string    `json:"id"`
@@ -761,7 +765,7 @@ func (h Host) prune(ctx context.Context, key string) {
 		}
 	}
 	replaced := map[string]bool{}
-	entries, _ := os.ReadDir(h.dockerPath("images"))
+	entries, _ := os.ReadDir(h.images)
 	for _, entry := range entries {
 		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "replaced" {
 			for _, r := range h.readReplaced(m[1]) {
