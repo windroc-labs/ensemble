@@ -624,7 +624,8 @@ the image: the ensemble layer installs its own, and a base image no longer needs
 
 Broker protocol 25 makes `start` require the egress proxy ([Egress setup](upgrading.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
-`scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)).
+`scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)); on a remote Docker target, run
+`scripts/install-target-egress.sh` instead ([Remote Docker target](remote-docker-target.md#egress-proxy-on-the-target)).
 
 Broker protocol 24 adds the start manifest's optional `secrets` ([Environment configuration](../src/ensemble/delegate/config.toml)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.

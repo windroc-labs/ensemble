@@ -279,3 +279,17 @@ func TestTargetPatternMatchesSchema(t *testing.T) {
 		t.Fatalf("schema endpoint pattern %q, want %q", schema.Defs.Endpoint.Pattern, want)
 	}
 }
+
+func TestRemoteEndpoint(t *testing.T) {
+	for endpoint, want := range map[string]bool{
+		"ssh://u@pc":    true,
+		"ssh://pc:2222": true,
+		"unix:///Users/u/.docker/run/docker.sock": false,
+		"":       false,
+		"ssh://": false,
+	} {
+		if got := RemoteEndpoint(endpoint); got != want {
+			t.Errorf("RemoteEndpoint(%q) = %v, want %v", endpoint, got, want)
+		}
+	}
+}

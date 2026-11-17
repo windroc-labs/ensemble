@@ -42,9 +42,16 @@ On the target:
 
 On the Mac:
 
-1. Compare the host key before you trust it: `ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -` must print the
-   fingerprint from step 6. Only then add it: `ssh-keyscan -t ed25519 <host> >> ~/.ssh/known_hosts`. With a port
-   other than 22, add `-p <port>` to both.
+1. Scan the host key once, compare it, and add that same scan only if it matches (with a port other than 22, add
+   `-p <port>` to `ssh-keyscan`):
+
+   ```sh
+   key=$(mktemp)
+   ssh-keyscan -t ed25519 <host> > "$key"
+   ssh-keygen -lf "$key"            # must print the fingerprint from step 6
+   cat "$key" >> ~/.ssh/known_hosts # only after it matched
+   rm "$key"
+   ```
 2. Check the key login: `ssh <user>@<host> docker version` prints the server version, without asking for a password.
 3. Check that passwords are refused:
    `ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive <user>@<host> true`
@@ -90,13 +97,13 @@ PowerShell on the PC.
 7. Note the host key's fingerprint: `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`.
 
 On the Mac, do the [Linux target](#linux-target)'s Mac steps: compare and add the host key
-(`known_hosts`), check the key login, check that `PreferredAuthentications=password,keyboard-interactive` is refused,
+(`known_hosts`) from one scan, check the key login, check that `PreferredAuthentications=password,keyboard-interactive` is refused,
 write the target, install the egress proxy.
 
 ## Outside the LAN
 
-Use the target's Tailscale address or MagicDNS name in `target.json`. Add its host key under that name too, with the
-same fingerprint comparison: `known_hosts` entries are per name.
+Use the target's Tailscale address or MagicDNS name in `target.json`. Add its host key under that name too, by the
+[Linux target](#linux-target)'s Mac step 1 with that name: `known_hosts` entries are per name.
 
 ## Egress proxy on the target
 

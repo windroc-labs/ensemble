@@ -6,9 +6,10 @@
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths and the account home it reads the target from; only tests set it.
 set -euo pipefail
 
-# The egress-proxy release this installs on the Docker target, and the windroc-labs/egress-proxy commit whose
-# egress-install runs: that release's commit, never a tag, which could move. Version and digest stay empty until a
-# release with remote install exists; --version and --digest override them.
+# The pin: the egress-proxy release this installs on the Docker target, and the windroc-labs/egress-proxy commit whose
+# egress-install runs, a commit and never a tag, which could move. No release has remote install yet: version and
+# digest stay empty, and the commit is the unreleased remote install's; set all three to that release's together.
+# --version and --digest override the version and digest.
 egress_version=
 egress_digest=
 egress_ref=e466ea01a03bf50d854b2b928cbd8838b5b5e20a
@@ -111,6 +112,7 @@ print(host)
 main() {
   local host code=0
   parse_args "$@"
+  python3 -I -c '' 2>/dev/null || die 1 "needs a working python3 on PATH, for the target setting and egress-install"
   host=$(target_host) || code=$?
   case $code in
     0) ;;

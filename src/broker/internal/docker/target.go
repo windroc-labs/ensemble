@@ -65,6 +65,10 @@ type Target struct {
 
 func (t Target) Remote() bool { return t.Host != "" }
 
+// RemoteEndpoint is whether endpoint, as CLI.Endpoint gives it, is a remote target rather than the local Docker
+// Desktop.
+func RemoteEndpoint(endpoint string) bool { return targetHost.MatchString(endpoint) }
+
 // LoadTarget reads home's TargetFile: {"host": "ssh://[user@]host[:port]"}, nothing else; no file is the local target.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, TargetFile)

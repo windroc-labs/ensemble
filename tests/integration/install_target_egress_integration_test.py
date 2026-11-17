@@ -1,8 +1,10 @@
 """scripts/install-target-egress.sh run with a fake gh, docker and egress-install, in a temporary home and root."""
 
+import json
 import os
 import pwd
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -13,7 +15,15 @@ from tests.case import REPO, Case
 SCRIPT = os.path.join(REPO, "scripts", "install-target-egress.sh")
 VERSION = "1.4.0"
 DIGEST = "sha256:" + "ab" * 32
-PINNED_REF = "e466ea01a03bf50d854b2b928cbd8838b5b5e20a"
+
+
+def pinned(name):
+    """The script's pin assignment `name=<value>`, so a pin update is one edit, in the script."""
+    (value,) = re.findall(rf"^{name}=(.*)$", Path(SCRIPT).read_text(), re.M)
+    return value
+
+
+PINNED_REF = pinned("egress_ref")
 
 # The egress-install gh serves: records its argv, PATH and Docker variables, then exits $EGRESS_EXIT.
 FAKE_INSTALL = """#!/bin/bash
@@ -53,6 +63,10 @@ class InstallTargetEgressTest(Case):
         executable(self.bin / "gh", FAKE_GH)
         executable(self.bin / "docker", "#!/bin/sh\nexit 0\n")
         executable(self.fakes / "egress-install", FAKE_INSTALL)
+        # Only the system tools the script and fakes run: no real gh or docker on PATH.
+        self.system = self.fakes / "system"
+        for tool in ("bash", "python3", "mktemp", "rm", "env", "cat"):
+            executable(self.system / tool, f'#!/bin/sh\nexec {shutil.which(tool)} "$@"\n')
         account = pwd.getpwuid(os.getuid()).pw_dir.lstrip("/")
         self.target_file = self.root / account / ".ensemble/docker/target.json"
 
@@ -63,7 +77,7 @@ class InstallTargetEgressTest(Case):
     def run_script(self, *args, **env):
         base = {
             "HOME": self.home,
-            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "PATH": f"{self.bin}:{self.system}",
             "TMPDIR": str(self.tmp),
             "FAKES": str(self.fakes),
             "ENSEMBLE_INSTALL_ROOT": str(self.root),
@@ -71,7 +85,7 @@ class InstallTargetEgressTest(Case):
             "DOCKER_CONTEXT": "hostile",
         }
         return subprocess.run(
-            ["bash", SCRIPT, *args],
+            [shutil.which("bash"), SCRIPT, *args],
             env={**base, **env},
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -114,7 +128,7 @@ class InstallTargetEgressTest(Case):
                         "ssh://me@pc:2222",
                     ],
                 )
-                self.assertEqual(lines[8], f"PATH={self.wrapper}:{self.bin}:/usr/bin:/bin")
+                self.assertEqual(lines[8], f"PATH={self.wrapper}:{self.bin}:{self.system}")
                 self.assertEqual(lines[9:], ["DOCKER_HOST=unset", "DOCKER_CONTEXT=unset"])
                 if code:
                     self.assertIn("egress-install exited 11", done.stderr)
@@ -158,12 +172,46 @@ class InstallTargetEgressTest(Case):
         self.assertIn("reinstall the broker with scripts/install.sh --docker", done.stderr)
         self.assertEqual(self.gh_calls(), [])
 
-    def test_unpinned_without_flags_exits_2(self):
+    def test_without_flags_installs_the_pin_or_exits_2_while_unpinned(self):
         self.target('{"host": "ssh://pc"}')
+        version, digest = pinned("egress_version"), pinned("egress_digest")
         done = self.run_script()
-        self.assertEqual(done.returncode, 2, done.stderr)
-        self.assertIn("no egress-proxy release with remote install is pinned yet", done.stderr)
-        self.assertIn("--version", done.stderr)
+        if version:
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(self.installed()[:4], ["--version", version, "--digest", digest])
+        else:
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("no egress-proxy release with remote install is pinned yet", done.stderr)
+            self.assertIn("--version", done.stderr)
+            self.assertEqual(self.gh_calls(), [])
+
+    def test_accepted_target_hosts(self):
+        for host in ("ssh://pc", "ssh://u@h:65535", "ssh://me@pc.tailnet.ts.net"):
+            with self.subTest(host=host):
+                self.target(json.dumps({"host": host}))
+                done = self.run_script("--version", VERSION, "--digest", DIGEST)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(self.installed()[7], host)
+
+    def test_missing_tools_exit_1_without_fetching(self):
+        self.target('{"host": "ssh://pc"}')
+        for tool in ("gh", "docker"):
+            with self.subTest(tool=tool):
+                hidden = self.bin / tool
+                hidden.rename(self.fakes / f"{tool}.hidden")
+                done = self.run_script("--version", VERSION, "--digest", DIGEST)
+                (self.fakes / f"{tool}.hidden").rename(hidden)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn(f"needs {tool} on PATH", done.stderr)
+                self.assertEqual(self.gh_calls(), [])
+
+    def test_missing_python3_is_not_blamed_on_the_target(self):
+        self.target('{"host": "ssh://pc"}')
+        (self.system / "python3").unlink()
+        done = self.run_script("--version", VERSION, "--digest", DIGEST)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("needs a working python3", done.stderr)
+        self.assertNotIn("target setting;", done.stderr)
         self.assertEqual(self.gh_calls(), [])
 
     def test_version_and_digest_validation(self):
