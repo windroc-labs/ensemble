@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/BurntSushi/toml"
 )
 
 const (
@@ -100,34 +98,31 @@ func validHost(host string) bool {
 }
 
 // LoadTarget reads SettingFile's SettingTable, admitting only the keys host and local_secrets; no file or no table is
-// the local target. Keys are compared exactly: TOML keys are case-sensitive.
+// the local target.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, SettingFile)
+	invalidAt := func(endpoint, format string, args ...any) (Target, error) {
+		return Target{}, &Unreachable{Endpoint: endpoint, Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
+	}
 	invalid := func(format string, args ...any) (Target, error) {
-		return Target{}, &Unreachable{Endpoint: path + " [" + SettingTable + "]",
-			Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
+		return invalidAt(path+" ["+SettingTable+"]", format, args...)
 	}
 	data, err := readSetting(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Target{}, nil
 	}
 	if err != nil {
-		return invalid("%v", err)
+		return invalidAt(path, "%v", err)
 	}
 	if len(data) > maxSetting {
-		return invalid("larger than %d bytes", maxSetting)
+		return invalidAt(path, "larger than %d bytes", maxSetting)
 	}
-	var file map[string]any
-	if err := toml.Unmarshal(data, &file); err != nil {
-		return invalid("%v", err)
+	table, found, err := settingTable(string(data))
+	if err != nil {
+		return invalidAt(path, "%v", err)
 	}
-	found, ok := file[SettingTable]
-	if !ok {
+	if !found {
 		return Target{}, nil
-	}
-	table, ok := found.(map[string]any)
-	if !ok {
-		return invalid("[%s] is not a table", SettingTable)
 	}
 	keys := make([]string, 0, len(table))
 	for key := range table {
@@ -143,10 +138,10 @@ func LoadTarget(home string) (Target, error) {
 	if !ok {
 		return invalid("no host")
 	}
-	host, ok := value.(string)
-	if !ok {
-		return invalid("host is not a string")
+	if !value.plain {
+		return invalid("host is not a plain single-line string")
 	}
+	host := value.str
 	if !validHost(host) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)
 	}
@@ -154,23 +149,21 @@ func LoadTarget(home string) (Target, error) {
 	if !ok {
 		return invalid("no local_secrets")
 	}
-	items, ok := value.([]any)
-	if !ok {
+	if !value.isArr {
 		return invalid("local_secrets is not an array")
 	}
-	if len(items) > maxLocalSecrets {
+	if len(value.array) > maxLocalSecrets {
 		return invalid("more than %d local_secrets", maxLocalSecrets)
 	}
-	secrets := make([]string, 0, len(items))
-	for _, value := range items {
-		item, ok := value.(string)
-		if !ok || !ValidEnvItem(item) {
-			return invalid("local_secrets item %q is not %s<name>", fmt.Sprint(value), EnvItemPrefix)
+	secrets := make([]string, 0, len(value.array))
+	for _, v := range value.array {
+		if !v.plain || !ValidEnvItem(v.str) {
+			return invalid("local_secrets item %q is not a plain %s<name> string", v.str, EnvItemPrefix)
 		}
-		if slices.Contains(secrets, item) {
-			return invalid("local_secrets item %q repeated", item)
+		if slices.Contains(secrets, v.str) {
+			return invalid("local_secrets item %q repeated", v.str)
 		}
-		secrets = append(secrets, item)
+		secrets = append(secrets, v.str)
 	}
 	return Target{Host: host, LocalSecrets: secrets}, nil
 }
