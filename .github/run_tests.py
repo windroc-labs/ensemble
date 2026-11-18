@@ -7,7 +7,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,8 +22,6 @@ from tests.utils import sandbox
 from tests.utils.sandbox import CONTROL_GRACE
 
 STATE = "RUN_TESTS_STATE"
-COVERAGE = "RUN_TESTS_COVERAGE"
-COVERAGE_DATA = "coverage-data"
 TAIL = 40
 GATE = None
 
@@ -141,46 +138,6 @@ def stack(lines):
     return block[:end]
 
 
-def src_trees(repo):
-    return [repo / "src"]
-
-
-def coverage_lost(title, error):
-    # The tests' result stands: the Coverage job fails a PR whose shard lost its data.
-    annotate(title, f"unit coverage not collected: {error}", level="warning")
-
-
-def start_coverage(title, sandbox, repo):
-    try:
-        import coverage
-    except ImportError as error:
-        return coverage_lost(title, error)
-    try:
-        cov = coverage.Coverage(
-            data_file=os.path.join(sandbox, COVERAGE_DATA),
-            branch=True,
-            source=[str(tree) for tree in src_trees(repo)],
-            config_file=False,
-        )
-        cov.set_option("report:include_namespace_packages", value=True)
-        cov.start()
-    except (OSError, coverage.CoverageException) as error:
-        return coverage_lost(title, error)
-    return cov
-
-
-def save_coverage(title, cov):
-    if cov is None:
-        return
-    import coverage
-
-    try:
-        cov.stop()
-        cov.save()
-    except (OSError, coverage.CoverageException) as error:
-        coverage_lost(title, error)
-
-
 def supervised_child():
     return STATE in os.environ and os.environ.get("RUN_TESTS_PARENT") == str(os.getppid())
 
@@ -197,8 +154,6 @@ def parallel(title, commands, directory=None):
             }
             if os.environ.get("INTEGRATION_TIMING_DIR"):
                 env["INTEGRATION_TIMING_DIR"] = str(target)
-            if os.environ.get(COVERAGE):
-                env[COVERAGE] = str(target / f"coverage-data.{label}")
             try:
                 target.mkdir(parents=True, exist_ok=True)
                 with (target / "worker.log").open("w") as log:
@@ -263,9 +218,6 @@ def supervise(title, *, grace=CONTROL_GRACE):
     def prepare(tmp):
         (tmp / "state").touch()
         isolation.blockers(tmp / "blocked-bin")
-        if os.environ.get(COVERAGE):
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(os.environ[COVERAGE])
 
     def run(env, tmp):
         with subprocess.Popen(
@@ -282,12 +234,6 @@ def supervise(title, *, grace=CONTROL_GRACE):
 
     def collect(tmp):
         lines.extend((tmp / "state").read_text(encoding="utf-8").splitlines())
-        data = tmp / COVERAGE_DATA
-        if os.environ.get(COVERAGE) and data.exists():
-            try:
-                shutil.copyfile(data, os.environ[COVERAGE])
-            except OSError as error:
-                coverage_lost(title, error)
 
     code, leaks = sandbox.supervise(
         run, Path(__file__).resolve().parents[1], prepare=prepare, collect=collect, grace=grace
@@ -439,13 +385,6 @@ def main(argv):
     if code is not None:
         return code
     root = Path.cwd()
-    cov = (
-        start_coverage(
-            title, os.environ["ENSEMBLE_TEST_SANDBOX"], Path(__file__).resolve().parents[1]
-        )
-        if os.environ.get(COVERAGE)
-        else None
-    )
     GATE = isolation.install(root)
     part = None
     if len(directories) >= 3 and directories[-2] == "--shard":
@@ -465,9 +404,7 @@ def main(argv):
     )
     if part is not None:
         suite = shard(suite, part, durations)
-    code = run(suite, title)
-    save_coverage(title, cov)
-    return code
+    return run(suite, title)
 
 
 if __name__ == "__main__":
