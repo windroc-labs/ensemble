@@ -32,9 +32,9 @@ func TestStartStopsAtAnUnreachableTarget(t *testing.T) {
 	}
 }
 
-func TestNoWorkerMountReachesTheTargetFileOrSSHDir(t *testing.T) {
+func TestNoWorkerMountReachesTheTargetSettingOrSSHDir(t *testing.T) {
 	for _, fixture := range []string{"manifest-valid", "manifest-codex"} {
-		for _, cwd := range []string{home + "/.ensemble/docker", home + "/.ssh"} {
+		for _, cwd := range []string{home + "/.ensemble", home + "/.ensemble/docker", home + "/.ssh"} {
 			data := fixtureBytes(t, fixture, func(m map[string]any) { m["cwd"] = cwd })
 			m, err := ParseManifest(data)
 			if err != nil {

@@ -71,7 +71,8 @@ func TestStartRefusesALocalOnlySecretOnARemoteDaemon(t *testing.T) {
 	h, rd, ld := twoDaemons(&world{labels: goodLabels()}, localWorld(), env)
 	_, err := h.Start(context.Background(), editedManifest(t, withSecrets([]any{secret(miniPassword, "mini-password")})))
 	e := protoErr(t, err)
-	if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, miniPassword) || !strings.Contains(e.Message, "remote "+remoteEndpoint) {
+	if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, miniPassword) || !strings.Contains(e.Message, "remote "+remoteEndpoint) ||
+		!strings.Contains(e.Message, "(local_secrets in [docker] of ~/.ensemble/config.local.toml)") {
 		t.Fatalf("%+v", e)
 	}
 	if len(beyondInfo(rd)) != 0 || len(beyondInfo(ld)) != 0 || len(env.calls) != 0 {

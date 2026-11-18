@@ -15,7 +15,7 @@ import (
 
 func writeTarget(t *testing.T, home, content string) {
 	t.Helper()
-	path := filepath.Join(home, TargetFile)
+	path := filepath.Join(home, SettingFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -24,80 +24,100 @@ func writeTarget(t *testing.T, home, content string) {
 	}
 }
 
+// dockerTable is a config.local.toml whose [docker] table holds body.
+func dockerTable(body string) string { return "[docker]\n" + body + "\n" }
+
 func TestLoadTarget(t *testing.T) {
 	home := t.TempDir()
 	if target, err := LoadTarget(home); err != nil || target.Remote() || target.Host != "" {
-		t.Fatalf("no target file: %+v %v", target, err)
+		t.Fatalf("no setting file: %+v %v", target, err)
 	}
 	for _, host := range []string{"ssh://pc", "ssh://u@pc", "ssh://first.last@pc.tail1234.ts.net:2222", "ssh://u@192.168.1.20:22", "ssh://pc:65535"} {
-		writeTarget(t, home, `{"host": "`+host+`", "local_secrets": []}`)
+		writeTarget(t, home, dockerTable(`host = "`+host+`"`+"\nlocal_secrets = []"))
 		if target, err := LoadTarget(home); err != nil || !target.Remote() || target.Host != host {
 			t.Fatalf("%s: %+v %v", host, target, err)
 		}
 	}
-	path := filepath.Join(home, TargetFile)
+	endpoint := filepath.Join(home, SettingFile) + " [" + SettingTable + "]"
 	for content, why := range map[string]string{
-		``:                                   "invalid target setting (",
-		`[]`:                                 "invalid target setting (",
-		`null`:                               "invalid target setting (no host)",
-		`{}`:                                 "invalid target setting (no host)",
-		`{"host": 1}`:                        "invalid target setting (",
-		`{"host": "ssh://pc", "user": "u"}`:  "invalid target setting (",
-		`{"host": "ssh://pc"} {}`:            "invalid target setting (trailing data)",
-		`{"host": "ssh://pc\n"}`:             `invalid target setting (host "ssh://pc\n"`,
-		`{"host": "ssh://-oProxyCommand=x"}`: "invalid target setting (host",
-		`{"host": "tcp://pc:2375"}`:          "invalid target setting (host",
-		`{"host": "ssh://pc/var/run/x"}`:     "invalid target setting (host",
-		`{"host": "ssh://pc?x=1"}`:           "invalid target setting (host",
-		`{"host": "ssh://pc:0"}`:             "invalid target setting (host",
-		`{"host": "ssh://pc:65536"}`:         "invalid target setting (host",
-		`{"host": "ssh://u:pw@pc"}`:          "invalid target setting (host",
-		`{"host": ""}`:                       "invalid target setting (host",
+		"[docker":                         "invalid target setting (",
+		`docker = "ssh://pc"`:             "invalid target setting ([docker] is not a table)",
+		"[[docker]]\nhost = \"ssh://pc\"": "invalid target setting ([docker] is not a table)",
+		dockerTable(""):                   "invalid target setting (no host)",
+		dockerTable("host = 1"):           "invalid target setting (host is not a string)",
+		dockerTable(`host = "ssh://pc"` + "\nuser = \"u\"\nlocal_secrets = []"):        `invalid target setting (unknown key "user")`,
+		dockerTable(`HOST = "ssh://pc"` + "\nhost = \"ssh://pc\"\nlocal_secrets = []"): `invalid target setting (unknown key "HOST")`,
+		dockerTable(`host = "ssh://pc"` + "\nhost = \"ssh://u@pc\""):                   "invalid target setting (",
+		dockerTable(`host = "ssh://pc\n"`):                                             `invalid target setting (host "ssh://pc\n"`,
+		dockerTable(`host = "ssh://-oProxyCommand=x"`):                                 "invalid target setting (host",
+		dockerTable(`host = "tcp://pc:2375"`):                                          "invalid target setting (host",
+		dockerTable(`host = "ssh://pc/var/run/x"`):                                     "invalid target setting (host",
+		dockerTable(`host = "ssh://pc?x=1"`):                                           "invalid target setting (host",
+		dockerTable(`host = "ssh://pc:0"`):                                             "invalid target setting (host",
+		dockerTable(`host = "ssh://pc:65536"`):                                         "invalid target setting (host",
+		dockerTable(`host = "ssh://u:pw@pc"`):                                          "invalid target setting (host",
+		dockerTable(`host = ""`):                                                       "invalid target setting (host",
 	} {
 		writeTarget(t, home, content)
 		_, err := LoadTarget(home)
 		var u *Unreachable
-		if !errors.As(err, &u) || u.Endpoint != path || !strings.HasPrefix(u.Reason, why) {
+		if !errors.As(err, &u) || u.Endpoint != endpoint || !strings.HasPrefix(u.Reason, why) {
 			t.Fatalf("%q: %v", content, err)
 		}
 	}
-	writeTarget(t, home, `{"host": "ssh://pc", "pad": "`+strings.Repeat("x", 70000)+`"}`)
+	writeTarget(t, home, dockerTable(`host = "ssh://pc"`+"\nlocal_secrets = []")+"# "+strings.Repeat("x", 1<<20)+"\n")
 	if _, err := LoadTarget(home); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("oversized file: %v", err)
 	}
 }
 
-// TestTargetFiles runs the target file cases the session's reader shares.
-func TestTargetFiles(t *testing.T) {
-	data, err := os.ReadFile("../../protocol/docker-broker/cases/target_files.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cases struct {
-		Valid []struct {
-			Content      string   `json:"content"`
-			Host         string   `json:"host"`
-			LocalSecrets []string `json:"local_secrets"`
-		} `json:"valid"`
-		Invalid []string `json:"invalid"`
-	}
-	if err := json.Unmarshal(data, &cases); err != nil {
-		t.Fatal(err)
-	}
-	home := t.TempDir()
-	for _, c := range cases.Valid {
-		writeTarget(t, home, c.Content)
+// TestTargetSettings: the broker reads only [docker], whatever else the shared config file holds.
+func TestTargetSettings(t *testing.T) {
+	sixteen := `["ensemble-broker-env/a", "ensemble-broker-env/b", "ensemble-broker-env/c", "ensemble-broker-env/d", "ensemble-broker-env/e", "ensemble-broker-env/f", "ensemble-broker-env/g", "ensemble-broker-env/h", "ensemble-broker-env/i", "ensemble-broker-env/j", "ensemble-broker-env/k", "ensemble-broker-env/l", "ensemble-broker-env/m", "ensemble-broker-env/n", "ensemble-broker-env/o", "ensemble-broker-env/p"`
+	others := "[session.hosts]\nhidden_size = \"120x40\"\n\n" +
+		"[delegate.roles.engineer]\nnote = \"\"\"\n[docker]\nhost = \"ssh://evil\"\n\"\"\"\n\n" +
+		"[[delegate.environments.mini-op.credentials.env]]\nname = \"x\"\nitem = { kind = \"env\" }\n"
+	for _, c := range []struct {
+		content      string
+		host         string
+		localSecrets []string
+	}{
+		{others, "", nil},
+		{"", "", nil},
+		{dockerTable(`host = "ssh://u@pc"` + "\nlocal_secrets = [\"ensemble-broker-env/mini-op-password\", \"ensemble-broker-env/mini-op-ssh-key\"]"), "ssh://u@pc", []string{"ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"}},
+		{dockerTable("local_secrets = []\nhost = 'ssh://pc:2222'"), "ssh://pc:2222", []string{}},
+		{dockerTable(`host = "ssh://pc"` + "\nlocal_secrets = " + sixteen + "]"), "ssh://pc", []string{"ensemble-broker-env/a", "ensemble-broker-env/b", "ensemble-broker-env/c", "ensemble-broker-env/d", "ensemble-broker-env/e", "ensemble-broker-env/f", "ensemble-broker-env/g", "ensemble-broker-env/h", "ensemble-broker-env/i", "ensemble-broker-env/j", "ensemble-broker-env/k", "ensemble-broker-env/l", "ensemble-broker-env/m", "ensemble-broker-env/n", "ensemble-broker-env/o", "ensemble-broker-env/p"}},
+		{others + dockerTable(`host = "ssh://u@pc"`+"\nlocal_secrets = [\n  \"ensemble-broker-env/a\", # kept on the Mac\n]"), "ssh://u@pc", []string{"ensemble-broker-env/a"}},
+		{"docker.host = \"ssh://pc\"\ndocker.local_secrets = []\n", "ssh://pc", []string{}},
+	} {
+		home := t.TempDir()
+		writeTarget(t, home, c.content)
 		target, err := LoadTarget(home)
-		if err != nil || target.Host != c.Host || !slices.Equal(target.LocalSecrets, c.LocalSecrets) {
-			t.Errorf("%s: %+v %v", c.Content, target, err)
+		if err != nil || target.Host != c.host || !slices.Equal(target.LocalSecrets, c.localSecrets) {
+			t.Errorf("%s: %+v %v", c.content, target, err)
 		}
 	}
-	for _, content := range cases.Invalid {
-		writeTarget(t, home, content)
+	for _, body := range []string{
+		`host = "ssh://pc"`,
+		"local_secrets = []",
+		`host = "ssh://pc"` + "\nlocal_secrets = \"ensemble-broker-env/mini-op-password\"",
+		`host = "ssh://pc"` + "\nlocal_secrets = [1]",
+		`host = "ssh://pc"` + "\nlocal_secrets = [\"mini-op-password\"]",
+		`host = "ssh://pc"` + "\nlocal_secrets = [\"ensemble-broker-claude/x\"]",
+		`host = "ssh://pc"` + "\nlocal_secrets = [\"ensemble-broker-env/Mini\"]",
+		`host = "ssh://pc"` + "\nlocal_secrets = [\"ensemble-broker-env/a\", \"ensemble-broker-env/a\"]",
+		`host = "ssh://pc"` + "\nlocal_secrets = " + sixteen + `, "ensemble-broker-env/q"]`,
+		`host = "ssh://pc"` + "\nlocal_secrets = []\nextra = 1",
+		`host = "ssh://pc"` + "\nlocal_secrets = [\"ensemble-broker-env/a\"]\nLOCAL_SECRETS = []",
+		`host = "ssh://pc"` + "\nlocal_secrets = [[\"ensemble-broker-env/a\"]]",
+		`host = "ssh://pc"` + "\nlocal_secrets = []\n[docker.extra]",
+	} {
+		home := t.TempDir()
+		writeTarget(t, home, dockerTable(body))
 		_, err := LoadTarget(home)
 		var u *Unreachable
 		if !errors.As(err, &u) || !strings.HasPrefix(u.Reason, "invalid target setting (") {
-			t.Errorf("%s: %v", content, err)
+			t.Errorf("%s: %v", body, err)
 		}
 	}
 }
@@ -168,7 +188,7 @@ func TestRemoteTargetIgnoresHostileEnvironment(t *testing.T) {
 	t.Setenv("DOCKER_CONTEXT", "hostile")
 	t.Setenv("DOCKER_CONFIG", hostile)
 	t.Setenv("SSH_AUTH_SOCK", "")
-	writeTarget(t, home, `{"host": "ssh://u@pc", "local_secrets": []}`)
+	writeTarget(t, home, dockerTable(`host = "ssh://u@pc"`+"\nlocal_secrets = []"))
 	c, clean, err := New(home)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +217,7 @@ func TestRemoteEnvironmentAddsOnlySSHAuthSock(t *testing.T) {
 
 func TestInvalidTargetFailsEveryCommand(t *testing.T) {
 	home := t.TempDir()
-	writeTarget(t, home, `{"host": "tcp://pc"}`)
+	writeTarget(t, home, dockerTable(`host = "tcp://pc"`))
 	c, clean, err := New(home)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +225,7 @@ func TestInvalidTargetFailsEveryCommand(t *testing.T) {
 	defer clean()
 	_, err = c.Run(context.Background(), []string{"ps"}, nil)
 	var u *Unreachable
-	if !errors.As(err, &u) || u.Endpoint != filepath.Join(home, TargetFile) || !strings.HasPrefix(u.Reason, "invalid target setting (") {
+	if !errors.As(err, &u) || u.Endpoint != filepath.Join(home, SettingFile)+" [docker]" || !strings.HasPrefix(u.Reason, "invalid target setting (") {
 		t.Fatalf("%v", err)
 	}
 }

@@ -17,11 +17,11 @@ import (
 
 func TestTargetCommandRefusesAnInvalidSetting(t *testing.T) {
 	home := t.TempDir()
-	path := filepath.Join(home, docker.TargetFile)
+	path := filepath.Join(home, docker.SettingFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"host": "ssh://u@pc", "local_secrets": [], "extra": 1}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[docker]\nhost = \"ssh://u@pc\"\nlocal_secrets = []\nextra = 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a := system()
@@ -130,8 +130,8 @@ func TestWithHostDaemons(t *testing.T) {
 	if got := daemons(d); len(got) != 1 || got[0].Runner != d || withoutRunner(got[0]) != local {
 		t.Fatalf("no target: %+v", got)
 	}
-	target := filepath.Join(home, docker.TargetFile)
-	if err := os.WriteFile(target, []byte(`{"host":"ssh://u@pc","local_secrets":["ensemble-broker-env/mini-op-password"]}`), 0o600); err != nil {
+	setting := filepath.Join(home, docker.SettingFile)
+	if err := os.WriteFile(setting, []byte("[docker]\nhost = \"ssh://u@pc\"\nlocal_secrets = [\"ensemble-broker-env/mini-op-password\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d, clean, err = docker.New(home)

@@ -179,7 +179,7 @@ class InstallTargetEgressTest(Case):
         self.assertEqual(self.gh_calls(), [])
 
     def test_an_invalid_target_setting_exits_2_with_the_brokers_reason(self):
-        message = "Cannot reach Docker target /Users/u/.ensemble/docker/target.json: invalid target setting (no host)."
+        message = "Cannot reach Docker target /Users/u/.ensemble/config.local.toml [docker]: invalid target setting (no host)."
         self.target_error(message)
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 2, done.stderr)
@@ -205,9 +205,9 @@ class InstallTargetEgressTest(Case):
 
     def test_the_target_comes_from_the_broker_only(self):
         self.target("ssh://u@pc:2222")
-        target_file = Path(self.home, ".ensemble/docker/target.json")
-        target_file.parent.mkdir(parents=True)
-        target_file.write_text('{"host": "ssh://other@elsewhere", "local_secrets": []}')
+        setting = Path(self.home, ".ensemble/config.local.toml")
+        setting.parent.mkdir(parents=True, exist_ok=True)
+        setting.write_text('[docker]\nhost = "ssh://other@elsewhere"\nlocal_secrets = []\n')
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.installed()[6:8], ["--docker-host", "ssh://u@pc:2222"])
