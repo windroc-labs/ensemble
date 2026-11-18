@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,8 +37,8 @@ func busy(holder *protocol.Holder) *protocol.Error {
 }
 
 // inspectLock inspects one immutable ID.
-func (h Host) inspectLock(ctx context.Context, ref string) (lockContainer, error) {
-	out, err := h.Docker.Run(ctx, []string{"container", "inspect", ref}, nil)
+func (h Host) inspectLock(ctx context.Context, d Daemon, ref string) (lockContainer, error) {
+	out, err := d.Runner.Run(ctx, []string{"container", "inspect", ref}, nil)
 	if err != nil {
 		return lockContainer{}, err
 	}
@@ -50,9 +51,35 @@ func (h Host) inspectLock(ctx context.Context, ref string) (lockContainer, error
 	return found[0], nil
 }
 
-// lockHolder observes active run containers only.
-func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.Holder, error) {
-	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--quiet", "--no-trunc", "--filter", "label=" + lockLabel + "=" + lock}, nil)
+// lockBusy is busy when an active container on d, or else on another configured daemon, holds lock: a lock spans
+// every configured daemon, so a daemon that cannot be asked fails the check rather than counting as free.
+func (h Host) lockBusy(ctx context.Context, d Daemon, lock, exclude string) error {
+	holder, err := h.lockHolder(ctx, d, lock, exclude)
+	if err != nil {
+		return err
+	}
+	if holder != nil {
+		return busy(holder)
+	}
+	for _, other := range h.Daemons {
+		if other.Name == d.Name {
+			continue
+		}
+		if holder, err = h.lockHolder(ctx, other, lock, exclude); err != nil {
+			return err
+		}
+		if holder != nil {
+			e := busy(holder)
+			e.Message = fmt.Sprintf("Lock held by %s (%s) on %s.", holder.Container, holder.Owner, other.Endpoint)
+			return e
+		}
+	}
+	return nil
+}
+
+// lockHolder observes active run containers only, on d.
+func (h Host) lockHolder(ctx context.Context, d Daemon, lock, exclude string) (*protocol.Holder, error) {
+	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--no-trunc", "--filter", "label=" + lockLabel + "=" + lock}, nil)
 	if err != nil {
 		return nil, failure(err, protocol.StartFailed, "Cannot query lock "+lock+".")
 	}
@@ -62,7 +89,7 @@ func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.H
 		if !containerIDPattern.MatchString(id) {
 			return nil, protocol.New(protocol.StartFailed, "Invalid container ID in lock query.")
 		}
-		c, err := h.inspectLock(ctx, id)
+		c, err := h.inspectLock(ctx, d, id)
 		if docker.Absent(err) {
 			continue
 		}

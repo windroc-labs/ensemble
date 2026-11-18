@@ -78,7 +78,7 @@ func TestStartCredentialDelivery(t *testing.T) {
 		{response: `{"completed":6}`},
 		{response: `{"completed":"secret"}`},
 		{runErr: errors.New("secret")},
-		{runErr: docker.ErrUnreachable},
+		{runErr: unreachableErr},
 		{prepare: true, message: "Writing ensemble-broker-env/ssh into the container failed."},
 	} {
 		t.Run(tc.response+fmt.Sprint(tc.runErr), func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestStartCredentialDelivery(t *testing.T) {
 				wantCode := protocol.StartFailed
 				if errors.Is(tc.runErr, docker.ErrUnreachable) {
 					wantCode = protocol.DockerUnreachable
-					want = "Cannot reach Docker Desktop; start it and retry."
+					want = unreachableErr.Error()
 				}
 				e := protoErr(t, err)
 				if e.Message != want || e.Code != wantCode || e.Cleanup != protocol.Removed || slices.Contains(tokens.calls, "revoke "+container) == tc.prepare {
@@ -156,7 +156,7 @@ func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := fixtureManifest(t, "manifest-github-app", withSecrets(dummySecrets), func(m map[string]any) {
-				m["claude_dir"] = filepath.Join(parent, "claude")
+				m["claude_dir"] = ClientHomes + "/claude"
 			})
 			rec, log := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), path)

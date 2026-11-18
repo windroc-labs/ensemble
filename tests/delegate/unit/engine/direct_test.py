@@ -97,6 +97,7 @@ class Direct(Case):
                 "lock": "dummy-lock",
                 "plugins": ["dummy-plugin"],
                 "prefetch": None,
+                "daemon": None,
             },
         )
         self.assertEqual(

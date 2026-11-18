@@ -1,0 +1,7 @@
+{
+  "client_homes": "/home/agent/.ensemble-state",
+  "state_volume_prefix": "ensemble-state-",
+  "state_label": "ensemble.state",
+  "state_owner_label": "ensemble.state-owner",
+  "reader_label": "ensemble.state-reader"
+}

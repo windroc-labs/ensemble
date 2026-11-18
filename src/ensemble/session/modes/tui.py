@@ -721,7 +721,7 @@ class TuiMode(BaseMode):
             generation=generation,
         )
         spec = cls._noted(spec, client)
-        run._context = host._client_context()
+        run._context = replace(host._client_context(), home=host._home_store(name, run._home()))
         spec, prompt_file = cls._pointed(spec, run._context, store.dir)
         staged = cls._staged(spec, prompt_file, store.dir)
         if run._context.container:
@@ -851,7 +851,7 @@ class TuiMode(BaseMode):
             events=state["events"],
         )
         try:
-            run._context = host._client_context()
+            run._context = replace(host._client_context(), home=host._home_store(name, run._home()))
             run.restore(spec, state["client_hook"]["state"] if "client_hook" in state else {})
         except ConfigError as e:
             raise SessionError(f"no tui session {name}: {e}") from None

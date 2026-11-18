@@ -183,6 +183,8 @@ prefetch = true
 #             container and lock until its user closes it or its client exits; unset → none
 #   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace; the
 #             clone token is temporary; container credentials come only from explicit declarations
+#   daemon    "local": the Mac's Docker Desktop, whatever the Docker target is; unset → the target's default daemon.
+#             A session keeps the daemon its first start chose
 [environment.docker]
 image = "@worker"
 gateway = "workers"
@@ -198,6 +200,7 @@ image = "mini-op:env"
 gateway = "mini-op"
 plugins = []
 lock = "mini-op"
+daemon = "local"
 
 [[environments.mini-op.credentials.env]]
 item = "ensemble-broker-env/mini-op-password"

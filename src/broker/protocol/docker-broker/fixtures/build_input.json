@@ -11,7 +11,9 @@
       "argv": [
         "build",
         "--ensemble",
-        "/opt/ensemble"
+        "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
       ]
     }
   },
@@ -28,6 +30,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--extra"
       ]
     }
@@ -45,6 +49,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--max-age",
         "604800"
       ]
@@ -63,6 +69,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--max-age"
       ]
     }
@@ -80,6 +88,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--plugin",
         "updraft@windroc-labs/updraft#326e1116318536c6f7cca03a5d1b16b9e24fb512::windroc-labs/agent-plugins-marketplace#a0fe4b1e2737c4c7ce085d192e2443bb3c2d0312",
         "--plugin",
@@ -102,6 +112,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--plugin",
         "../updraft"
       ]
@@ -120,6 +132,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--plugin",
         "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "--image-plugin",
@@ -144,6 +158,8 @@
         "build",
         "--ensemble",
         "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--base-image",
         "dummy-env:test",
         "--plugin",
@@ -154,6 +170,48 @@
         "other.plugin",
         "--max-age",
         "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-secret",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
+        "--image-plugin",
+        "mini-op",
+        "--secret",
+        "ensemble-broker-env/mini-op-password",
+        "--secret",
+        "ensemble-broker-env/mini-op-ssh-key",
+        "--max-age",
+        "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-no-daemon",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble"
       ]
     }
   }

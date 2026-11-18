@@ -25,7 +25,7 @@ func mountHost(missing ...string) Host {
 
 func baseManifest() Manifest {
 	return Manifest{Client: "claude", Name: "w", Generation: strings.Repeat("0", 32), CWD: home + "/src/project", Workspace: "ensemble-ws-w",
-		ClaudeDir: home + "/.ensemble/docker-state/w/claude", HookPath: "/usr/local/bin/ensemble-session", HasHook: true}
+		ClaudeDir: ClientHomes + "/claude", HookPath: "/usr/local/bin/ensemble-session", HasHook: true}
 }
 
 func TestMountRules(t *testing.T) {
@@ -47,12 +47,11 @@ func TestMountRules(t *testing.T) {
 	cases := []tc{
 		{"missing cwd", mountHost(home + "/src/project"), nil, "existing host directory"},
 		{"root", ok, cwd("/"), "contains"},
-		{"home", ok, cwd(home), "claude_dir"},
-		{"Users", ok, cwd("/Users"), "claude_dir"},
-		{"state dir", ok, cwd(home + "/.ensemble/docker-state/w"), "claude_dir"},
-		{"claude dir", ok, cwd(home + "/.ensemble/docker-state/w/claude"), "claude_dir"},
-		{"inside claude dir", ok, cwd(home + "/.ensemble/docker-state/w/claude/x"), "claude_dir"},
-		{"claude dir wrong", ok, func(m *Manifest) { m.ClaudeDir = home + "/.ensemble/docker-state/other/claude" }, "claude_dir"},
+		{"client homes", ok, cwd(ClientHomes), "inside"},
+		{"claude dir", ok, cwd(ClientHomes + "/claude"), "inside"},
+		{"inside claude dir", ok, cwd(ClientHomes + "/claude/x"), "inside"},
+		{"claude dir a mac path", ok, func(m *Manifest) { m.ClaudeDir = "/Users/example/.ensemble/docker-state/w/claude" }, "claude_dir must be /home/agent/.ensemble-state/claude."},
+		{"claude dir of another client", ok, func(m *Manifest) { m.ClaudeDir = ClientHomes + "/codex" }, "claude_dir"},
 		{"claude dir trailing slash", ok, func(m *Manifest) { m.ClaudeDir += "/" }, "claude_dir"},
 		{"hook in cwd", ok, func(m *Manifest) { m.HookPath = home + "/src/project/bin/hook" }, "hook_path"},
 		{"hook is cwd", ok, func(m *Manifest) { m.HookPath = home + "/src/project" }, "hook_path"},
@@ -70,9 +69,6 @@ func TestMountRules(t *testing.T) {
 		"/bin", "/sbin/x", "/lib/x", "/lib32", "/lib64/x", "/libx32", "/var/run/ensemble", "/var/lock", "/home/agent", "/home/agent/.npm-global"} {
 		cases = append(cases, tc{"inside " + p, ok, cwd(p), "inside"})
 	}
-	unsafe := mountHost()
-	unsafe.Safe = func(string) error { return errors.New("symlink component") }
-	cases = append(cases, tc{"claude dir symlink", unsafe, nil, "claude_dir"})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := baseManifest()
@@ -94,7 +90,7 @@ func TestMountRules(t *testing.T) {
 }
 
 func TestMountCSVQuoting(t *testing.T) {
-	if got := bindMount("/a,b", `/c"d`); got != `type=bind,"source=/a,b","target=/c""d"` {
+	if got := stateMount("ensemble-state-w", "claude", `/c"d`); got != `type=volume,source=ensemble-state-w,"target=/c""d",volume-subpath=claude,volume-nocopy` {
 		t.Fatal(got)
 	}
 	if got := volumeMount("ensemble-ws-w", "/a,b", true); got != `type=volume,source=ensemble-ws-w,"target=/a,b",readonly,volume-nocopy` {
@@ -102,5 +98,16 @@ func TestMountCSVQuoting(t *testing.T) {
 	}
 	if got := volumeMount("v", "/w", false); got != `type=volume,source=v,target=/w,volume-nocopy` {
 		t.Fatal(got)
+	}
+}
+
+func TestSessionVolumesRoundTrip(t *testing.T) {
+	if got := volumesOf("worker_1"); got != (sessionVolumes{Workspace: "ensemble-ws-worker_1", State: "ensemble-state-worker_1"}) {
+		t.Fatalf("volumesOf = %+v", got)
+	}
+	for volume, want := range map[string]string{"ensemble-ws-worker_1": "worker_1", "ensemble-ws-": "", "custom": "", "ensemble-state-worker_1": ""} {
+		if name, ok := sessionOf(volume); name != want || ok != (want != "") {
+			t.Errorf("sessionOf(%q) = %q, %v", volume, name, ok)
+		}
 	}
 }

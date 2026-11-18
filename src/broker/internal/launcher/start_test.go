@@ -55,6 +55,8 @@ func goodLabels() map[string]string {
 
 // world is a scripted Docker Desktop: each field steers one kind of call.
 type world struct {
+	daemon          string // docker info's whole output; "": testDaemon's ID
+	daemonErr       error
 	batchReply      *string
 	labels          map[string]string
 	imageMissing    bool
@@ -77,17 +79,46 @@ type world struct {
 	nonce           string // the prefetch-start label a volume create set
 	otherNonce      bool   // a racing start created the volume with its own prefetch-start label
 	volumeRmErr     error
-	prefetchErr     error // the prefetch helper's run
+	prefetchErr     error  // the prefetch helper's run
+	state           string // the state volume: "" absent, "matching" or "foreign"
+	readers         string
+	readersErr      error
+	stateHelperErr  error // the state volume's chown or mkdir helper
 }
 
 func (w *world) docker() *fakeDocker {
 	d := &fakeDocker{}
 	d.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if w.unreachable {
-			return nil, docker.ErrUnreachable
+			return nil, unreachableErr
+		}
+		if len(args) > 2 && args[0] == "volume" && strings.HasPrefix(args[len(args)-1], "ensemble-state-") {
+			switch args[1] {
+			case "inspect":
+				switch w.state {
+				case "matching":
+					return []byte(`{"ensemble.state":"` + strings.TrimPrefix(args[len(args)-1], "ensemble-state-") + `"}` + "\n"), nil
+				case "foreign":
+					return []byte(`{"ensemble.state":"other"}` + "\n"), nil
+				}
+				return nil, &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: get " + args[2] + ": no such volume"}
+			case "create":
+				w.state = "matching"
+			case "rm":
+				w.state = ""
+			}
+			return []byte(args[len(args)-1] + "\n"), nil
 		}
 		switch strings.Join(args[:2], " ") {
+		case "info --format":
+			if w.daemon != "" {
+				return []byte(w.daemon + "\n"), w.daemonErr
+			}
+			return []byte(`"` + testDaemon + `"` + "\n"), w.daemonErr
 		case "ps --all":
+			if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "label="+readerLabel+"=") }) {
+				return []byte(w.readers), w.readersErr
+			}
 			if w.proxies != nil {
 				return []byte(*w.proxies), w.egressErr
 			}
@@ -154,6 +185,9 @@ func (w *world) docker() *fakeDocker {
 		case "run":
 			if slices.Contains(args, "ensemble.prefetch=1") {
 				return nil, w.prefetchErr
+			}
+			if args[1] == "--rm" && slices.ContainsFunc(args, func(a string) bool { return strings.HasSuffix(a, ",target=/state,volume-nocopy") }) {
+				return nil, w.stateHelperErr
 			}
 			if args[1] == "--rm" {
 				return nil, w.chownErr
@@ -288,7 +322,7 @@ func withClaudeAccount(account any) func(map[string]any) {
 func startHost(w *world, creds *fakeCreds) (Host, *fakeDocker) {
 	d := w.docker()
 	h := mountHost()
-	h.Docker, h.Creds, h.Endpoint = d, creds, "unix://"+home+"/.docker/run/docker.sock"
+	h.Daemons, h.Creds = one(d), creds
 	return h, d
 }
 
@@ -322,9 +356,6 @@ func TestRuntimeFixtures(t *testing.T) {
 			switch ctx.Docker {
 			case "unreachable":
 				w.unreachable = true
-			case "sharing_denied":
-				w.runErr = &docker.CommandError{Exit: 125, Stderr: "docker: Error response from daemon: mounts denied: \nThe path /Users/example/src/project is not shared from the host and is not known to Docker.\n\nRun 'docker run --help' for more information"}
-				w.rmErr = &docker.CommandError{Exit: 1, Stderr: "Error: No such container: " + container}
 			}
 			switch ctx.Egress {
 			case "stopped":
@@ -354,15 +385,9 @@ func TestRuntimeFixtures(t *testing.T) {
 			m, _ := ParseManifest(c.Data)
 			h := Host{
 				Home:     ctx.Home,
-				Endpoint: "unix://" + ctx.Home + "/.docker/run/docker.sock",
 				IsDir:    func(p string) bool { return ctx.CWDExists || p != m.CWD },
-				Safe: func(string) error {
-					if ctx.ClaudeDirHasSymlink {
-						return errors.New("symlink component")
-					}
-					return nil
-				},
-				Docker:   d,
+				Safe:     func(string) error { return nil },
+				Daemons:  []Daemon{{Name: DaemonLocal, Endpoint: "unix://" + ctx.Home + "/.docker/run/docker.sock", Runner: d}},
 				Creds:    creds,
 				GitHub:   &fakeTokens{},
 				Versions: defaultVersions(),
@@ -400,7 +425,7 @@ func TestRunArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := detached(d)
-	cwd, claude := home+"/src/project", home+"/.ensemble/docker-state/worker_1/claude"
+	cwd, claude := home+"/src/project", ClientHomes+"/claude"
 	want := []string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
 		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
 		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
@@ -408,7 +433,7 @@ func TestRunArguments(t *testing.T) {
 		"--workdir", cwd, "--env", "CLAUDE_CONFIG_DIR=" + claude,
 		"--env", "npm_config_cache=" + cwd + "/.ensemble-cache", "--env", "UV_CACHE_DIR=" + cwd + "/.ensemble-cache", "--env", "PIP_CACHE_DIR=" + cwd + "/.ensemble-cache",
 		"--label", "ensemble.session=worker_1", "--label", "ensemble.generation=0123456789abcdef0123456789abcdef", "--label", "ensemble.client=claude", "--label", "team=crew",
-		"--mount", "type=volume,source=" + volume + ",target=" + cwd + ",volume-nocopy", "--mount", "type=bind,source=" + claude + ",target=" + claude,
+		"--mount", "type=volume,source=" + volume + ",target=" + cwd + ",volume-nocopy", "--mount", "type=volume,source=ensemble-state-worker_1,target=" + claude + ",volume-subpath=claude,volume-nocopy",
 		"--tmpfs", "/run/ensemble/secrets:rw,noexec,nosuid,nodev,size=65536,mode=0700,uid=1001,gid=1002",
 		"--entrypoint", "/usr/bin/tini", digest, "--", "/opt/ensemble/venv/bin/python", "-I", "/opt/ensemble/src/ensemble/session/harness/guard.py", "--serve"}
 	if !slices.Equal(run, want) {
@@ -444,8 +469,8 @@ func TestStartVolume(t *testing.T) {
 	if _, err := h.Start(context.Background(), validManifest(t)); err != nil || !has(d, create) || !has(d, chown) {
 		t.Fatalf("absent: %v %q", err, d.calls)
 	}
-	h, d = startHost(&world{labels: goodLabels(), volume: "matching"}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil || hasCall(d, "volume create") || hasCall(d, "run --rm") || detached(d) == nil {
+	h, d = startHost(&world{labels: goodLabels(), volume: "matching", state: "matching"}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), keptState(t)); err != nil || hasCall(d, "volume create") || hasCall(d, "run --rm") || detached(d) == nil {
 		t.Fatalf("matching: %v %q", err, d.verbs())
 	}
 	if mount := "type=volume,source=" + volume + ",target=" + home + "/src/project,volume-nocopy"; !slices.Contains(detached(d), mount) {
@@ -493,8 +518,8 @@ func TestStartOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
-		Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
+	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Daemon: testDaemon,
+		ImageDigest: digest, Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v", got)
 	}
@@ -514,16 +539,16 @@ func TestStartOrder(t *testing.T) {
 		}
 		steps = append(steps, step)
 	}
-	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
-		"bootstrap", "hook", "credentials"}
+	wantSteps := []string{"info --format", "ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
+		"ps --all", "volume rm", "volume inspect", "volume create", "volume inspect", "run --rm", "run --rm", "run --detach", "bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, Python, "-I", credentialBatch}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot := d.calls[11]
-	if !slices.Equal(boot[8:11], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) {
+	boot := d.calls[slices.Index(steps, "bootstrap")]
+	if !slices.Equal(boot[8:11], []string{"claude", ClientHomes + "/claude", home + "/src/project"}) {
 		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
@@ -544,7 +569,7 @@ func TestStartUnreadableImage(t *testing.T) {
 				w := &world{labels: goodLabels(), execErr: func(args []string) error {
 					if slices.Contains(args, "/usr/bin/python3") {
 						if unreachable {
-							return docker.ErrUnreachable
+							return unreachableErr
 						}
 						return &docker.CommandError{Exit: contentFailed, Stderr: "synthetic permission denied"}
 					}
@@ -641,7 +666,7 @@ func TestRollback(t *testing.T) {
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
-		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
+		"inject unreachable":  {&world{}, &fakeCreds{injectErr: unreachableErr}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},
 		"rm fails":            {&world{execErr: failOn("claude", cmdErr), rmErr: &docker.CommandError{Exit: 1, Stderr: "delete failed"}}, &fakeCreds{}, protocol.StartFailed, protocol.Failed},
 		"run fails absent":    {&world{runErr: cmdErr, rmErr: &docker.CommandError{Exit: 1, Stderr: "No such container: x"}}, &fakeCreds{}, protocol.StartFailed, protocol.NotNeeded},
@@ -683,20 +708,28 @@ func TestRollbackAfterCancel(t *testing.T) {
 	if e := protoErr(t, err); e.Cleanup != protocol.Removed {
 		t.Fatalf("%+v", e)
 	}
-	last := len(d.calls) - 1
-	if d.calls[last][0] != "rm" || d.ctxErrs[last] != nil {
-		t.Fatalf("rollback ran on a cancelled context: %q %v", d.calls[last], d.ctxErrs[last])
+	removed := false
+	for i, c := range d.calls {
+		if c[0] == "rm" || strings.Join(c[:2], " ") == "volume rm" {
+			removed = removed || c[0] == "rm"
+			if d.ctxErrs[i] != nil {
+				t.Fatalf("rollback ran on a cancelled context: %q %v", c, d.ctxErrs[i])
+			}
+		}
+	}
+	if !removed {
+		t.Fatalf("no container rollback: %q", d.verbs())
 	}
 }
 
-func TestSharingDenied(t *testing.T) {
+func TestCreateFailureNamesNoFileSharing(t *testing.T) {
 	w := &world{labels: goodLabels(), runErr: &docker.CommandError{Exit: 125, Stderr: "docker: Error response from daemon: mounts denied: \nThe path /Users/example/src/project is not shared from the host and is not known to Docker.\n\nRun 'docker run --help' for more information"},
 		rmErr: &docker.CommandError{Exit: 1, Stderr: "Error: No such container: x"}}
 	h, _ := startHost(w, &fakeCreds{})
 	_, err := h.Start(context.Background(), validManifest(t))
 	e := protoErr(t, err)
-	if e.Code != protocol.StartFailed || e.Cleanup != protocol.NotNeeded || !strings.Contains(e.Message, "file sharing") ||
-		!strings.Contains(e.Message, "docker-state") || !strings.Contains(e.Cause, "not shared from the host") {
+	if e.Code != protocol.StartFailed || e.Message != "Creating the container failed." || strings.Contains(e.Message, "sharing") ||
+		!strings.Contains(e.Cause, "not shared from the host") {
 		t.Fatalf("%+v", e)
 	}
 }
@@ -709,8 +742,8 @@ func TestManifestUnreadable(t *testing.T) {
 }
 
 func TestHookUnderUncleanCWD(t *testing.T) {
-	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
+	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","daemon":"` + testDaemon + `","image":"ensemble-worker:` + imageKey +
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","state":"new","claude_dir":"` + ClientHomes + `/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {

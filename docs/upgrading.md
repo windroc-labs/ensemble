@@ -1,5 +1,63 @@
 # Upgrading
 
+## Broker protocol 43: remote Docker target
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer also creates
+`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A `docker_unreachable` error names the Docker
+target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock: Docker
+daemon not running; start Docker Desktop and retry.`
+
+With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
+machine the target, write exactly this there, with `:port` when it is not 22:
+
+```json
+{"host": "ssh://user@host", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
+```
+
+Any other key, or a file without both, fails every Docker command `docker_unreachable` ("invalid target setting").
+Only the broker reads the file: `ensemble-broker target` prints the configured daemons (`local`, and `remote` when
+`host` is set), the default one, and each daemon's ID or why it cannot be reached. The broker and the session send
+every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say:
+
+- SSH ignores `~/.ssh/config`, so the address carries the user and port. Authentication is key-only: the default key
+  files or the agent at `SSH_AUTH_SOCK`. Agent, X11 and port forwarding are off.
+- The host key must already be in `~/.ssh/known_hosts`. A new key is never accepted, and a changed key is refused.
+- The remote login shell must find `docker` on its PATH. The Docker Engine must be version 26 or newer.
+- Before any build or credential write, each broker command checks the target once. Start fails `docker_unreachable`
+  with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
+  running, or an Engine older than 26.
+
+Where a worker runs:
+
+- A new session takes its environment's `daemon` key: `"local"` runs it on the Mac's Docker Desktop whatever the
+  target is; unset takes the target when `host` is set, else the local Docker Desktop. The packaged mini-op
+  environment (the verifier's) sets `daemon = "local"`. Only `config.toml` and `config.local.toml` set it.
+- The session records that daemon by its ID (`docker info`) in `~/.ensemble/docker-state/<name>/daemon.json`, once,
+  and every later command of the session (maintain, close, resume, reclaim) uses it, whatever the settings say then:
+  a LAN address and a Tailscale address of one machine are one daemon. A session with no record belongs to the local
+  Docker Desktop. Resuming a session whose daemon no longer has a configured address fails before any volume is made,
+  naming the session's target: set the target back to it first.
+- `local_secrets` only refuses: the broker rejects a start on the remote daemon whose environment secrets include a
+  listed item (`manifest_rejected`), so those credentials never leave the Mac. It never moves a worker. A role that
+  asks for the mini-op credentials outside the mini-op environment fails that way.
+- With a remote target, `ensemble-session ls` and sweep cover both daemons. A daemon that does not answer is named on
+  stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
+  `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
+  cannot be asked.
+- `build`, `close` and `workspace-rm` take `--daemon <ID>`; a start's manifest names its `daemon`. A daemon ID no
+  configured daemon has fails `docker_unreachable`, naming it and the configured daemons.
+- The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`. The old files directly in
+  `~/.ensemble/docker/images/` and `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer
+  read; delete them:
+  `find ~/.ensemble/docker/images -maxdepth 1 -type f -delete; rm -f ~/.ensemble/docker/clients-check.json ~/.ensemble/docker/clients-check.reported`.
+
+A worker's client state (Claude config dir, Codex `sessions` and `config`, OpenCode data) now lives in its state
+volume `ensemble-state-<name>` on the Docker target, local or remote, never in a Mac directory; reclaiming a session
+deletes it with the workspace volume. A Docker session started before this upgrade keeps its state in
+`~/.ensemble/docker-state/<name>/<client>`, which is no longer read: to resume it, copy that directory into its state
+volume once by [Docker sessions from before state volumes](../README.md#docker-sessions-from-before-state-volumes),
+or give it a new start; then delete that directory.
+
 ## ensemble resume opens a manager; ensemble list only lists
 
 `ensemble list` now only prints the managers; it no longer asks which one to open. To open one, run `ensemble resume`
@@ -560,7 +618,8 @@ asks the login keychain password once and shows no dialog ([Broker installer](..
 
 A broker below protocol 30 cannot read the renamed items, so once a protocol 30 broker is installed,
 `scripts/install.sh` refuses a `--ref` (an older release or branch) whose broker speaks below 30, before it replaces
-the broker or `~/.egress/current`.
+the broker or `~/.egress/current`. It never touches the egress proxy of a remote Docker target, which
+`scripts/install-target-egress.sh` installs ([Remote Docker target](remote-docker-target.md)).
 
 ## Release changes
 
@@ -600,7 +659,8 @@ the image: the ensemble layer installs its own, and a base image no longer needs
 
 Broker protocol 25 makes `start` require the egress proxy ([Egress setup](upgrading.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
-`scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)).
+`scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)); on a remote Docker target, run
+`scripts/install-target-egress.sh` instead ([Remote Docker target](remote-docker-target.md#egress-proxy-on-the-target)).
 
 Broker protocol 24 adds the start manifest's optional `secrets` ([Environment configuration](../src/ensemble/delegate/config.toml)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
@@ -630,6 +690,10 @@ After updating the plugin, rerun `scripts/install.sh --docker`: it installs the 
 `windroc-labs/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
 proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Egress setup](upgrading.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress setup](upgrading.md#egress-proxy)).
+
+With a remote Docker target, workers use the egress proxy on the target instead. Install or upgrade it from the Mac
+with `scripts/install-target-egress.sh` ([Remote Docker target](remote-docker-target.md#egress-proxy-on-the-target));
+`scripts/install.sh --docker` keeps installing the Mac's own proxy, which mini-op workers use.
 
 The pinned proxy now builds the image as `egress-proxy`. After the installer succeeds, remove the
 old image it leaves behind:
@@ -804,6 +868,11 @@ Mac; the `tests/session/live_docker.py` checks: [Docker acceptance entry](../tes
   time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
 - [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
   proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] Remote Docker target, as the remote-target acceptance runs it (on the user's Mac against the PC's Docker
+  Desktop, an exception to the test Mac mini rule above): after the
+  [Windows target](remote-docker-target.md#windows-target) steps, `scripts/install-target-egress.sh` ends with
+  `egress-proxy` healthy on the target, and the target has no `gh` login, no registry credential from the install and
+  no registry login in its Docker client config.
 - [ ] [Linear presets](#linear-presets) in a new Linear team, from only that section and the config: both dry-runs
   report no configuration error. Deferred until there is a new Linear team.
 - [ ] [Linear apps](#linear-apps), before cutover: the harness app claims, moves, comments (the comment's `user` has

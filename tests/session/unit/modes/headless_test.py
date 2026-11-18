@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import unittest
+from dataclasses import replace
 from typing import ClassVar
 from unittest import mock
 
@@ -746,7 +747,8 @@ class ThroughItsHost(Base):
         with mock.patch.object(host, "_client_context", return_value=context):
             self.start_on(host, client_class=Seen)
         self.assertEqual(len(seen), 1)
-        self.assertIs(seen[0], context)
+        self.assertEqual(replace(seen[0], home=None), context)
+        self.assertEqual(seen[0].home.persisted(), {"kind": "local"})
 
     def test_an_over_budget_prompt_becomes_a_pointer_to_a_file_in_the_workdir(self):
         big, path = "雪" * 40_000, os.path.join(self.dir, "prompt", "prompt.md")

@@ -47,6 +47,14 @@ func (f *fakeDocker) removed() []string {
 	return refs
 }
 
+// afterInfo is f's record without a first call identifying the daemon.
+func (f *fakeDocker) afterInfo() *fakeDocker {
+	if len(f.calls) > 0 && slices.Equal(f.calls[0], docker.InfoID) {
+		return &fakeDocker{calls: f.calls[1:], stdin: f.stdin[1:], ctxErrs: f.ctxErrs[1:]}
+	}
+	return f
+}
+
 func (f *fakeDocker) verbs() []string {
 	var out []string
 	for _, c := range f.calls {
@@ -152,7 +160,7 @@ func TestPrepareUmask(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := h.prepare(context.Background(), e.pkg, spec, tmp)
+			p, err := h.prepare(context.Background(), h.Daemons[0], e.pkg, spec, tmp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -300,6 +308,16 @@ type buildEnv struct {
 	releases        *fakeReleases
 	// ids, when set, gives each image build its own ID, the tag's inspected ID; nil: every image is sha256:a….
 	ids map[string]string
+	// daemon answers docker info's ID (default testDaemon); info, when set, replaces its whole output, infoErr fails it.
+	daemon, info string
+	infoErr      error
+}
+
+const testDaemon = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+
+// testRecords are testDaemon's image records under home.
+func testRecords(home string) records {
+	return records{filepath.Join(home, ".ensemble/docker/images", testDaemon)}
 }
 
 // fakeReleases answers Latest from latest, failing with err; it records each package asked.
@@ -322,7 +340,8 @@ func newReleases() *fakeReleases {
 var clientArgs = map[string]string{"CLAUDE_VERSION": "ensemble.claude-version", "CODEX_VERSION": "ensemble.codex-version", "OPENCODE_VERSION": "ensemble.opencode-version"}
 
 func newBuildEnv(t *testing.T) *buildEnv {
-	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases()}
+	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases(),
+		daemon: testDaemon}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
 	putFile(t, filepath.Join(e.pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
@@ -331,6 +350,11 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/orchestrator/sample.py"), "orchestrator")
 	e.fake = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch args[0] {
+		case "info":
+			if e.info != "" {
+				return []byte(e.info), e.infoErr
+			}
+			return []byte(`"` + e.daemon + `"` + "\n"), e.infoErr
 		case "build":
 			tag := args[slices.Index(args, "--tag")+1]
 			if strings.HasPrefix(tag, e.failStage+":") && e.failStage != "" {
@@ -411,8 +435,29 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	return e
 }
 
-func (e *buildEnv) host() Host {
-	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock, Releases: e.releases}
+// knownHost is a Host on a daemon whose ID is already looked up, as a start's is: its Build and prune use r.
+type knownHost struct {
+	Host
+	d Daemon
+	r records
+}
+
+func (k knownHost) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
+	return k.build(ctx, k.d, k.r, variant{pkg, spec.BaseImage, spec.Plugins, spec.ImagePlugins}, maxAge)
+}
+
+func (k knownHost) prune(ctx context.Context, key string) { k.Host.prune(ctx, k.d, k.r, key) }
+
+// host is e's Host on e.daemon, its ID already looked up; lookupHost looks it up.
+func (e *buildEnv) host() knownHost {
+	h := e.lookupHost()
+	return knownHost{h, h.Daemons[0], e.records()}
+}
+
+func (e *buildEnv) records() records { return records{e.imagesDir()} }
+
+func (e *buildEnv) lookupHost() Host {
+	return Host{Home: e.home, Daemons: one(e.fake), Progress: &e.progress, Lock: e.lock, Releases: e.releases}
 }
 
 // lock is a non-reentrant image lock: taking it while held fails, as a second process would wait.
@@ -430,12 +475,17 @@ func (e *buildEnv) lock() (func(), error) {
 }
 
 func (e *buildEnv) leasePath(key string) string {
-	return filepath.Join(e.home, ".ensemble/docker/images", key)
+	return filepath.Join(e.imagesDir(), key)
+}
+
+// imagesDir is the current daemon's image records.
+func (e *buildEnv) imagesDir() string {
+	return filepath.Join(e.home, ".ensemble/docker/images", e.daemon)
 }
 
 func TestBuildCacheAndStages(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,21 +518,21 @@ func TestBuildCacheAndStages(t *testing.T) {
 		}
 	}
 	calls := len(e.fake.calls)
-	second, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	second, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil || second.Rebuilt || second.Image != first.Image || len(e.fake.calls) != calls+1 {
 		t.Fatalf("%+v %v %q", second, err, e.fake.verbs())
 	}
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "changed")
-	third, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	third, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil || !third.Rebuilt || third.Image == first.Image {
 		t.Fatalf("%+v %v", third, err)
 	}
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/delegate/sample.py"), "changed")
-	if team, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil || !team.Rebuilt || team.Image == third.Image {
+	if team, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || !team.Rebuilt || team.Image == third.Image {
 		t.Fatalf("%+v %v", team, err)
 	}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM other")
-	fourth, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	fourth, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil || !fourth.Rebuilt || fourth.Image == third.Image {
 		t.Fatalf("%+v %v", fourth, err)
 	}
@@ -503,7 +553,7 @@ func TestBuildFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newBuildEnv(t)
 			mutate(e)
-			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 			if code(t, err) != protocol.BuildFailed {
 				t.Fatal(err)
 			}
@@ -524,7 +574,7 @@ func TestBuildFailures(t *testing.T) {
 			}
 			return inner(args, stdin)
 		}
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.BuildFailed {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); code(t, err) != protocol.BuildFailed {
 			t.Fatal(err)
 		}
 	})
@@ -538,15 +588,15 @@ func TestBuildFailures(t *testing.T) {
 			}
 			return out, err
 		}
-		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if message, _ := buildFailure(t, err); message != "Built image labels do not match the package." {
 			t.Fatal(message)
 		}
 	})
 	t.Run("unreachable", func(t *testing.T) {
 		e := newBuildEnv(t)
-		e.fake.respond = func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.DockerUnreachable {
+		e.fake.respond = func([]string, []byte) ([]byte, error) { return nil, unreachableErr }
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); code(t, err) != protocol.DockerUnreachable {
 			t.Fatal(err)
 		}
 	})
@@ -614,7 +664,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 func TestBuildContextOutsideTMPDIR(t *testing.T) {
 	e := newBuildEnv(t)
 	t.Setenv("TMPDIR", t.TempDir())
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
 	base := filepath.Join(e.home, ".ensemble/docker/tmp") + "/"
@@ -636,7 +686,7 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 	t.Run("keeps the current pair and images containers use", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images, e.containers, e.used = listing, "c1\nc2\n", id("e")+"\n"+id("0")+"\n"
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		inspect := e.fake.calls[slices.Index(e.fake.verbs(), "container inspect")]
@@ -651,14 +701,14 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 			t.Fatalf("%q", got)
 		}
 		calls := len(e.fake.calls)
-		if again, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil || again.Rebuilt || len(e.fake.calls) != calls+1 {
+		if again, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || again.Rebuilt || len(e.fake.calls) != calls+1 {
 			t.Fatalf("a reused image pruned: %v %q", err, e.fake.verbs()[calls:])
 		}
 	})
 	t.Run("a failed removal keeps the image", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images, e.rmErr = listing, &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: conflict: image is in use"}
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(e.progress.String(), "ensemble-broker: kept ensemble-worker:"+old+": Error response from daemon: conflict: image is in use\n") {
@@ -668,7 +718,7 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 	t.Run("unknown containers keep every image", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images, e.listErr = listing, &docker.CommandError{Exit: 1, Stderr: "boom"}
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		if got := e.fake.removed(); got != nil ||
@@ -695,7 +745,7 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		if err := os.Chtimes(e.leasePath(kept), recent, recent); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		if got := e.fake.removed(); !slices.Equal(got, []string{"ensemble-worker:" + old, "ensemble-user:" + old}) {
@@ -715,7 +765,7 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 func TestBuildRefreshesAnOldImage(t *testing.T) {
 	const week = 7 * 24 * time.Hour
 	e := newBuildEnv(t)
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -733,7 +783,7 @@ func TestBuildRefreshesAnOldImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e.age = tc.age
 			calls := len(e.fake.calls)
-			got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, tc.maxAge)
+			got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, tc.maxAge)
 			if err != nil || got.Rebuilt != tc.rebuilt || got.Image != "ensemble-worker:"+e.key {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -754,7 +804,7 @@ func TestBuildRemovesUntaggedImages(t *testing.T) {
 	id := func(c string) string { return "sha256:" + strings.Repeat(c, 64) }
 	e := newBuildEnv(t)
 	e.dangling, e.containers, e.used = id("3")+"\n"+id("4")+"\n", "c1\n", id("4")+"\n"
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
 	listing := e.fake.calls[len(e.fake.calls)-2]
@@ -771,30 +821,30 @@ func TestBuildRemovesUntaggedImages(t *testing.T) {
 
 func TestAFailedRefreshKeepsTheImage(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.age, e.failStage = 8*24*time.Hour, "ensemble-user"
 	e.progress.Reset()
-	got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 7*24*time.Hour)
+	got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, 7*24*time.Hour)
 	if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if want := "ensemble-broker: kept " + first.Image + ": refreshing it failed: Building the worker image definition failed. (RUN false)\n"; e.progress.String() != want {
 		t.Fatalf("%q", e.progress.String())
 	}
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 0); err == nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, 0); err == nil {
 		t.Fatal("a forced rebuild kept the image")
 	}
 	inner := e.fake.respond
 	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" {
-			return nil, docker.ErrUnreachable
+			return nil, unreachableErr
 		}
 		return inner(args, stdin)
 	}
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 7*24*time.Hour); err == nil || err.(*protocol.Error).Code != protocol.DockerUnreachable {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, 7*24*time.Hour); err == nil || err.(*protocol.Error).Code != protocol.DockerUnreachable {
 		t.Fatalf("unreachable Docker kept the image: %v", err)
 	}
 }
@@ -851,10 +901,10 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 		e.share(func() {
 			if !ran {
 				ran = true
-				first, firstErr = e.host().Build(ctx, other, BuildSpec{}, -1)
+				first, firstErr = e.host().Build(ctx, other, BuildSpec{Daemon: testDaemon}, -1)
 			}
 		})
-		second, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		second, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if err != nil || firstErr != nil || !first.Rebuilt || !second.Rebuilt || first.Image == second.Image {
 			t.Fatalf("%+v %v %+v %v", first, firstErr, second, err)
 		}
@@ -865,7 +915,7 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 	t.Run("a reused image another package's rebuild then prunes", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.share(func() {})
-		built, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		built, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -873,10 +923,10 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 		if err := os.Chtimes(e.leasePath(strings.TrimPrefix(built.Image, "ensemble-worker:")), stale, stale); err != nil {
 			t.Fatal(err)
 		}
-		if reused, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || reused.Rebuilt {
+		if reused, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || reused.Rebuilt {
 			t.Fatalf("%+v %v", reused, err)
 		}
-		if other, err := e.host().Build(ctx, otherPackage(t), BuildSpec{}, -1); err != nil || !other.Rebuilt {
+		if other, err := e.host().Build(ctx, otherPackage(t), BuildSpec{Daemon: testDaemon}, -1); err != nil || !other.Rebuilt {
 			t.Fatalf("%+v %v", other, err)
 		}
 		if !e.has(built) {
@@ -886,7 +936,7 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 	t.Run("a pair no build leased within the lease", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.share(func() {})
-		built, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		built, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -897,7 +947,7 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		other, err := e.host().Build(ctx, otherPackage(t), BuildSpec{}, -1)
+		other, err := e.host().Build(ctx, otherPackage(t), BuildSpec{Daemon: testDaemon}, -1)
 		if err != nil || e.has(built) || !e.has(other) {
 			t.Fatalf("%+v %v %v", other, err, e.built)
 		}
@@ -911,11 +961,11 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 	ctx := context.Background()
 	e := newBuildEnv(t)
 	e.images = "ensemble-worker:" + strings.Repeat("1", 64) + " sha256:" + strings.Repeat("c", 64) + "\n"
-	built, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	built, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
 	want := [][]string{{"image inspect"}, {"image inspect"}, {"container ls", "image ls", "image rm", "image ls"}, {"image inspect"}}
@@ -929,7 +979,7 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 	t.Run("a build that cannot take it", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.lockFail = 1
-		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		_, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		var pe *protocol.Error
 		if !errors.As(err, &pe) || pe.Code != protocol.BuildFailed || pe.Message != "Taking the image lock ~/.ensemble/docker/images.lock failed." || len(e.fake.calls) != 0 {
 			t.Fatalf("%v %q", err, e.fake.verbs())
@@ -938,7 +988,7 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 	t.Run("a rebuild that cannot take it to record the replaced image", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.lockFail = 2
-		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		_, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if message, _ := buildFailure(t, err); message != "Taking the image lock ~/.ensemble/docker/images.lock failed." || packageBuild(e.fake.calls) != nil {
 			t.Fatalf("%s %q", message, e.fake.verbs())
 		}
@@ -946,7 +996,7 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 	t.Run("a prune that cannot take it keeps every image", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images, e.lockFail = "ensemble-worker:"+strings.Repeat("1", 64)+" sha256:"+strings.Repeat("c", 64)+"\n", 3
-		if got, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || !got.Rebuilt {
+		if got, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || !got.Rebuilt {
 			t.Fatalf("%+v %v", got, err)
 		}
 		if slices.Contains(e.fake.verbs(), "image rm") || e.progress.String() != "ensemble-broker: kept older images: cannot take the image lock: lock busy\n" {
@@ -960,7 +1010,7 @@ func TestImagePluginCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := BuildSpec{ImagePlugins: []string{"beta", "alpha"}}
+	spec := BuildSpec{Daemon: testDaemon, ImagePlugins: []string{"beta", "alpha"}}
 	t.Run("passes", func(t *testing.T) {
 		e := newBuildEnv(t)
 		if _, err := e.host().Build(context.Background(), e.pkg, spec, -1); err != nil {
@@ -1050,7 +1100,7 @@ func noPull(t *testing.T, calls [][]string) {
 
 func TestBaseImageAbsent(t *testing.T) {
 	e := newBaseEnv(t)
-	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: "nope:none"}, -1)
+	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: "nope:none"}, -1)
 	if message, _ := buildFailure(t, err); message != "Base image nope:none is not a local image; build or load it first (ensemble-broker never pulls it)." {
 		t.Fatal(message)
 	}
@@ -1058,7 +1108,7 @@ func TestBaseImageAbsent(t *testing.T) {
 		t.Fatalf("%q", e.fake.calls)
 	}
 	e = newBaseEnv(t)
-	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: "-x"}, -1)
+	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: "-x"}, -1)
 	if message, _ := buildFailure(t, err); !strings.Contains(message, "-x") || len(e.fake.calls) != 0 {
 		t.Fatalf("%s %q", message, e.fake.calls)
 	}
@@ -1081,7 +1131,7 @@ func TestBaseImageReservedLabels(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newBaseEnv(t)
 			e.baseLabels = tc.labels
-			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: baseRef}, -1)
 			if message, _ := buildFailure(t, err); message != tc.message {
 				t.Fatal(message)
 			}
@@ -1124,7 +1174,7 @@ func TestBaseImageRequirements(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newBaseEnv(t)
 			e.baseAgent, e.baseTools, e.baseCheckErr = tc.agent, tc.tools, tc.err
-			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: baseRef}, -1)
 			message, cause := buildFailure(t, err)
 			if message != tc.message {
 				t.Fatal(message)
@@ -1161,7 +1211,7 @@ func TestBaseImageRequirements(t *testing.T) {
 
 func TestBaseImageStages(t *testing.T) {
 	e := newBaseEnv(t)
-	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef, ImagePlugins: []string{"dummy-plugin"}}, -1)
+	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: baseRef, ImagePlugins: []string{"dummy-plugin"}}, -1)
 	if err != nil || !result.Rebuilt || result.Image != "ensemble-worker:"+e.key {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -1188,7 +1238,7 @@ func TestBaseImageStages(t *testing.T) {
 	t.Run("tag fails", func(t *testing.T) {
 		e := newBaseEnv(t)
 		e.tagErr = &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such image: " + baseID}
-		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: baseRef}, -1)
 		if message, cause := buildFailure(t, err); message != "Tagging base image dummy-env:test failed." || !strings.Contains(cause, "No such image") {
 			t.Fatalf("%s %s", message, cause)
 		}
@@ -1200,7 +1250,7 @@ func TestBaseImageKeyFollowsItsID(t *testing.T) {
 	e.bases["alias:1"] = baseID
 	build := func(ref string) BuildResult {
 		t.Helper()
-		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: ref}, -1)
+		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: ref}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1216,21 +1266,21 @@ func TestBaseImageKeyFollowsItsID(t *testing.T) {
 		t.Fatalf("same ID, other tag: %+v vs %+v", alias, first)
 	}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
-	if defaultPath, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil || defaultPath.Image == first.Image {
+	if defaultPath, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || defaultPath.Image == first.Image {
 		t.Fatalf("%+v %v", defaultPath, err)
 	}
 }
 
 func TestBuildReusesCurrentImageWithoutLookup(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.releases = &fakeReleases{err: errors.New("no lookup expected")}
 	calls := len(e.fake.calls)
 	for _, maxAge := range []time.Duration{-1, 7 * 24 * time.Hour} {
-		got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, maxAge)
+		got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, maxAge)
 		if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
 			t.Fatalf("%+v %v", got, err)
 		}
@@ -1242,7 +1292,7 @@ func TestBuildReusesCurrentImageWithoutLookup(t *testing.T) {
 
 func TestFirstBuildLooksUpLatest(t *testing.T) {
 	e := newBuildEnv(t)
-	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil || !result.Rebuilt {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -1258,7 +1308,7 @@ func TestFirstBuildLooksUpLatest(t *testing.T) {
 	t.Run("a lookup failure fails it", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.releases.err = errors.New("opencode-ai registry unavailable")
-		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if message, cause := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." || cause != "" {
 			t.Fatalf("%q %q", message, cause)
 		}
@@ -1269,7 +1319,7 @@ func TestFirstBuildLooksUpLatest(t *testing.T) {
 	t.Run("a release below its minimum fails it", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.releases.latest["@anthropic-ai/claude-code"] = "2.0.9"
-		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 		if message, _ := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." {
 			t.Fatal(message)
 		}
@@ -1278,7 +1328,7 @@ func TestFirstBuildLooksUpLatest(t *testing.T) {
 
 func TestBuildRebuildsAnImageWithoutClientLabels(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1286,7 +1336,7 @@ func TestBuildRebuildsAnImageWithoutClientLabels(t *testing.T) {
 		delete(e.built[first.Image], label)
 	}
 	e.releases.asked = nil
-	again, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	again, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil || !again.Rebuilt || len(e.releases.asked) != 3 {
 		t.Fatalf("%+v %v %q", again, err, e.releases.asked)
 	}
@@ -1294,14 +1344,14 @@ func TestBuildRebuildsAnImageWithoutClientLabels(t *testing.T) {
 
 func TestRefreshKeepsImageWhenLookupFails(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.age, e.releases.err = 8*24*time.Hour, errors.New("@openai/codex registry unavailable")
 	e.progress.Reset()
 	calls := len(e.fake.calls)
-	got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 7*24*time.Hour)
+	got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, 7*24*time.Hour)
 	if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -1311,7 +1361,7 @@ func TestRefreshKeepsImageWhenLookupFails(t *testing.T) {
 	if got := e.fake.verbs()[calls:]; !slices.Equal(got, []string{"image inspect"}) {
 		t.Fatalf("%q", got)
 	}
-	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{}, 0)
+	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, 0)
 	if message, _ := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." {
 		t.Fatal(message)
 	}
@@ -1351,7 +1401,7 @@ func (e *buildEnv) writeCheckState(t *testing.T, checkedAt time.Time, failure st
 	if err != nil {
 		t.Fatal(err)
 	}
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), string(data))
+	putFile(t, filepath.Join(e.imagesDir(), "clients-check.json"), string(data))
 }
 
 // private reads path, failing unless it is a 0600 file.
@@ -1386,13 +1436,13 @@ func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
 			case "ok":
 				e.writeCheckState(t, time.Now().Add(-tc.age), "")
 			case "{":
-				putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), "{")
+				putFile(t, filepath.Join(e.imagesDir(), "clients-check.json"), "{")
 			}
 			spawns := 0
 			h := e.host()
 			h.Spawn = func() error { spawns++; return nil }
 			for _, wantRebuilt := range []bool{true, false} {
-				if got, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || got.Rebuilt != wantRebuilt {
+				if got, err := h.Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || got.Rebuilt != wantRebuilt {
 					t.Fatalf("%+v %v", got, err)
 				}
 			}
@@ -1405,7 +1455,7 @@ func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
 		e := newBuildEnv(t)
 		h := e.host()
 		h.Spawn = func() error { return errors.New("exec format error") }
-		if got, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || !got.Rebuilt {
+		if got, err := h.Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || !got.Rebuilt {
 			t.Fatalf("%+v %v", got, err)
 		}
 		if !strings.HasSuffix(e.progress.String(), "ensemble-broker: cannot start the client check: exec format error\n") {
@@ -1417,7 +1467,7 @@ func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
 		e.failStage = "ensemble-user"
 		h := e.host()
 		h.Spawn = func() error { t.Fatal("spawned"); return nil }
-		if _, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err == nil {
+		if _, err := h.Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err == nil {
 			t.Fatal("built")
 		}
 	})
@@ -1426,14 +1476,14 @@ func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
 func TestBuildReportsCheckFailureOnce(t *testing.T) {
 	ctx := context.Background()
 	e := newBuildEnv(t)
-	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(e.home, ".ensemble/docker/clients-check.reported")
+	marker := filepath.Join(e.imagesDir(), "clients-check.reported")
 	build := func() string {
 		t.Helper()
 		e.progress.Reset()
-		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		return e.progress.String()
@@ -1470,10 +1520,10 @@ func TestBuildReportsCheckFailureOnce(t *testing.T) {
 	}
 	t.Run("no state, no marker", func(t *testing.T) {
 		e := newBuildEnv(t)
-		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(e.home, ".ensemble/docker/clients-check.reported")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(e.imagesDir(), "clients-check.reported")); !os.IsNotExist(err) {
 			t.Fatalf("marker written: %v", err)
 		}
 	})
@@ -1483,21 +1533,21 @@ func TestBuildRecordsVariant(t *testing.T) {
 	ctx := context.Background()
 	plugin := "x@owner/repo#" + strings.Repeat("a", 40)
 	e := newBaseEnv(t)
-	got, err := e.host().Build(ctx, e.pkg, BuildSpec{BaseImage: baseRef, Plugins: []string{plugin}, ImagePlugins: []string{"beta", "alpha"}}, -1)
+	got, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon, BaseImage: baseRef, Plugins: []string{plugin}, ImagePlugins: []string{"beta", "alpha"}}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	record := filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
 	want := `{"package":"` + e.pkg + `","base_image":"dummy-env:test","plugins":["` + plugin + `"],"image_plugins":["alpha","beta"]}`
 	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(want)) {
 		t.Fatalf("%s", data)
 	}
 	e = newBuildEnv(t)
-	got, err = e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	got, err = e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record = filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	record = filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
 	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(`{"package":"`+e.pkg+`","base_image":"","plugins":[],"image_plugins":[]}`)) {
 		t.Fatalf("%s", data)
 	}
@@ -1507,7 +1557,7 @@ func TestBuildRecordsVariant(t *testing.T) {
 		}
 		putFile(t, filepath.Join(record, "blocker"), "")
 		e.progress.Reset()
-		if again, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || again.Rebuilt {
+		if again, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil || again.Rebuilt {
 			t.Fatalf("%+v %v", again, err)
 		}
 		if !strings.HasPrefix(e.progress.String(), "ensemble-broker: cannot record "+got.Image+" for the client check: ") {
@@ -1519,7 +1569,7 @@ func TestBuildRecordsVariant(t *testing.T) {
 func TestBuildDuringCheckRebuildDoesNotWait(t *testing.T) {
 	ctx := context.Background()
 	e := newBuildEnv(t)
-	first, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	first, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1540,7 +1590,7 @@ func TestBuildDuringCheckRebuildDoesNotWait(t *testing.T) {
 	}()
 	<-building
 	// The fake image lock fails rather than waits: a check holding it across docker build fails this build.
-	got, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	got, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	close(release)
 	if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
 		t.Fatalf("%+v %v", got, err)
@@ -1557,11 +1607,11 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	h := e.host()
 	h.Now = func() time.Time { return clock }
-	first, err := h.Build(ctx, e.pkg, BuildSpec{}, -1)
+	first, err := h.Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(first.Image, "ensemble-worker:")+".replaced")
+	replaced := filepath.Join(e.imagesDir(), strings.TrimPrefix(first.Image, "ensemble-worker:")+".replaced")
 	if _, err := os.Stat(replaced); !os.IsNotExist(err) {
 		t.Fatalf("a first build replaced nothing: %v", err)
 	}
@@ -1575,7 +1625,7 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 		}
 		return inner(args, stdin)
 	}
-	again, err := h.Build(ctx, e.pkg, BuildSpec{}, 0)
+	again, err := h.Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, 0)
 	if err != nil || !again.Rebuilt || again.Digest == first.Digest {
 		t.Fatalf("%+v %v", again, err)
 	}
@@ -1585,7 +1635,7 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 	}
 	t.Run("an inspect failure fails the rebuild before docker build", func(t *testing.T) {
 		e := newBuildEnv(t)
-		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 			t.Fatal(err)
 		}
 		inner := e.fake.respond
@@ -1599,7 +1649,7 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 			return inner(args, stdin)
 		}
 		calls := len(e.fake.calls)
-		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, 0)
+		_, err := e.host().Build(ctx, e.pkg, BuildSpec{Daemon: testDaemon}, 0)
 		if message, _ := buildFailure(t, err); message != "Cannot inspect the worker image." || packageBuild(e.fake.calls[calls:]) != nil {
 			t.Fatalf("%s %q", message, e.fake.verbs()[calls:])
 		}
@@ -1613,8 +1663,8 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	h := e.host()
 	h.Now = func() time.Time { return clock }
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
+	putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
+	putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
 	h.prune(context.Background(), "")
 	if got := e.fake.removed(); !slices.Equal(got, []string{old}) {
 		t.Fatalf("%q", got)
@@ -1625,7 +1675,7 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	t.Run("an entry whose rebuild still runs outlives the grace", func(t *testing.T) {
-		putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"),
+		putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("1", 64)+".replaced"),
 			`[{"id":"`+young+`","at":"2026-10-26T11:00:00Z","pending":true}]`)
 		h.prune(context.Background(), "")
 		if got := e.fake.removed(); !slices.Equal(got, []string{old}) {

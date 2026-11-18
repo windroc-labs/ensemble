@@ -11,7 +11,9 @@
       "argv": [
         "workspace-rm",
         "--volume",
-        "ensemble-ws-worker_1"
+        "ensemble-ws-worker_1",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
       ]
     }
   },
@@ -28,7 +30,9 @@
         "workspace-rm",
         "--volume",
         "ensemble-ws-worker_1",
-        "--force"
+        "--force",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
       ]
     }
   },
@@ -46,6 +50,8 @@
         "--volume",
         "ensemble-ws-worker_1",
         "--force",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "x"
       ]
     }
@@ -62,7 +68,26 @@
       "argv": [
         "workspace-rm",
         "--volume",
-        "-v"
+        "-v",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+      ]
+    }
+  },
+  {
+    "name": "workspace-rm-input-no-daemon",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "workspace-rm",
+        "--volume",
+        "ensemble-ws-worker_1",
+        "--force"
       ]
     }
   }

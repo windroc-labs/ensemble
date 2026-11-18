@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from ensemble.session.clients.codex import tui
 from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.clients.codex.tui import start as tui_start
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
     Access,
@@ -40,6 +41,7 @@ from tests.session import live_tmux, tui_support
 from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
 from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
+from tests.session.unit.clients.support import homed
 from tests.utils import sandbox
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import running, scratch
@@ -384,7 +386,7 @@ class HookTrustIntegrationTest(Live):
 
     def test_silent_appserver_times_out_and_kills_group_with_a_fake_clock(self):
         self.scene(catalog_case="silent")
-        run = self.session_cls._config().registry.client("codex").tui()
+        run = homed(self.session_cls._config().registry.client("codex").tui())
         launch = run.launch(
             dataclasses.replace(self.spec, sid=self.sid, prompt="hello"),
             (os.path.join(PLUGIN_BIN, "ensemble-session"), "hook", "/protected/session"),
@@ -1128,7 +1130,9 @@ class HookTest(Base):
             "events": None,
             "words": {},
             "tmux_path": sys.executable,
-            "client_hook": HookCallback(tui.__name__, {"store": SessionStore().root}).fields(),
+            "client_hook": HookCallback(
+                tui.__name__, {"store": SessionStore().root, "home": LocalHome().persisted()}
+            ).fields(),
         }
         (folder / "session.json").write_text(json.dumps(state))
         result = subprocess.run(

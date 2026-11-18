@@ -68,6 +68,7 @@ STANDALONE = frozenset(
     f"{SESSION_SRC}{path}"
     for path in (
         "harness/guard.py",
+        "engine/state_reader.py",
         "clients/codex/common/app_server.py",
         "clients/opencode/launcher.py",
         "clients/opencode/probe.py",
@@ -145,8 +146,8 @@ PYTHON_CODE_ALLOWED = {
     ): "Runs codex tui start as __main__ under -P -s from PYTHONPATH roots (and from a cwd decoy), then checks in that interpreter that internal codex modules are canonical; needs internal submodules and a fresh interpreter.",
     (
         "tests/session/integration/extension_client_integration_test.py",
-        "ec5dfcbc92032c9ec70596f6a779897ed3305cd4f9acfd399665c83bdcff3d2f",
-    ): "Codex tui launch (argv, PYTHONPATH) from an installed-layout site through HostedSession's client registry; no public API returns a configured Client's launch, and only a fresh interpreter on the copied site sees that layout.",
+        "3a9178f0e5d0d3cf9e136cd76677be2d1efccb6f0cf0a695e07c741c5430ace5",
+    ): "Codex tui launch (argv, PYTHONPATH) from an installed-layout site through HostedSession's client registry, its adapter handed a local home-store as a Host would; no public API returns a configured Client's launch, and only a fresh interpreter on the copied site sees that layout.",
     (
         "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "7e4699b393a08c5b495eef12293120ce9612e2b3e1ddb34344a1329cd6505d0f",
@@ -206,7 +207,7 @@ EMBEDDED_PROGRAMS_ALLOWED = {
 }
 
 
-EMBEDDED_PROGRAM_ARGV_RETURNS = {"ensemble.session.hosts.docker.daemon.docker_call": 0}
+EMBEDDED_PROGRAM_ARGV_RETURNS = {"ensemble.session.engine.daemon.docker_call": 0}
 
 
 # (path under SESSION_SRC, word): a role name the session uses as a plain word

@@ -7,7 +7,9 @@ import os
 import tempfile
 from unittest import mock
 
-from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.engine import daemon as daemons
+from ensemble.session.engine.daemon import DAEMON
+from ensemble.session.engine.types import ConfigError, Daemon, SessionError, Target
 from ensemble.session.hosts.docker import broker
 from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
 from ensemble.session.hosts.docker.types import Started
@@ -30,17 +32,23 @@ from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 MANIFEST = "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json"
 CONTAINER = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
 VOLUME = "ensemble-ws-worker_1"
+LOCAL_ID = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
 KEYS = broker.client_keys(REPO)
 CALLS = {
     "version_output": ("version", lambda b: b.version()),
-    "build_output": ("build", lambda b: b.build("/opt/ensemble")),
+    "target_output": ("target", lambda b: b.target()),
+    "build_output": ("build", lambda b: b.build("/opt/ensemble", daemon=LOCAL_ID)),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
     "maintain_output": ("maintain", lambda b: b.maintain(CONTAINER, MANIFEST)),
-    "close_output": ("close", lambda b: b.close(CONTAINER)),
-    "workspace_rm_output": ("workspace-rm", lambda b: b.workspace_rm(VOLUME)),
+    "close_output": ("close", lambda b: b.close(CONTAINER, daemon=LOCAL_ID)),
+    "workspace_rm_output": (
+        "workspace-rm",
+        lambda b: b.workspace_rm(VOLUME, daemon=LOCAL_ID),
+    ),
 }
 COMMANDS = {
     "version": CALLS["version_output"],
+    "target": CALLS["target_output"],
     "build": CALLS["build_output"],
     "start": CALLS["start_output"],
     "maintain": CALLS["maintain_output"],
@@ -64,7 +72,87 @@ class PluginRootTest(Case):
                 broker.plugin_root(os.path.join(tmp, "bin", "ensemble-session"))
 
 
+def handshake(*results):
+    """A FakeBroker answering the version handshake before `results`."""
+    return FakeBroker(success("version-output"), *results)
+
+
 class ResponseTest(Case):
+    def test_close_and_workspace_rm_name_their_daemon_by_id(self):
+        local = FakeBroker(success("close-output"))
+        Broker(local).close(CONTAINER, daemon=LOCAL_ID)
+        self.assertEqual(local.calls, [argv("close")])
+        remote = FakeBroker(success("close-output"))
+        Broker(remote).close(CONTAINER, daemon="PC:DAEMON:1")
+        self.assertEqual(
+            remote.calls, [[BROKER, "close", "--container", CONTAINER, "--daemon", "PC:DAEMON:1"]]
+        )
+        forced = FakeBroker(success("workspace-rm-output"))
+        Broker(forced).workspace_rm(VOLUME, force=True, daemon=LOCAL_ID)
+        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force")["argv"]]])
+
+    def test_target_lists_each_daemon_with_its_id_or_why_not(self):
+        local = Daemon(
+            "local",
+            "unix:///Users/u/.docker/run/docker.sock",
+            remote=False,
+            path="/usr/bin:/bin:/usr/sbin:/sbin",
+            id=LOCAL_ID,
+        )
+        remote = Daemon(
+            "remote",
+            "ssh://u@pc",
+            remote=True,
+            path="/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+            id="PC:DAEMON:1",
+        )
+        why = "host key unknown: not in ~/.ssh/known_hosts (Host key verification failed.)"
+        for name, want in (
+            ("target-output", Target("local", (local,))),
+            ("target-output-remote", Target("remote", (remote, local))),
+            (
+                "target-output-remote-unreachable",
+                Target("remote", (remote._replace(id=None, unreachable=why), local)),
+            ),
+        ):
+            with self.subTest(name=name):
+                fake = handshake(success(name))
+                found = Broker(fake).target()
+                self.assertEqual(found, want)
+                self.assertEqual(fake.calls, [argv("version"), argv("target")])
+        self.assertEqual(daemons.daemon_named(found, "remote").unreachable, why)
+        self.assertIsNone(daemons.daemon_with_id(found, "PC:DAEMON:1"))
+        self.assertEqual(daemons.daemon_with_id(found, LOCAL_ID), local)
+
+    def test_a_target_reply_breaking_its_rules_is_bad(self):
+        good = data("target-output-remote")
+        remote, local = good["daemons"]
+        for change in (
+            {"default": "pc"},
+            {"daemons": []},
+            {"daemons": [remote]},
+            {"daemons": [local, local]},
+            {"daemons": [local, remote, remote]},
+            {"daemons": [local | {"remote": True}]},
+            {"daemons": [local | {"endpoint": ""}]},
+            {"daemons": [local | {"path": "/usr/bin\n"}]},
+            {"daemons": [local | {"id": "../x"}]},
+            {"daemons": [local | {"extra": 1}]},
+            {"extra": 1},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(SessionError, "^broker: bad response to target") as raised,
+            ):
+                Broker(handshake((0, json.dumps(good | change), ""))).target()
+            self.assertNotIsInstance(raised.exception, BrokerError)
+
+    def test_target_fails_at_the_handshake_of_an_older_broker(self):
+        fake = FakeBroker((0, '{"protocol_version": "42"}\n', ""))
+        with self.assertRaisesRegex(SessionError, "protocol '42', want '43'"):
+            Broker(fake).target()
+        self.assertEqual(fake.calls, [argv("version")])
+
     def test_start_environment_is_a_generic_string_map(self):
         response = data("start-output")
         response["env"] = {"FUTURE_KIND_IDENTITY": "opaque", "GIT_AUTHOR_NAME": "app[bot]"}
@@ -86,7 +174,7 @@ class ResponseTest(Case):
         self.addCleanup(logger.removeHandler, handler)
         response = {**data("close-output"), "audit_warning": "audit_write_failed"}
         result = Broker(FakeBroker((0, json.dumps(response), "")), warning=unavailable).close(
-            CONTAINER
+            CONTAINER, daemon=LOCAL_ID
         )
         self.assertIs(result, response["removed"])
         self.assertIn("audit_write_failed", output.getvalue())
@@ -166,10 +254,12 @@ class ResponseTest(Case):
             with self.subTest(name=name):
                 if definition == "error":
                     command, call = COMMANDS[data(name)["error"]["command"]]
-                    fake = FakeBroker(failure(name))
+                    result = failure(name)
                 else:
                     command, call = CALLS[definition]
-                    fake = FakeBroker(success(name))
+                    result = success(name)
+                # target asks for the version first
+                fake = handshake(result) if command == "target" else FakeBroker(result)
                 if definition == "error" and valid:
                     with self.assertRaises(BrokerError) as raised:
                         call(Broker(fake))
@@ -187,15 +277,17 @@ class ResponseTest(Case):
                     with self.assertRaisesRegex(SessionError, "broker: bad response") as raised:
                         call(Broker(fake))
                     self.assertNotIsInstance(raised.exception, BrokerError)
-                self.assertEqual(fake.calls, [argv(command)])
-                self.assertEqual(
-                    fake.kwargs[0],
-                    {
-                        "stdin": DEVNULL,
-                        "env": {"PATH": os.defpath},
-                        "timeout": broker.TIMEOUT,
-                    },
-                )
+                asked = [argv("version")] if command == "target" else []
+                self.assertEqual(fake.calls, [*asked, argv(command)])
+                for kwargs in fake.kwargs:
+                    self.assertEqual(
+                        kwargs,
+                        {
+                            "stdin": DEVNULL,
+                            "env": {"PATH": os.defpath},
+                            "timeout": broker.TIMEOUT,
+                        },
+                    )
 
     def test_maintain_keeps_each_components_outcome_and_passes_its_options(self):
         good = data("maintain-output")
@@ -297,7 +389,7 @@ class ResponseTest(Case):
 
     def test_parsed_successes(self):
         self.assertEqual(
-            Broker(FakeBroker(success("build-cached"))).build("/opt/ensemble"),
+            Broker(FakeBroker(success("build-cached"))).build("/opt/ensemble", daemon=LOCAL_ID),
             (data("build-cached")["image"], data("build-cached")["digest"]),
         )
         started = Broker(FakeBroker(success("start-output"))).start(MANIFEST, clients=KEYS)
@@ -306,31 +398,86 @@ class ResponseTest(Case):
             Started(
                 container=CONTAINER,
                 endpoint="unix:///Users/example/.docker/run/docker.sock",
+                daemon="8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
                 image_digest="sha256:" + "b" * 64,
                 clients={"claude": "2.1.0", "codex": "codex-cli 0.100.0", "opencode": "1.19.3"},
                 env=data("start-output")["env"],
                 deadline=None,
             ),
         )
-        self.assertFalse(Broker(FakeBroker(success("close-absent"))).close(CONTAINER))
-        self.assertTrue(Broker(FakeBroker(success("workspace-rm-output"))).workspace_rm(VOLUME))
-        self.assertFalse(Broker(FakeBroker(success("workspace-rm-absent"))).workspace_rm(VOLUME))
+        self.assertFalse(
+            Broker(FakeBroker(success("close-absent"))).close(CONTAINER, daemon=LOCAL_ID)
+        )
+        self.assertTrue(
+            Broker(FakeBroker(success("workspace-rm-output"))).workspace_rm(VOLUME, daemon=LOCAL_ID)
+        )
+        self.assertFalse(
+            Broker(FakeBroker(success("workspace-rm-absent"))).workspace_rm(VOLUME, daemon=LOCAL_ID)
+        )
         forced = FakeBroker(success("workspace-rm-output"))
-        self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True))
+        self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True, daemon=LOCAL_ID))
         self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force")["argv"]]])
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
-            Broker(FakeBroker(other)).workspace_rm(VOLUME)
+            Broker(FakeBroker(other)).workspace_rm(VOLUME, daemon=LOCAL_ID)
 
-    def test_build_passes_only_the_package(self):
+    def test_broker_env_adds_only_a_set_ssh_agent_socket(self):
+        for sock, env in (
+            ("/private/agent.sock", {"PATH": os.defpath, "SSH_AUTH_SOCK": "/private/agent.sock"}),
+            ("", {"PATH": os.defpath}),
+        ):
+            fake = FakeBroker(success("close-absent"))
+            with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": sock, "SSH_AGENT_PID": "1"}):
+                Broker(fake).close(CONTAINER, daemon=LOCAL_ID)
+            self.assertEqual(fake.kwargs[0]["env"], env)
+
+    def test_a_start_reply_s_endpoint_is_only_checked_as_text(self):
+        started = Broker(FakeBroker(success("start-output-remote-endpoint"))).start(
+            MANIFEST, clients=KEYS
+        )
+        self.assertEqual(started.endpoint, "ssh://agent@pc.tail1234.ts.net:2222")
+        for endpoint in ("", "ssh://pc\n", "unix:///x\x1b"):
+            reply = {**data("start-output"), "endpoint": endpoint}
+            with (
+                self.subTest(endpoint=endpoint),
+                self.assertRaisesRegex(SessionError, "bad response to start"),
+            ):
+                Broker(FakeBroker((0, json.dumps(reply), ""))).start(MANIFEST, clients=KEYS)
+
+    def test_daemon_pattern_is_the_schemas(self):
+        with open(os.path.join(REPO, broker.SCHEMA)) as f:
+            pattern = json.load(f)["$defs"]["daemon"]["pattern"]
+        self.assertEqual(f"^{DAEMON.pattern}$", pattern)
+        started = Broker(FakeBroker(success("start-output-old-style-daemon"))).start(
+            MANIFEST, clients=KEYS
+        )
+        self.assertEqual(started.daemon, data("start-output-old-style-daemon")["daemon"])
+
+    def test_a_start_reply_without_a_usable_daemon_is_refused(self):
+        for case in (
+            "start-output-missing-daemon",
+            "start-output-daemon-path",
+            "start-output-daemon-empty",
+        ):
+            with (
+                self.subTest(case=case),
+                self.assertRaisesRegex(SessionError, "bad response to start"),
+            ):
+                Broker(FakeBroker((0, json.dumps(data(case)), ""))).start(MANIFEST, clients=KEYS)
+        reply = {**data("start-output"), "daemon": "a" * 129}
+        with self.assertRaisesRegex(SessionError, "bad response to start: fields"):
+            Broker(FakeBroker((0, json.dumps(reply), ""))).start(MANIFEST, clients=KEYS)
+
+    def test_build_passes_only_the_package_and_its_daemon(self):
         fake = FakeBroker(success("build-cached"))
-        Broker(fake).build("/opt/ensemble")
+        Broker(fake).build("/opt/ensemble", daemon=LOCAL_ID)
         self.assertEqual(fake.calls, [[BROKER, *data("build-input")["argv"]]])
 
     def test_build_passes_plugins(self):
         fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
+            daemon=LOCAL_ID,
             plugins=(UPDRAFT, BETA),
         )
         argv = data("build-input-plugins")["argv"]
@@ -341,12 +488,16 @@ class ResponseTest(Case):
         progress = "#5 [2/3] RUN apt-get purge -y sudo\n#5 ERROR: process exited 1\n"
         rc, _, err = failure("error-build_failed")
         with self.assertRaises(BrokerError) as raised:
-            Broker(FakeBroker((rc, "", progress + err))).build("/opt/ensemble")
+            Broker(FakeBroker((rc, "", progress + err))).build("/opt/ensemble", daemon=LOCAL_ID)
         self.assertEqual(raised.exception.code, "build_failed")
-        found = Broker(FakeBroker((0, text("build-cached"), progress))).build("/opt/ensemble")
+        found = Broker(FakeBroker((0, text("build-cached"), progress))).build(
+            "/opt/ensemble", daemon=LOCAL_ID
+        )
         self.assertEqual(found[0], data("build-cached")["image"])
         with self.assertRaises(BrokerError) as raised:
-            Broker(FakeBroker((rc, "", "#7 partial\n" + err))).build("/opt/ensemble")
+            Broker(FakeBroker((rc, "", "#7 partial\n" + err))).build(
+                "/opt/ensemble", daemon=LOCAL_ID
+            )
         self.assertEqual(raised.exception.code, "build_failed")
 
     def test_only_build_may_put_progress_before_the_error_object(self):
@@ -427,6 +578,7 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
+            daemon=LOCAL_ID,
             plugins=(BETA,),
             base_image="dummy-env:test",
             image_plugins=("dummy-plugin", "other.plugin"),
@@ -435,6 +587,7 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
+            daemon=LOCAL_ID,
             plugins=(BETA,),
             image_plugins=("dummy-plugin", "other.plugin"),
         )

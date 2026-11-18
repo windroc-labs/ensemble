@@ -32,7 +32,7 @@ func (b *startDelivery) erase() {
 	}
 }
 
-func (h Host) deliverStart(ctx context.Context, c string, b *startDelivery) error {
+func (h Host) deliverStart(ctx context.Context, d Daemon, c string, b *startDelivery) error {
 	completed := 0
 	if len(b.commands) > 0 {
 		data, err := json.Marshal(b.commands)
@@ -40,7 +40,7 @@ func (h Host) deliverStart(ctx context.Context, c string, b *startDelivery) erro
 			return protocol.New(protocol.StartFailed, "Writing startup credentials failed.")
 		}
 		defer clear(data)
-		out, err := h.Docker.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, Python, "-I", credentialBatch}, data)
+		out, err := d.Runner.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, Python, "-I", credentialBatch}, data)
 		if err != nil {
 			return injected(err, protocol.StartFailed, "Writing startup credentials failed.")
 		}

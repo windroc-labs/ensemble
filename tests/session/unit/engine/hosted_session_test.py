@@ -32,6 +32,7 @@ from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.engine import hosted_session
 from ensemble.session.engine import types as engine_types
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
@@ -70,7 +71,7 @@ from ensemble.session.hosts.tmux import TmuxHost, managed
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, inode_lock, load_class
-from tests.session import fake_client, harnesses
+from tests.session import fake_client, harnesses, state_volumes
 from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
 from tests.session.fakes.container_host import HOMED as HOMED_HOST
 from tests.session.fakes.container_host import NAMED as NAMED_HOST
@@ -633,6 +634,38 @@ class InspectTest(Base):
             self.inspect(spec)
         self.assertEqual(status.call_args.kwargs["env"], {"A": "access", "B": "spec"})
 
+    def test_inspect_reads_through_recorded_home(self):
+        self.configure("pool", probe={"argv": ("probe-cmd", "/x")}, accounts={"default": "/d"})
+        spec = dataclasses.replace(self.recorded("pool"), name="w1")
+        homes = []
+
+        def status(_client, _info, **given):
+            homes.append(given["home"].persisted())
+            return SessionStatus("no", None, "")
+
+        with mock.patch.object(PoolClient, "session_status", autospec=True, side_effect=status):
+            self.inspect(spec)
+            state_volumes.record("w1")
+            self.inspect(spec)
+            self.inspect(dataclasses.replace(spec, name=None))
+        self.assertEqual(
+            homes,
+            [
+                {"kind": "local"},
+                {"kind": "volume", "session": "w1", "client": "pool"},
+                {"kind": "local"},
+            ],
+        )
+
+    def test_a_malformed_daemon_record_is_unknown(self):
+        self.configure("pool", probe={"argv": ("probe-cmd", "/x")}, accounts={"default": "/d"})
+        spec = dataclasses.replace(self.recorded("pool"), name="w1")
+        path = os.path.join(self.home, ".ensemble", "docker-state", "w1", "daemon.json")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{")
+        self.assertEqual(self.inspect(spec), SessionStatus("unknown", None, ""))
+
     def test_an_unknown_client_is_the_registry_config_error(self):
         spec = self.recorded("nope")
         with self.assertRaises(ConfigError) as caught:
@@ -714,7 +747,7 @@ class HistoricalRecordTest(Case):
         )
         client = CodexClient(config)
         spec = Spec(workdir=str(self.work), sid=SID, access=Access(cwd=str(self.cwd), project=True))
-        client.common.save(client.common.prepare(spec))
+        client.common.save(client.common.prepare(spec, LocalHome()))
         client.common.bind(str(self.work), SID, SID)
         transcript = home / "sessions" / "2026" / "10" / "11" / f"rollout-test-{SID}.jsonl"
         transcript.parent.mkdir(parents=True)
@@ -1268,15 +1301,18 @@ class EventsOverAModeTest(Case):
 
     def test_binding_and_late_metadata_preserve_completion(self):
         client = fake_client.FakeClient({})
-        resolver = mock.Mock(side_effect=lambda info: dataclasses.replace(info, resume="resume n1"))
+        resolver = mock.Mock(
+            side_effect=lambda info, **_: dataclasses.replace(info, resume="resume n1")
+        )
         client.session_metadata = resolver
         session = self.session((0, [ClientBound("n1")], True), client=client)
         RunLog(self.dir).note("session", sid="s1", cwd=self.dir, project=False)
         self.assertEqual(self.events(session), [Exited(0)])
         self.assertEqual(session.info().resume, "resume n1")
+        self.assertEqual(resolver.call_args.kwargs["home"].persisted(), {"kind": "local"})
         self.assertEqual(RunLog(self.dir).session("s1").resume, "resume n1")
         RunLog(self.dir).note("result", outcome={"status": "done"})
-        resolver.side_effect = lambda info: dataclasses.replace(info, transcript="/late")
+        resolver.side_effect = lambda info, **_: dataclasses.replace(info, transcript="/late")
         self.assertEqual(session.info().transcript, "/late")
         self.assertEqual(RunLog(self.dir).session("s1").transcript, "/late")
         self.assertEqual(sum(e["kind"] == "session" for e in RunLog(self.dir).read()), 1)
@@ -1291,7 +1327,9 @@ class EventsOverAModeTest(Case):
                 self.dir = os.path.join(tmp, mode)
                 os.mkdir(self.dir)
                 client = fake_client.FakeClient({})
-                client.session_metadata = lambda info: dataclasses.replace(info, resume="resume n1")
+                client.session_metadata = lambda info, **_: dataclasses.replace(
+                    info, resume="resume n1"
+                )
                 session = self.session(
                     (0, [ClientBound("n1")], True), client=client, name="w1", mode=mode
                 )
@@ -1305,7 +1343,7 @@ class EventsOverAModeTest(Case):
 
     def test_binding_record_failure_remains_fatal(self):
         client = fake_client.FakeClient({})
-        client.session_metadata = mock.Mock(side_effect=lambda info: info)
+        client.session_metadata = mock.Mock(side_effect=lambda info, **_: info)
         session = self.session((0, [ClientBound("n1")], True), client=client)
         with (
             mock.patch("os.open", side_effect=OSError("binding failed")),
@@ -1332,7 +1370,7 @@ class EventsOverAModeTest(Case):
 
     def test_metadata_resolver_cannot_replace_session_identity_or_effective_project(self):
         client = fake_client.FakeClient({})
-        client.session_metadata = lambda info: dataclasses.replace(
+        client.session_metadata = lambda info, **_: dataclasses.replace(
             info, sid="other", cwd="/other", project=True, transcript="/t"
         )
         session = self.session((0, [ClientBound("n1")], True), client=client)
@@ -2674,8 +2712,8 @@ class AttachTest(HostedTuiBase):
         self.started(("tool", {"session_id": "n1"}))
         RunLog(self.workdir).note("result", outcome={"status": "done"})
 
-        def metadata(_client, info):
-            self.assertEqual(info.sid, SID)
+        def metadata(_client, info, *, home):
+            self.assertEqual((info.sid, home.persisted()), (SID, {"kind": "local"}))
             return dataclasses.replace(info, transcript="/attached", resume="resume n1")
 
         with mock.patch.object(fake_client.FakeClient, "session_metadata", metadata):
@@ -3830,6 +3868,7 @@ class OwnedStartTest(Case):
         client = self.session_cls._config().registry.client("claude")
         host = mock.Mock()
         host._client_context.return_value = mock.Mock(container=object())
+        host._home_store.return_value = LocalHome()
         hosted_session._resume_check(self.spec(resume=True), client, "w1", host)
         host._client_context.return_value = mock.Mock(container=None)
         with self.assertRaises(ConfigError):

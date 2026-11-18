@@ -11,7 +11,9 @@
       "argv": [
         "close",
         "--container",
-        "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
       ]
     }
   },
@@ -28,7 +30,43 @@
         "close",
         "--container",
         "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--daemon",
+        "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
         "--extra"
+      ]
+    }
+  },
+  {
+    "name": "close-input-no-daemon",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+      ]
+    }
+  },
+  {
+    "name": "close-input-daemon-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--daemon",
+        "local target"
       ]
     }
   }

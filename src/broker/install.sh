@@ -68,6 +68,9 @@ if [ ! -e "$worker" ]; then
 fi
 sudo install -d -o root -g wheel -m 0755 "$target"
 sudo install -o root -g wheel -m 0755 "$work/ensemble-broker" "$target/ensemble-broker"
+# The docker CLI runs ssh from PATH for a remote Docker target: this link makes it the broker's ssh mode.
+sudo install -d -o root -g wheel -m 0755 "$target/ssh"
+sudo ln -sfn ../ensemble-broker "$target/ssh/ssh"
 echo "Installed $target/ensemble-broker"
 echo "Then: $target/ensemble-broker retrust (the login keychain password once; install.sh --docker runs it)"
 echo "Upgrade: rerun sh $here/install.sh"

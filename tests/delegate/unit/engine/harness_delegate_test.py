@@ -481,7 +481,7 @@ class DockerPreflightTest(HarnessCase):
             with self.subTest(mode=mode):
                 self.assertFalse(os.path.exists(self.work))
                 self.create(mode)
-                self.assertEqual(self.calls, ["version", "build"])
+                self.assertEqual(self.calls, ["version", "target", "version", "build"])
                 self.assertTrue(os.path.isdir(Layout(self.work).agent))
                 self.assertTrue(self.metadata()["plan"]["docker"])
                 shutil.rmtree(self.work)
@@ -495,7 +495,7 @@ class DockerPreflightTest(HarnessCase):
         self.failing = True
         with self.assertRaisesRegex(ConfigError, "Example build_failed"):
             self.create("headless")
-        self.assertEqual(self.calls, ["version", "build"])
+        self.assertEqual(self.calls, ["version", "target", "version", "build"])
         self.assertFalse(os.path.exists(self.work))
 
 
@@ -550,7 +550,7 @@ class VerifierDockerTest(HarnessCase):
                 '[orchestrator.roles.engineer.credentials.github]\napp = "ensemble-broker-bot"\npermissions = {contents = "write"}\n'
                 f'[session.clients.claude.accounts.work]\ndir = "{self.home}/.claude-work"\n'
             )
-        self.calls, self.programs, self.refusals = [], [], {}
+        self.calls, self.programs, self.refusals, self.docker = [], [], {}, []
         fake_bin = os.path.join(self.home, "fake-bin")
         os.makedirs(fake_bin)
         with open(os.path.join(fake_bin, "claude"), "w", encoding="utf-8") as file:
@@ -569,6 +569,11 @@ class VerifierDockerTest(HarnessCase):
         if harnesses.spawned(argv):
             return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
+        if program == "docker" and argv[1] == "--host":  # the packaged Docker Host: an empty daemon
+            self.docker.append(argv[3])
+            if argv[3] == "info":
+                return support.FakeProc(argv, out=b'"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"\n')
+            return support.FakeProc(argv)
         self.programs.append(program)
         if program == "claude":  # the start's usage probe: a login with no usage panel
             process = mock.MagicMock()
@@ -631,7 +636,7 @@ class VerifierDockerTest(HarnessCase):
         )
         self.assertIn("ensemble-broker-env/mini-op-ssh-key", self.failure())
         self.assertEqual(self.calls.count("start"), 1)
-        self.assertNotIn("docker", self.programs)
+        self.assertLessEqual(set(self.docker), {"info", "ps", "volume"})
 
 
 class IdentityTest(HarnessCase):

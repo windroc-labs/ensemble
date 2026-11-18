@@ -13,6 +13,7 @@ from ensemble.session.clients.common import select
 from ensemble.session.engine.types import (
     DEFAULT_MAX_USAGE,
     ConfigError,
+    HomeStore,
     Launch,
     Resumable,
     SessionInfo,
@@ -95,7 +96,7 @@ class Client:
         """None only when the probe failed."""
         return None
 
-    def session_metadata(self, info: SessionInfo) -> SessionInfo:
+    def session_metadata(self, info: SessionInfo, *, home: HomeStore) -> SessionInfo:
         return info
 
     def resume_main(self, argv: Sequence[str]) -> int:
@@ -103,8 +104,13 @@ class Client:
         raise ConfigError("this client has no resume command")
 
     def session_status(
-        self, info: SessionInfo, *, env: Mapping[str, str] = MappingProxyType({})
+        self,
+        info: SessionInfo,
+        *,
+        env: Mapping[str, str] = MappingProxyType({}),
+        home: HomeStore,
     ) -> SessionStatus:
+        """`home`: the session's home-store, its Host's pick."""
         return SessionStatus(Resumable.UNKNOWN, None, "")
 
     def writable_dirs(self, spec: Spec) -> tuple[str, ...]:
