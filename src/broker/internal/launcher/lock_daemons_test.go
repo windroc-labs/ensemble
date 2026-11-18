@@ -9,7 +9,7 @@ import (
 )
 
 // lockedManifest is worker_1's manifest with lock dummy, given secrets when not nil.
-func lockedManifest(t *testing.T, home string, secrets []any) string {
+func lockedManifest(t *testing.T, secrets []any) string {
 	return editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = "worker_1", "ensemble-ws-worker_1", "dummy", "worker_1"
 		f["claude_dir"] = ClientHomes + "/claude"
@@ -49,7 +49,7 @@ func lockHeldOnOtherDaemon(t *testing.T) {
 			h = onTwo(h, lockOnly(holding), started)
 			secrets = []any{secret(miniPassword, "mini-password")}
 		}
-		_, err := h.Start(context.Background(), lockedManifest(t, starting.home, secrets))
+		_, err := h.Start(context.Background(), lockedManifest(t, secrets))
 		e := protoErr(t, err)
 		peer := remoteEndpoint
 		if holderLocal {
@@ -77,7 +77,7 @@ func lockOtherDaemonUnreachable(t *testing.T) {
 	remote := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
 	h = onTwo(h, remote, local)
 	h.Home = t.TempDir()
-	_, err := h.Start(context.Background(), lockedManifest(t, h.Home, []any{secret(miniPassword, "mini-password")}))
+	_, err := h.Start(context.Background(), lockedManifest(t, []any{secret(miniPassword, "mini-password")}))
 	e := protoErr(t, err)
 	if e.Code != protocol.DockerUnreachable || !strings.Contains(e.Message, remoteEndpoint) {
 		t.Fatalf("%+v", e)

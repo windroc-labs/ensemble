@@ -134,12 +134,12 @@ func TestDefaultImageIgnoresAnotherDaemon(t *testing.T) {
 	other := records{filepath.Join(h.Home, ".ensemble/docker/images", otherDaemon)}
 	key := strings.Repeat("c", 64)
 	putFile(t, other.recordPath(key), `{"package":"/p","base_image":""}`)
-	future := time.Now().Add(time.Hour)
+	future := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(other.recordPath(key), future, future); err != nil {
 		t.Fatal(err)
 	}
 	var inspected []string
-	h = withRunner(h, &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+	h = withRunner(h, &fakeDocker{respond: func(args []string, _ []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		inspected = append(inspected, ref)
 		labels := goodLabels()

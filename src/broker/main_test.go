@@ -671,7 +671,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 			IsDir:   func(string) bool { return true },
 			Safe:    func(string) error { return nil },
 			Creds:   broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
-			GitHub:  broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
+			GitHub:  broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: func() time.Time { return time.Unix(0, 0) }}},
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)

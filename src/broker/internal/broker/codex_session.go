@@ -199,8 +199,7 @@ func (s *codexSession) carry(auth codexAuthDocument) error {
 // write goes through bootstrap.py's codex-auth writer.
 func (s *codexSession) write(exec func([]string, []byte) error) error {
 	err := exec([]string{launcher.Python, "-I", launcher.Bootstrap, "codex-auth"}, s.carrier)
-	var u *docker.Unreachable
-	if errors.As(err, &u) {
+	if u, ok := errors.AsType[*docker.Unreachable](err); ok {
 		return u
 	}
 	if err != nil {

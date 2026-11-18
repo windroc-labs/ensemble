@@ -113,7 +113,7 @@ func TestSSHArgsOverrideLaterOptions(t *testing.T) {
 		t.Fatalf("%s -G: %v", SSHPath, err)
 	}
 	got := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if key, value, ok := strings.Cut(line, " "); ok {
 			got[strings.ToLower(key)] = value
 		}
@@ -149,7 +149,10 @@ func TestLocalTargetNeverProbes(t *testing.T) {
 	if _, err := c.Run(context.Background(), []string{"ps"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	calls, _ := os.ReadFile("calls")
+	calls, err := os.ReadFile("calls")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(string(calls), "info") {
 		t.Fatalf("probed a local target: %q", calls)
 	}

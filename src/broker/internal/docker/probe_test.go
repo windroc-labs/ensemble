@@ -60,7 +60,10 @@ func TestLocalBesideARemoteTargetNeverProbes(t *testing.T) {
 	if _, err := local.Run(context.Background(), []string{"ps"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	calls, _ := os.ReadFile("calls")
+	calls, err := os.ReadFile("calls")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(string(calls), "info") || !strings.Contains(string(calls), "--host unix://") {
 		t.Fatalf("local CLI calls %q", calls)
 	}
@@ -116,7 +119,10 @@ func TestFailedProbeRunsNoFurtherDocker(t *testing.T) {
 			t.Fatalf("%q: %v", args, err)
 		}
 	}
-	calls, _ := os.ReadFile("calls")
+	calls, err := os.ReadFile("calls")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(calls) != "info --format\n" {
 		t.Fatalf("docker ran after the failed probe: %q", calls)
 	}

@@ -122,7 +122,7 @@ func LoadTarget(home string) (Target, error) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)
 	}
 	if m := portSuffix.FindStringSubmatch(host); m != nil {
-		if port, _ := strconv.Atoi(m[1]); port < 1 || port > 65535 {
+		if port, err := strconv.Atoi(m[1]); err != nil || port < 1 || port > 65535 {
 			return invalid("host %q is not ssh://[user@]host[:port]", host)
 		}
 	}
