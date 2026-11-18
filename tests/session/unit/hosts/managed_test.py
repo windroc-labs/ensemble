@@ -566,6 +566,28 @@ class ManagedProcessTest(Case):
                 channel.accept(b"s", b'{"pid":123}')
                 channel.accept(b"x", json.dumps({"returncode": 2, "text": text}).encode())
 
+    def test_an_exit_keeps_its_guards_close_reason_bounded(self):
+        long = "r" * (guard.ERROR_CHARS + 9)
+        cases = (
+            ({"returncode": 2}, None),
+            ({"returncode": 2, "reason": "client exited"}, "client exited"),
+            ({"returncode": 2, "reason": long}, long[: guard.ERROR_CHARS]),
+        )
+        for value, kept in cases:
+            with self.subTest(value=str(value)[:40]):
+                channel = self.channel()
+                channel.accept(b"s", b'{"pid":123}')
+                channel.accept(b"x", json.dumps(value).encode())
+                self.assertEqual(channel.read(0), [WorkerExit(2)])
+                self.assertEqual(channel.reason, kept)
+
+    def test_an_exit_whose_reason_is_not_a_string_fails(self):
+        for reason in (5, None, ["a"]):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, "guard exit"):
+                channel = self.channel()
+                channel.accept(b"s", b'{"pid":123}')
+                channel.accept(b"x", json.dumps({"returncode": 2, "reason": reason}).encode())
+
     def test_up_marks_its_client_up_and_queues_nothing(self):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')
