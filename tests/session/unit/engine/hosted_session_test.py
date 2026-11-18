@@ -666,7 +666,7 @@ class InspectTest(Base):
             f.write("{")
         self.assertEqual(self.inspect(spec), SessionStatus("unknown", None, ""))
 
-    def test_an_unknown_client_is_the_registrys_config_error(self):
+    def test_an_unknown_client_is_the_registry_config_error(self):
         spec = self.recorded("nope")
         with self.assertRaises(ConfigError) as caught:
             self.inspect(spec)
