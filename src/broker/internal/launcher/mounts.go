@@ -17,15 +17,6 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// As the protocol's state-volume.json.
-const (
-	ClientHomes       = "/home/agent/.ensemble-state"
-	stateVolumePrefix = "ensemble-state-"
-	stateLabel        = "ensemble.state"
-	stateOwnerLabel   = "ensemble.state-owner" // its client dirs' uid:gid, which its readers run as
-	readerLabel       = "ensemble.state-reader"
-)
-
 var (
 	// A workspace may not equal or contain these container paths.
 	covered = []string{"/", "/usr", "/etc", "/opt", "/run", "/home", "/tmp", "/proc", "/sys", "/dev"}
@@ -34,10 +25,12 @@ var (
 		"/var/run", "/var/lock", "/home/agent"}
 )
 
+// inside reports whether path p is base or below it, by components.
 func inside(p, base string) bool {
 	return p == base || base == "/" || strings.HasPrefix(p, base+"/")
 }
 
+// checkTree applies the mount-point rules a clean absolute container path can be judged on alone, failing with code.
 func checkTree(p string, code protocol.Code) error {
 	for _, c := range covered {
 		if inside(c, p) {
@@ -76,6 +69,7 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+// checkMounts applies the mount rules; cwd is a mount point, never a bind source.
 func (h Host) checkMounts(m Manifest) error {
 	reject := func(format string, args ...any) error {
 		return protocol.Newf(protocol.MountRejected, format, args...)
@@ -87,8 +81,18 @@ func (h Host) checkMounts(m Manifest) error {
 		return err
 	}
 	dir := m.StateDir()
-	if want := ClientHomes + "/" + m.Client; dir != want {
+	if want := filepath.Join(h.Home, ".ensemble/docker-state", m.Name, m.Client); dir != want {
 		return reject("%s_dir must be %s.", m.Client, want)
+	}
+	if err := h.Safe(dir); err != nil {
+		return reject("%s_dir %s must be an existing directory without symlinks: %v.", m.Client, dir, err)
+	}
+	if m.Client == "codex" {
+		for _, kept := range codexKept {
+			if err := h.Safe(filepath.Join(dir, kept)); err != nil {
+				return reject("codex %s must be an existing directory without symlinks.", kept)
+			}
+		}
 	}
 	if inside(m.CWD, dir) || inside(dir, m.CWD) {
 		return reject("Workspace %s overlaps %s_dir %s.", m.CWD, m.Client, dir)
@@ -111,7 +115,7 @@ func (h Host) checkMounts(m Manifest) error {
 	return nil
 }
 
-// mountSpec: Docker parses a --mount value as one CSV record.
+// mountSpec renders a --mount value; Docker parses it as one CSV record.
 func mountSpec(fields ...string) string {
 	var b strings.Builder
 	w := csv.NewWriter(&b)
@@ -120,42 +124,12 @@ func mountSpec(fields ...string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// stateMount: Docker requires the subpath to exist in the volume.
-func stateMount(volume, subpath, target string) string {
-	return mountSpec("type=volume", "source="+volume, "target="+target, "volume-subpath="+subpath, "volume-nocopy")
+func bindMount(source, target string) string {
+	return mountSpec("type=bind", "source="+source, "target="+target)
 }
 
-const workspacePrefix = "ensemble-ws-"
-
-// sessionVolumes are found by name alone.
-type sessionVolumes struct{ Workspace, State string }
-
-func volumesOf(name string) sessionVolumes {
-	return sessionVolumes{Workspace: workspacePrefix + name, State: stateVolumePrefix + name}
-}
-
-func sessionOf(workspace string) (string, bool) {
-	name, ok := strings.CutPrefix(workspace, workspacePrefix)
-	if !ok || name == "" {
-		return "", false
-	}
-	return name, true
-}
-
-// stateDirs are the subpaths m's mounts name, parents first.
-func stateDirs(m Manifest) []string {
-	if m.Client != "codex" {
-		return []string{m.Client}
-	}
-	dirs := []string{m.Client}
-	for _, kept := range codexKept {
-		dirs = append(dirs, m.Client+"/"+kept)
-	}
-	return dirs
-}
-
-// volumeMount uses volume-nocopy: otherwise a container on the empty volume copies its root-made mount point onto the
-// volume root, undoing ensureVolume's chown.
+// volumeMount mounts a workspace volume with volume-nocopy: without it, a container created on the still-empty volume
+// copies its mount point (the --workdir Docker made as root) onto the volume root, undoing ensureVolume's chown.
 func volumeMount(volume, target string, readonly bool) string {
 	fields := []string{"type=volume", "source=" + volume, "target=" + target}
 	if readonly {
@@ -164,6 +138,7 @@ func volumeMount(volume, target string, readonly bool) string {
 	return mountSpec(append(fields, "volume-nocopy")...)
 }
 
+// workspaceMount is volumeMount's value with its audit record, both from the same readonly.
 func workspaceMount(volume, target string, readonly bool) (string, audit.Mount) {
 	mode := "rw"
 	if readonly {
@@ -172,8 +147,9 @@ func workspaceMount(volume, target string, readonly bool) (string, audit.Mount) 
 	return volumeMount(volume, target, readonly), audit.Mount{Type: "volume", Source: volume, Target: target, Mode: mode}
 }
 
-func (h Host) volumeLabels(ctx context.Context, d Daemon, volume string) (map[string]string, error) {
-	out, err := d.Runner.Run(ctx, []string{"volume", "inspect", "--format", "{{json .Labels}}", volume}, nil)
+// volumeLabels reads a volume's labels; an absent volume is an error docker.Absent recognizes.
+func (h Host) volumeLabels(ctx context.Context, volume string) (map[string]string, error) {
+	out, err := h.Docker.Run(ctx, []string{"volume", "inspect", "--format", "{{json .Labels}}", volume}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,26 +160,29 @@ func (h Host) volumeLabels(ctx context.Context, d Daemon, volume string) (map[st
 	return labels, nil
 }
 
+// randomHex is 16 random bytes in hex: a throwaway name or nonce.
 func randomHex() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// removeVolume runs on a context of its own; a failed removal adds the command to e.
-func (h Host) removeVolume(ctx context.Context, d Daemon, v string, e *protocol.Error) {
+// removeVolume removes volume v, which this start created, on a context of its own; a failed removal adds the command
+// to e.
+func (h Host) removeVolume(ctx context.Context, v string, e *protocol.Error) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if _, err := d.Runner.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
+	if _, err := h.Docker.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
 		e.Message += " Remove it with docker volume rm " + v + " before retrying."
 	}
 }
 
-// ensureVolume: an existing workspace must match its labels and have no container mounting it; a prefetching start
-// knows it created the volume by its own nonce.
-func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info imageInfo) (created bool, _ error) {
+// ensureVolume gives m its workspace volume: created with its labels and an agent-owned root, or an
+// existing one whose labels match and that no container mounts. created: this start made it, which a prefetching
+// start knows by its own nonceLabel value.
+func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (created bool, _ error) {
 	v := m.Workspace
-	labels, err := h.volumeLabels(ctx, d, v)
+	labels, err := h.volumeLabels(ctx, v)
 	created = docker.Absent(err)
 	if created {
 		create := []string{"volume", "create", "--label", kindLabel + "=" + kind, "--label", workspaceLabel + "=" + m.CWD}
@@ -212,25 +191,32 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 			nonce = randomHex()
 			create = append(create, "--label", nonceLabel+"="+nonce)
 		}
-		if _, err := d.Runner.Run(ctx, append(create, v), nil); err != nil {
+		if _, err := h.Docker.Run(ctx, append(create, v), nil); err != nil {
 			return false, failure(err, protocol.StartFailed, "Creating workspace volume "+v+" failed.")
 		}
 		// create succeeds on a name a racing start made first, so read back what exists.
-		labels, err = h.volumeLabels(ctx, d, v)
+		labels, err = h.volumeLabels(ctx, v)
 		if err == nil && nonce != "" {
 			created = labels[nonceLabel] == nonce
 		}
 	}
+	// Until its root is the agent's, a volume this start created is removed on failure: a later start would skip the chown.
+	undo := func(e *protocol.Error) (bool, error) {
+		if created {
+			h.removeVolume(ctx, v, e)
+		}
+		return false, e
+	}
 	if err != nil {
-		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
+		return undo(failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
 	}
 	if labels[kindLabel] != kind || labels[workspaceLabel] != m.CWD {
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
 			v, m.CWD, kindLabel, labels[kindLabel], workspaceLabel, labels[workspaceLabel])
 	}
-	out, err := d.Runner.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
+	out, err := h.Docker.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
 	if err != nil {
-		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
+		return undo(failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
 	}
 	if users := strings.Fields(string(out)); len(users) > 0 {
 		return false, protocol.Newf(protocol.MountRejected, "Workspace volume %s is mounted by running container %s; close it first.", v, users[0])
@@ -241,8 +227,8 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	l := info.Config.Labels
 	chown := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--user", "0:0",
 		"--mount", volumeMount(v, "/workspace", false), "--entrypoint", "/bin/chown", info.ID, l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"], "/workspace"}
-	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
-		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
+	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
+		return undo(failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
 	}
 	return true, nil
 }

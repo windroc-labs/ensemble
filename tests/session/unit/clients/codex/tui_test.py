@@ -11,13 +11,11 @@ import sys
 import sysconfig
 import time
 from datetime import datetime
-from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
 from ensemble.session.clients.codex import CodexClient, common, tui
-from ensemble.session.clients.codex.tui import CodexTui, replies
-from ensemble.session.engine.client_state import LocalHome, VolumeHome
+from ensemble.session.clients.codex.tui import CodexTui
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -26,8 +24,6 @@ from ensemble.session.engine.types import (
     ClientContext,
     ConfigError,
     Container,
-    HomePath,
-    HomeStore,
     HookCall,
     HookCallback,
     HookKind,
@@ -36,7 +32,6 @@ from ensemble.session.engine.types import (
     Paste,
     Permission,
     Reply,
-    SessionInfo,
     TurnEnd,
     TurnFailed,
     TurnStarted,
@@ -46,7 +41,6 @@ from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import PACKAGE_ROOTS, ROOTS, SRC
 from tests.session.codex_tui import PlanCase
 from tests.session.fakes.terminal import MemoryHost
-from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -62,7 +56,7 @@ from tests.session.unit.clients.codex.support import (
     packaged,
     said,
 )
-from tests.session.unit.clients.support import holds, homed, opened_below
+from tests.session.unit.clients.support import holds
 
 HOOK = (
     sys.executable,
@@ -134,7 +128,7 @@ DIALOG_SCREENS = {
 
 class TuiTest(Base):
     def test_local_commands_and_empty_input_do_not_wait_for_a_turn(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         for text, expected in (
             ("", False),
             (" \n ", False),
@@ -156,7 +150,7 @@ class TuiTest(Base):
         run, _, _ = self.launch()
         self.assertEqual(run._ready, "SessionStart")
         self.assertEqual(run._interrupt, Key("Escape"))
-        idle = homed(self.client.tui())
+        idle = self.client.tui()
         with mock.patch("shutil.which", return_value="/protected/codex"):
             idle.launch(dataclasses.replace(self.spec, sid="idle", prompt=""), HOOK)
         self.assertIsNone(idle._ready)
@@ -235,18 +229,19 @@ class TuiTest(Base):
         moved = outside / path.name
         path.rename(moved)
         path.symlink_to(moved)
-        snapshot = self.common.store.load(str(self.work), self.spec.sid).snapshot
         with self.assertRaises(common.RecoveryError):
-            common.session_file(LocalHome(), snapshot, NATIVE)
+            common.session_file(
+                self.common.store.load(str(self.work), self.spec.sid).snapshot, NATIVE
+            )
         path.unlink()
         path.parent.rmdir()
         path.parent.symlink_to(outside, target_is_directory=True)
-        self.assertEqual(common.session_paths(LocalHome(), snapshot), [])
-
-    store: HomeStore | None = None  # the launched tui's home-store; None: this machine's
+        self.assertEqual(
+            common.session_paths(self.common.store.load(str(self.work), self.spec.sid).snapshot), []
+        )
 
     def launch(self, *, resume=False, client=None):
-        run = homed((client or self.client).tui(), self.store)
+        run = (client or self.client).tui()
         with (
             mock.patch("shutil.which", return_value="/protected/codex"),
             mock.patch("subprocess.Popen") as proc,
@@ -303,7 +298,7 @@ class TuiTest(Base):
             self.spec,
             access=dataclasses.replace(self.spec.access, dirs=(library,)),
         )
-        self.common.save(self.common.prepare(spec, LocalHome()))
+        self.common.save(self.common.prepare(spec))
         self.common.bind(str(self.work), "caller-id", NATIVE)
         self.rollout()
         with mock.patch("shutil.which", return_value="/protected/codex"):
@@ -362,10 +357,7 @@ class TuiTest(Base):
             self.assertEqual(shlex.split(command), [*HOOK, label])
         self.assertEqual(
             run.hook_callback(),
-            HookCallback(
-                tui.__name__,
-                {"store": data["store"], "start": 0, "name": "", "home": {"kind": "local"}},
-            ),
+            HookCallback(tui.__name__, {"store": data["store"], "start": 0, "name": ""}),
         )
         self.assertIsNone(self.common.load(str(self.work), self.spec.sid).native_id)
 
@@ -375,7 +367,7 @@ class TuiTest(Base):
             flags=("-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=false"),
         )
         saved = CodexClient(self.client.config).common.save(
-            CodexClient(self.client.config).common.prepare(self.spec, LocalHome())
+            CodexClient(self.client.config).common.prepare(self.spec)
         )
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         self.rollout()
@@ -545,7 +537,7 @@ class TuiTest(Base):
                 self.assertEqual(run.pending(payload), 0)
 
     def test_interrupt_ends_its_turn_without_the_previous_turns_text(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         self.assertEqual(
             run.hook_events("Interrupt", self.payload()),
             [ClientBound(NATIVE), TurnEnd(interrupted=True)],
@@ -562,7 +554,7 @@ class TuiTest(Base):
             run.hook_events("Stop", self.payload(last_assistant_message="after")),
             [TurnEnd("after")],
         )
-        attached = homed(self.client.tui())
+        attached = self.client.tui()
         self.assertEqual(
             attached.replay(
                 [
@@ -582,9 +574,9 @@ class TuiTest(Base):
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         foreign = self.payload(cwd=str(self.extra))
         self.assertEqual(
-            homed(self.client.tui()).hook_events("Stop", foreign), [ClientBound(NATIVE), TurnEnd()]
+            self.client.tui().hook_events("Stop", foreign), [ClientBound(NATIVE), TurnEnd()]
         )
-        restored = homed(self.client.tui())
+        restored = self.client.tui()
         restored.restore(self.spec, run.hook_callback().state)
         self.assertEqual(
             (restored.native, restored.store, restored.state),
@@ -600,20 +592,20 @@ class TuiTest(Base):
 
     def test_restore_without_a_recovery_state_keeps_none_and_a_bad_store_is_a_config_error(self):
         self.launch()
-        fresh = homed(self.client.tui())
+        fresh = self.client.tui()
         fresh.restore(dataclasses.replace(self.spec, sid="other-id"), {})
         self.assertEqual((fresh.state, fresh.native), (None, ""))
         not_a_directory = self.extra / "store"
         not_a_directory.write_text("")
         for state in ({"store": "relative/store"}, {"store": str(not_a_directory)}):
             with self.subTest(state=state), self.assertRaises(ConfigError):
-                homed(self.client.tui()).restore(self.spec, state)
+                self.client.tui().restore(self.spec, state)
 
     def test_restore_rejects_a_bad_transcript_cursor(self):
         self.launch()
         for state in ({"start": -1}, {"start": "0"}, {"start": True}):
             with self.subTest(state=state), self.assertRaises(ConfigError):
-                homed(self.client.tui()).restore(self.spec, state)
+                self.client.tui().restore(self.spec, state)
 
     def bound(self):
         """A launched tui bound to NATIVE by its SessionStart, and its native session file."""
@@ -1003,7 +995,7 @@ class TuiTest(Base):
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         _append(path, said("user", "go"), said("assistant", "a"))
         self.assertEqual(run.observe(), [Reply("a")])
-        attached = homed(self.client.tui())
+        attached = self.client.tui()
         attached.restore(self.spec, run.hook_callback().state)
         records = [
             (label, self.payload(last_assistant_message=text)) if text else (label, self.payload())
@@ -1057,7 +1049,7 @@ class TuiTest(Base):
         self.assertEqual(run.native, NATIVE)
 
     def test_invalid_identity_does_not_bind_or_update_the_reply(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         for fields in (
             {"agent_id": CHILD},
             {"session_id": None},
@@ -1079,7 +1071,7 @@ class TuiTest(Base):
                 self.assertEqual((run.native, run.last_reply), ("", ""))
 
     def test_limit_screen_official_variants_and_reset(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         run.common.config["env"] = {"TZ": "UTC"}
         stamp = datetime(2027, 1, 2, 3, 4, tzinfo=ZoneInfo("UTC")).timestamp()
         for prefix in (
@@ -1132,17 +1124,17 @@ class TuiTest(Base):
                 self.assertEqual(client.tui().limit(screen), LimitHit(stamp))
 
     def test_codex_has_no_opening(self):
-        self.assertIsNone(homed(self.client.tui()).opening)
+        self.assertIsNone(self.client.tui().opening)
 
     def test_each_dialog_shows_on_its_own_screen(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         self.assertEqual(set(DIALOG_SCREENS), set(run.dialogs))
         for dialog, screen in DIALOG_SCREENS.items():
             with self.subTest(dialog=dialog):
                 self.assertEqual([d for d in run.dialogs if run.shows(d, screen)], [dialog])
 
     def test_a_dialog_title_in_the_agents_output_is_no_dialog(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         for dialog in run.dialogs:
             screens = (
                 f"• Codex showed {dialog} at startup.\n\n› Ask Codex to do anything",
@@ -1153,7 +1145,7 @@ class TuiTest(Base):
                     self.assertFalse(run.shows(dialog, screen))
 
     def test_assistant_bullets_and_quoted_limit_text_are_not_native_errors(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         for screen in (
             (
                 "Codex > gpt-test • You have asked me to quote this error. • You've hit your usage limit. is a quoted example › "
@@ -1198,7 +1190,7 @@ class TuiTest(Base):
         client = CodexClient(
             self.common.config | {"env": {"CODEX_HOME": str(home), "TMPDIR": str(alias)}},
         )
-        run = homed(client.tui())
+        run = client.tui()
         expected = [str(p) for p in (self.cwd, home, self.extra)]
         with mock.patch("subprocess.Popen") as proc:
             roots = run.common.writable_dirs(dataclasses.replace(self.spec, resume=False))
@@ -1251,50 +1243,6 @@ REFUSED = (
     ("--config=sandbox_workspace_write.network_access=true",),
     ("-csandbox_workspace_write.writable_roots=[]",),
 )
-
-
-class DockerHomeObserveTest(Base):
-    """A tui over a Docker session's Codex home reads its session file through its volume's store."""
-
-    launch = TuiTest.launch
-    payload = TuiTest.payload
-    bound = TuiTest.bound
-
-    def setUp(self):
-        super().setUp()
-        self.enterContext(serve())
-        self.store = VolumeHome("w", "codex")
-        self.codex_home = Path(stored("w", "codex"))
-        self.codex_home.mkdir(parents=True)
-        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
-
-    def test_observe_reads_the_docker_session_file(self):
-        run, path = self.bound()
-        self.assertTrue(str(path).startswith(stored("w", "codex") + os.sep))
-        _append(path, said("user", "go"), said("assistant", "done"))
-        self.assertEqual(run.observe(), [Reply("done")])
-        self.assertEqual(run.offset, path.stat().st_size)
-
-    def test_a_resume_starts_after_the_docker_session_files_end(self):
-        self.prepare()
-        self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        path = self.rollout()
-        _append(path, said("user", "earlier"), said("assistant", "old"))
-        # launch() asserts no process starts; the state reader is this Mac process's, started once
-        found = HomePath(str(self.codex_home), str(path.relative_to(self.codex_home)))
-        self.assertEqual(common.session_size(self.store, found), path.stat().st_size)
-        run, _, _ = self.launch(resume=True)
-        self.assertEqual((run.start, run.offset), (path.stat().st_size,) * 2)
-        self.assertEqual(run.observe(), [])
-
-    def test_a_linked_session_file_is_not_read(self):
-        run, path = self.bound()
-        other = self.root / "other.jsonl"
-        other.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-        _append(other, said("user", "go"), said("assistant", "leak"))
-        path.unlink()
-        path.symlink_to(other)
-        self.assertEqual(run.observe(), [])
 
 
 class SuppliedFlagsTest(Base):
@@ -1422,7 +1370,7 @@ class SuppliedFlagsTest(Base):
         )
         hook_flags = [
             word
-            for event in homed(self.client.tui()).hooks
+            for event in self.client.tui().hooks
             for word in ("-c", next(word for word in argv if word.startswith(f"hooks.{event}=")))
         ]
         self.assertEqual(
@@ -1767,7 +1715,7 @@ class HookTest(Base):
     def test_callback_binds_and_adds_label_without_another_payload_reader(self):
         self.prepare()
         payload = self.payload(last_assistant_message="reply")
-        state = {"store": common.SessionStore().root, "home": LocalHome().persisted()}
+        state = {"store": common.SessionStore().root}
 
         def call(given):
             return HookCall("Stop", given, self.spec.sid, str(self.work), None, state)
@@ -1775,45 +1723,6 @@ class HookTest(Base):
         self.assertEqual(tui.on_hook(call(payload)), {**payload, "hook_event_name": "Stop"})
         self.assertEqual(self.common.load(str(self.work), self.spec.sid).native_id, NATIVE)
         self.assertIsNone(tui.on_hook(call(self.payload(agent_id=CHILD))))
-
-    def prompted(self, home) -> dict | None:
-        """The hook's answer to a UserPromptSubmit whose state persists `home`."""
-        events = self.root / "events"
-        events.touch()
-        state = {"store": common.SessionStore().root, "name": "w-1", "home": home}
-        payload = self.payload(prompt="go", turn_id="t1")
-        call = HookCall(
-            "UserPromptSubmit", payload, self.spec.sid, str(self.work), str(events), state
-        )
-        return tui.on_hook(call)
-
-    def test_on_hook_reads_through_persisted_home(self):
-        volumes = self.enterContext(serve())
-        self.codex_home = Path(stored("w", "codex"))
-        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
-        self.prepare()
-        self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        path = self.rollout()
-        self.assertIsNotNone(self.prompted(VolumeHome("w", "codex").persisted()))
-        self.assertEqual(len(volumes.readers), 1)
-        saved = replies.state_path(common.SessionStore().root, str(self.work), self.spec.sid)
-        with open(saved, encoding="utf-8") as f:
-            found = json.load(f)
-        self.assertEqual(found["rollout"], os.path.realpath(path))
-        self.assertEqual(found["turn"]["start"], path.stat().st_size)
-
-    def test_on_hook_drops_bad_home(self):
-        self.prepare()
-        for home in (
-            None,
-            {"kind": "remote"},
-            {"kind": "volume", "session": "../w", "client": "codex"},
-        ):
-            with self.subTest(home=home):
-                self.assertIsNone(self.prompted(home))
-        self.assertIsNone(self.common.load(str(self.work), self.spec.sid).native_id)
-        saved = replies.state_path(common.SessionStore().root, str(self.work), self.spec.sid)
-        self.assertFalse(os.path.exists(saved))
 
     def test_invalid_identity_is_ignored_before_loading_a_record(self):
         for fields in (
@@ -1957,76 +1866,3 @@ class HookTest(Base):
         self.assertEqual(record.read_bytes(), copied.read_bytes())
         self.assertEqual(list(unsafe.iterdir()), [copied])
         self.assertIsNone(self.common.load(str(self.work), self.spec.sid).native_id)
-
-
-class HomeStoreReadsTest(Base):
-    """Reply reading, the resume check and activity of a Codex session go through its
-    home-store: on Docker nothing below the session's Codex home on this machine is opened,
-    stat'ed or listed; on tmux the home is opened by its root only, each part below it from there.
-    """
-
-    def hook(self, run, label, **payload):
-        call = HookCall(
-            label,
-            {"session_id": NATIVE, "cwd": str(self.cwd), **payload},
-            self.spec.sid,
-            str(self.work),
-            str(self.events),
-            run.hook_callback().state,
-        )
-        return tui.on_hook(call)
-
-    def reads(self, store, root):
-        """A tui's launch, replies, hooks and status over `store`, a Codex home at `root`: what
-        they gave and the paths opened by name below `root`.
-        """
-        self.codex_home = Path(root)
-        self.codex_home.mkdir(parents=True, exist_ok=True)
-        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": root}))
-        self.events = self.root / "events"
-        self.events.touch()
-        run = homed(self.client.tui(), store)
-        with mock.patch("shutil.which", return_value="/protected/codex"):
-            run.launch(dataclasses.replace(self.spec, name="w-1", prompt="first"), HOOK)
-        run.commit()
-        self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        path = self.rollout(stamp=1000)
-        self.rollout(CHILD, parent=NATIVE, stamp=3000)
-        with opened_below(root, itself=False) as touched:
-            self.hook(run, "SessionStart", source="startup")
-            self.hook(run, "UserPromptSubmit", prompt="first", turn_id="t1")
-            self.hook(run, "UserPromptSubmit", prompt="status?", turn_id="t1")
-        _append(path, said("user", "first"), said("user", "status?"), said("assistant", "answer"))
-        os.utime(path, (1000, 1000))
-        info = SessionInfo(self.spec.sid, str(self.cwd), project=False, transcript="", resume="")
-        with opened_below(root, itself=False) as more:
-            run.hook_events("SessionStart", self.payload())
-            found = (
-                run.observe(),
-                run._settle_replies(str(self.work), self.spec.sid),
-                self.common.session_status(self.spec.sid, str(self.cwd), home=store),
-                self.client.session_metadata(info, home=store).transcript,
-            )
-        lines = [line.split()[1:4] for line in self.events.read_text().splitlines()]
-        return found, lines, os.path.realpath(path), touched + more
-
-    def payload(self, **fields):
-        return {"session_id": NATIVE, "cwd": str(self.cwd), **fields}
-
-    def assert_read(self, found, lines, path):
-        replies_, _, status, transcript = found
-        self.assertEqual(replies_, [Reply("answer")])
-        self.assertEqual([words[:2] for words in lines], [["w-1", "reply"]])
-        self.assertEqual((status.resumable, status.last_active), ("yes", 3000))
-        self.assertEqual(transcript, path)
-
-    def test_docker_reads_open_no_mac_path(self):
-        self.enterContext(serve())
-        found, lines, path, touched = self.reads(VolumeHome("w", "codex"), stored("w", "codex"))
-        self.assert_read(found, lines, path)
-        self.assertEqual(touched, [])
-
-    def test_local_reads_through_home_store(self):
-        found, lines, path, touched = self.reads(LocalHome(), str(self.codex_home))
-        self.assert_read(found, lines, path)
-        self.assertEqual(touched, [])

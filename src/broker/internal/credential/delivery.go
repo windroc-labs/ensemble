@@ -9,7 +9,7 @@ import (
 	"ensemble/broker/internal/docker"
 )
 
-// ErrDelivery never carries Docker's stderr.
+// ErrDelivery is a write into a container that failed, or a file name refused before it: never Docker's stderr.
 var ErrDelivery = errors.New("writing into the container failed")
 
 // Command transfers a credential write and its owned stdin buffer to the caller.
@@ -20,8 +20,10 @@ type Command struct {
 
 func (c Command) Erase() { clear(c.Stdin) }
 
-// Deliver writes value through exec's stdin, never its argv: 0400 in a 0700 directory. A create-only file refuses one
-// already there (set -C); Replace writes a dot file, which no reader matches, then renames it over.
+// Deliver writes value to f through exec's stdin, never its argv: 0400 in a 0700 directory. A create-only file
+// refuses one already there (set -C); Replace writes a dot file, which no reader matches, then renames it over.
+// Name must be one path component; a Replace one must not start with a dot, the temporary names'. Errors wrap
+// docker.ErrUnreachable or are ErrDelivery.
 func Deliver(exec func(argv []string, stdin []byte) error, f File, value []byte) error {
 	command, err := Prepare(f, value)
 	if err != nil {
@@ -29,10 +31,9 @@ func Deliver(exec func(argv []string, stdin []byte) error, f File, value []byte)
 	}
 	defer command.Erase()
 	err = exec(command.Argv, command.Stdin)
-	var u *docker.Unreachable
 	switch {
-	case errors.As(err, &u):
-		return fmt.Errorf("credential delivery: %w", u)
+	case errors.Is(err, docker.ErrUnreachable):
+		return fmt.Errorf("credential delivery: %w", docker.ErrUnreachable)
 	case err != nil:
 		return ErrDelivery
 	}

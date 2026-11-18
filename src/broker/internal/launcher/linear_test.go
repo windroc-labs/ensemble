@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -87,7 +88,7 @@ func TestLinearStartAndRollback(t *testing.T) {
 				if result.Container == "" {
 					t.Fatal("no container")
 				}
-				if _, err := closeOn(h, result.Container); err != nil {
+				if _, err := h.Close(context.Background(), result.Container); err != nil {
 					t.Fatal(err)
 				}
 				if !slices.Contains(f.calls, "revoke") {
@@ -144,8 +145,8 @@ func TestLinearCloseIncludesStartupDelivery(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	h := Host{Daemons: one(d), GitHub: &fakeTokens{}, Linear: f}
-	if _, err := closeOn(h, container); err != nil {
+	h := Host{Docker: d, GitHub: &fakeTokens{}, Linear: f}
+	if _, err := h.Close(context.Background(), container); err != nil {
 		t.Fatal(err)
 	}
 	if held {
@@ -154,9 +155,10 @@ func TestLinearCloseIncludesStartupDelivery(t *testing.T) {
 }
 
 func TestLinearStartRecordsExpiry(t *testing.T) {
-	h, _, _, _, _, _ := tokenStartHost(t)
+	h, _, parent, _, _, _ := tokenStartHost(t)
 	h.Linear = &fakeLinear{}
 	path := codexManifest(t, func(f map[string]any) {
+		f["codex_dir"] = filepath.Join(parent, "codex")
 		f["environment_credentials"] = githubSpec(t, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear"))
 	})

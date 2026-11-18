@@ -6,14 +6,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ensemble.session.engine.types import (
-    ClientContext,
-    ConfigError,
-    Effort,
-    HomeStore,
-    Permission,
-    Tier,
-)
+from ensemble.session.engine.types import ConfigError, Effort, Permission, Tier
 from ensemble.utils import STATE, environment_ok, read_regular
 
 DOCKER_CONFIG = f"{STATE}/docker-config"
@@ -35,13 +28,6 @@ def question(titles) -> str:
     """A question dialog's blocked reason: `question: ` and its titles, the empty ones left out."""
     found = [t for t in titles if isinstance(t, str) and t] if isinstance(titles, list) else []
     return f"question: {'; '.join(found)}" if found else "question"
-
-
-def home_of(context: ClientContext) -> HomeStore:
-    """The home-store its Host picked for the session `context` runs in."""
-    if context.home is None:
-        raise ConfigError("no client home store: the Host hands one at session start")
-    return context.home
 
 
 def docker_config_path(client: str, name: str, default: str) -> str:

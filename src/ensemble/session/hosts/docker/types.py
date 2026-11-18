@@ -11,7 +11,6 @@ GEN = re.compile(r"[0-9a-f]{32}")
 class Started:
     container: str
     endpoint: str
-    daemon: str  # the ID of the daemon the container and volumes are on
     image_digest: str
     clients: Mapping[str, str]  # client name → its runnable version
     env: Mapping[str, str]  # broker-provided execution environment

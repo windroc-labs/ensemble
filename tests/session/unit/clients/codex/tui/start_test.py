@@ -13,13 +13,11 @@ from unittest import mock
 
 from ensemble.session.clients.codex import tui
 from ensemble.session.clients.codex.tui import start as tui_start
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import ClientContext, Container, Permission
 from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import PACKAGE_ROOTS, Case
 from tests.session.codex_tui import HOOK, ROOTS_JSON, LaunchCase
 from tests.session.unit.clients.codex.support import NATIVE, Base, committed_tui
-from tests.session.unit.clients.support import homed
 
 DIRECTORY = pathlib.Path(tui_start.__file__).parent
 
@@ -113,7 +111,7 @@ class StartTest(Base):
                     tui_start.trusted(catalog, str(self.cwd), commands)
 
     def test_start_adds_transient_trust_and_execs_saved_home_without_config_write(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         hook = HOOK
         with mock.patch("shutil.which", return_value="/protected/codex"):
             launch = run.launch(dataclasses.replace(self.spec, prompt="prompt"), hook)
@@ -148,9 +146,8 @@ class StartTest(Base):
             Container(
                 "/opt/ensemble/bin", "/image/python", "/image/modules", str(self.root / "volatile")
             ),
-            home=LocalHome(),
         )
-        run = homed(self.client.tui())
+        run = self.client.tui()
         run._context = runtime
         with mock.patch("shutil.which", side_effect=AssertionError("host lookup")):
             launch = run.launch(dataclasses.replace(self.spec, resume=True), HOOK)
@@ -305,7 +302,7 @@ class StartTest(Base):
             )
 
     def test_an_unreadable_mcp_layer_fails_the_start_in_one_line_before_any_spawn(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         spec = dataclasses.replace(self.spec, prompt="prompt", flags=("-c", "mcp_servers={}"))
         with mock.patch("shutil.which", return_value="/protected/codex"):
             launch = run.launch(spec, HOOK)
@@ -325,7 +322,7 @@ class StartTest(Base):
         proc.assert_not_called()
 
     def test_signal_during_spawn_cleans_owned_process_without_retry_or_exec(self):
-        run = homed(self.client.tui())
+        run = self.client.tui()
         with mock.patch("shutil.which", return_value="/protected/codex"):
             launch = run.launch(
                 dataclasses.replace(self.spec, prompt="prompt"),

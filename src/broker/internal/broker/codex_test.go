@@ -280,7 +280,7 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 	if err := c.Login(context.Background(), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.Refresh(context.Background(), func([]string, []byte) error { return unreachableErr }, func(string) error { return nil })
+	_, err := c.Refresh(context.Background(), func([]string, []byte) error { return docker.ErrUnreachable }, func(string) error { return nil })
 	if !errors.Is(err, docker.ErrUnreachable) {
 		t.Fatalf("unreachable daemon reclassified: %v", err)
 	}

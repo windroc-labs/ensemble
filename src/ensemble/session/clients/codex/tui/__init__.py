@@ -27,21 +27,17 @@ from ensemble.session.clients.codex.common import (
     limit_message,
     mcp_off,
     native_id,
-    read_session,
     refuse_mode,
     reset_at,
-    session_size,
     unattended_flags,
 )
 from ensemble.session.clients.codex.common.types import Snapshot
 from ensemble.session.clients.codex.tui import records, replies
-from ensemble.session.clients.common import home_of, question, scan, split_flags
-from ensemble.session.engine import client_state
+from ensemble.session.clients.common import question, scan, split_flags
 from ensemble.session.engine.types import (
     ClientBound,
     ClientHome,
     ConfigError,
-    HomePath,
     HookCall,
     HookCallback,
     HookKind,
@@ -56,7 +52,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.session.modes.client_adapters.tui import Tui
-from ensemble.utils import json_records, module_roots, source_path
+from ensemble.utils import json_records, module_roots, read_beneath, source_path
 
 PASSED = ("-c", "--enable", "--disable")
 
@@ -176,8 +172,7 @@ class CodexTui(Tui):
         prompt, resume = spec.prompt, spec.resume
         self._ready = "SessionStart" if prompt else None
         self.name = spec.name or ""
-        home = home_of(self._context)
-        self.state = common.prepare(spec, home)
+        self.state = common.prepare(spec)
         snapshot = self.state.snapshot
         self.native = self.state.native_id or ""
         env = common.environment(snapshot, interactive=True)
@@ -197,9 +192,8 @@ class CodexTui(Tui):
         if exe is None:
             raise ConfigError("codex not found on PATH")
         exe = os.path.abspath(exe)
-        self.transcript = common.transcript(self.state, home) if resume else ""
-        found = self._rollout()
-        self.start = self.offset = session_size(home, found) if found else 0
+        self.transcript = common.transcript(self.state) if resume else ""
+        self.start = self.offset = os.path.getsize(self.transcript) if self.transcript else 0
         plan = LaunchPlan(
             exe,
             self.common.selector(self.native, resume=resume),
@@ -252,8 +246,7 @@ class CodexTui(Tui):
         self.state = self.common.commit(self.state)
 
     def hook_callback(self) -> HookCallback:
-        state = {"store": self.store, "start": self.start, "name": self.name}
-        return HookCallback(__name__, {**state, "home": home_of(self._context).persisted()})
+        return HookCallback(__name__, {"store": self.store, "start": self.start, "name": self.name})
 
     def restore(self, spec, state):
         """The launching CodexTui's store, recovery state and native id, from the store it named."""
@@ -270,33 +263,19 @@ class CodexTui(Tui):
         self.native = "" if self.state is None else self.state.native_id or ""
 
     def _settle_replies(self, workdir, sid):
-        replies.settle_pending(self.store, workdir, sid, home_of(self._context))
-
-    def _rollout(self) -> HomePath | None:
-        """The session file's home path, once found."""
-        if not self.transcript or self.state is None:
-            return None
-        try:
-            return client_state.home_path(self.state.snapshot.codex_home, self.transcript)
-        except OSError:
-            return None
+        replies.settle_pending(self.store, workdir, sid)
 
     def observe(self):
-        home = home_of(self._context)
         if not self.transcript and self.native and self.state is not None:
             now = time.monotonic()
             if now < self.retry:
                 return []
             self.retry = now + LOOKUP_EVERY
             try:
-                self.transcript = self.common.transcript(
-                    replace(self.state, native_id=self.native), home
-                )
+                self.transcript = self.common.transcript(replace(self.state, native_id=self.native))
             except (ConfigError, OSError):
                 return []
-        found = self._rollout()
-        data = read_session(home, found, offset=self.offset) if found else None
-        lines = (data or b"").split(b"\n")[:-1]
+        lines = (read_beneath("/", self.transcript, offset=self.offset) or b"").split(b"\n")[:-1]
         self.offset += sum(len(line) + 1 for line in lines)  # a line still being written waits
         return [event for record in json_records(lines) for event in self._record(record)]
 
@@ -560,13 +539,8 @@ def passed(flags) -> list[str]:
     ]
 
 
-def _mcp_off(flags, plan: LaunchPlan, snapshot: Snapshot) -> list[str]:
-    """mcp_off where this start runs: in the Docker worker an unattended plan names, else here."""
-    return mcp_off(flags, snapshot, home=client_state.LocalHome(), container=plan.unattended)
-
-
 def trust_args(plan: LaunchPlan, snapshot: Snapshot) -> list[str]:
-    flags = _mcp_off((*plan.flags, *snapshot.flags), plan, snapshot)
+    flags = mcp_off((*plan.flags, *snapshot.flags), snapshot)
     return [
         *hook_flags(plan.hook),
         *passed((*plan.permission, *flags)),
@@ -595,7 +569,7 @@ def execution_argv(plan: LaunchPlan, snapshot: Snapshot, trusted_state: str) -> 
         "-c",
         'tui.notification_method="bel"',
         *plan.permission,
-        *_mcp_off((*plan.flags, *supplied), plan, snapshot),
+        *mcp_off((*plan.flags, *supplied), snapshot),
         *launch_options(snapshot),
         *_unattended(plan, snapshot),
         *hook_flags(plan.hook),
@@ -628,11 +602,7 @@ def bind(label, value, workdir, sid, *, root=None):
 
 def on_hook(call: HookCall) -> dict | None:
     began = time.monotonic()
-    try:
-        home = client_state.home_store(call.state.get("home"))
-    except ValueError:
-        return None
     if not bind(call.label, call.payload, call.workdir, call.sid, root=call.state["store"]):
         return None
-    replies.on_hook(call, began=began, home=home)  # a Stop's replies precede the Host hook's done
+    replies.on_hook(call, began=began)  # a Stop's replies precede the Host hook's done
     return {**call.payload, "hook_event_name": call.label}

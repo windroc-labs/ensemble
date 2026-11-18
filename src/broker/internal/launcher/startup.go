@@ -17,16 +17,16 @@ const (
 	bootstrapFailed = 42
 )
 
-func (h Host) bootstrap(ctx context.Context, d Daemon, c string, m Manifest) error {
+func (h Host) bootstrap(ctx context.Context, c string, m Manifest) error {
 	content, err := checks.ReadFile("checks/image-content-check")
 	if err != nil {
 		return protocol.New(protocol.StartFailed, "Embedded image checks unreadable.")
 	}
-	_, err = d.Runner.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, "/usr/bin/python3", "-I", "-",
+	_, err = h.Docker.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, "/usr/bin/python3", "-I", "-",
 		m.Client, m.StateDir(), m.CWD, string(content)}, startupScript)
 	if err == nil {
 		if m.HasHook {
-			if _, err := d.Runner.Run(ctx, []string{"exec", "--user", "root", c, Python, "-I", Bootstrap, "hook", m.HookPath}, nil); err != nil {
+			if _, err := h.Docker.Run(ctx, []string{"exec", "--user", "root", c, Python, "-I", Bootstrap, "hook", m.HookPath}, nil); err != nil {
 				return failure(err, protocol.StartFailed, "Installing the hook stub failed.")
 			}
 		}

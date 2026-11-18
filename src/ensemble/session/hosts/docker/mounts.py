@@ -4,7 +4,7 @@
 
 import os
 
-from ensemble.utils import DOCKER_STATE
+from ensemble.utils import docker_home
 
 KIND_LABEL = "ensemble.kind"  # a workspace volume's labels, set by the broker
 WORKSPACE_LABEL = "ensemble.workspace"
@@ -16,5 +16,5 @@ def workspace_volume(name: str) -> str:
 
 
 def state_dir(name: str) -> str:
-    """Session `name`'s dir under DOCKER_STATE: its records and manifests, not its client home."""
-    return os.path.join(os.path.expanduser(DOCKER_STATE), name)
+    """Session `name`'s dir under DOCKER_STATE: its client home and manifests."""
+    return os.path.normpath(docker_home(name, os.curdir))

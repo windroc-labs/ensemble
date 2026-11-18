@@ -42,7 +42,7 @@ class ClaudeHeadless(JsonHeadless):
             output=("--output-format", "stream-json", "--verbose"),
             tail=("--", spec.prompt),
             env=common.ENV,
-            context=self._context,
+            permission=self._context.permission,
         )
         self._native = os.path.basename(launched.transcript).removesuffix(".jsonl") or self.sid
         return launched

@@ -40,7 +40,7 @@ class EmbeddedPrograms(Sample):
 
     def docker_program(self, program, *, execute=True):
         source = (
-            "from ensemble.session.engine.daemon import docker_call as build\n"
+            "from ensemble.session.hosts.docker.daemon import docker_call as build\n"
             "IMAGE_PYTHON = '/opt/ensemble/venv/bin/python'\n"
             f"PROMPT_STAGE = {program!r}\n"
             "class Worker:\n"

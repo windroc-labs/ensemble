@@ -7,17 +7,14 @@ import io
 import json
 import os
 import time
-from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import tui
-from ensemble.session.clients.codex.common import SessionStore, session_size
+from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.clients.codex.tui import replies
-from ensemble.session.engine.client_state import LocalHome, VolumeHome
-from ensemble.session.engine.types import HomePath, HomeStore, HookCall
+from ensemble.session.engine.types import HookCall
 from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import SPAWNS
-from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.codex.support import NATIVE, Base, said
 from tests.utils.clock import FakeClock
 
@@ -25,8 +22,6 @@ NAME = "w1"
 
 
 class RepliesBase(Base):
-    store: HomeStore = LocalHome()  # the session's home-store
-
     def setUp(self):
         super().setUp()
         self.prepare()
@@ -40,7 +35,7 @@ class RepliesBase(Base):
         self.state_file = replies.state_path(SessionStore().root, str(self.work), self.sid)
 
     def hook(self, label, *, events: str | None = "", name=NAME, **fields) -> dict:
-        state = {"store": SessionStore().root, "name": name, "home": self.store.persisted()}
+        state = {"store": SessionStore().root, "name": name}
         payload = {"session_id": NATIVE, "cwd": str(self.cwd), **fields}
         call = HookCall(
             label,
@@ -80,7 +75,7 @@ class RepliesBase(Base):
         self.append(said("user", prompt))
 
     def pump(self):
-        replies.settle_pending(SessionStore().root, str(self.work), self.sid, self.store)
+        replies.settle_pending(SessionStore().root, str(self.work), self.sid)
 
 
 class SteerTest(RepliesBase):
@@ -191,7 +186,7 @@ class SteerTest(RepliesBase):
         )
         with file_lock(self.state_file, wait=False):
             began = time.monotonic()
-            replies.on_hook(call, began=began - replies.DEADLINES["Interrupt"], home=self.store)
+            replies.on_hook(call, began=began - replies.DEADLINES["Interrupt"])
             self.assertLess(time.monotonic() - began, 0.5)
         self.assertIn("locked", self.stderr.getvalue())
 
@@ -338,10 +333,10 @@ class ScanTest(RepliesBase):
         self.append(*[filler] * 3000, said("user", "status?"), said("assistant", "answer"))
         state = self.state()
         start = state["turn"]["start"]
-        (found,) = replies.scan(state, self.store, budget=replies.HOOK_SCAN_MAX)["steers"].values()
+        (found,) = replies.scan(state, budget=replies.HOOK_SCAN_MAX)["steers"].values()
         self.assertIsNone(found["answer"])
         self.assertLessEqual(found["cursor"] - start, replies.SCAN_MAX)
-        (found,) = replies.scan(state, self.store, budget=1000)["steers"].values()
+        (found,) = replies.scan(state, budget=1000)["steers"].values()
         self.assertLessEqual(found["cursor"] - start, 1000)
         self.assertFalse(found["skip"])  # a read the budget cut short skips no record
         for _ in range(4):  # a pump's settle reads SCAN_MAX of the ~3 MB filler
@@ -372,45 +367,6 @@ class ScanTest(RepliesBase):
         os.mkfifo(self.path)
         got = self.hook("Stop", turn_id="t1", last_assistant_message="end")
         self.assertEqual(got["hook_event_name"], "Stop")
-        self.assertEqual(self.lines(), [])
-
-
-class DockerRolloutTest(RepliesBase):
-    """Steer replies from a Docker session's Codex home, read through its volume's store."""
-
-    store = VolumeHome("w", "codex")
-
-    def setUp(self):
-        super().setUp()
-        self.enterContext(serve())
-
-    def prepare(self):
-        self.codex_home = Path(stored("w", "codex"))
-        self.codex_home.mkdir(parents=True)
-        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)}))
-        return super().prepare()
-
-    def test_a_steer_is_answered_from_the_rollout(self):
-        self.assertTrue(str(self.path).startswith(stored("w", "codex") + os.sep))
-        self.open_turn()
-        self.steer("status?")
-        self.append(said("user", "status?"), said("assistant", "answer"))
-        self.pump()
-        (reply_id,) = self.reply_ids()
-        self.assertEqual(read_reply(self.events, reply_id), "answer")
-
-    def test_the_rollout_size_and_a_linked_rollout(self):
-        path = HomePath(str(self.codex_home), str(self.path.relative_to(self.codex_home)))
-        self.assertEqual(session_size(self.store, path), self.path.stat().st_size)
-        self.open_turn()
-        self.steer("status?")
-        other = self.root / "other.jsonl"
-        lines = (said("user", "status?"), said("assistant", "leak"))
-        other.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
-        self.path.unlink()
-        self.path.symlink_to(other)
-        self.assertEqual(session_size(self.store, path), 0)
-        self.hook("Stop", turn_id="t1", last_assistant_message="end")
         self.assertEqual(self.lines(), [])
 
 
@@ -451,7 +407,6 @@ class PumpTest(RepliesBase):
                     budget=replies.HOOK_SCAN_MAX,
                     clock=clock,
                     sleep=clock.sleep,
-                    home=self.store,
                 )
                 self.assertIsNotNone(self.state()["steers"][0]["at"])
                 self.append(said("assistant", "answer"))

@@ -2,8 +2,6 @@ package launcher
 
 import (
 	"encoding/json"
-	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -18,36 +16,6 @@ func TestCredentialRequestFixtures(t *testing.T) {
 				t.Fatalf("valid=%v err=%v", c.Valid, err)
 			}
 		})
-	}
-}
-
-// TestEnvItemsCases runs the merged env item cases the session's placement shares.
-func TestEnvItemsCases(t *testing.T) {
-	data, err := os.ReadFile("../../protocol/docker-broker/cases/env_items.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cases []struct {
-		Name   string            `json:"name"`
-		Fields map[string]string `json:"fields"`
-		Items  []string          `json:"items"`
-	}
-	if err := json.Unmarshal(data, &cases); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range cases {
-		fields := map[string]any{}
-		for name, text := range c.Fields {
-			fields[name] = text
-		}
-		m, err := ParseManifest(withFields(t, fields))
-		items := []string{}
-		for _, s := range m.Secrets {
-			items = append(items, s.Item)
-		}
-		if err != nil || !slices.Equal(items, c.Items) {
-			t.Errorf("%s: %q %v", c.Name, items, err)
-		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 	t.Helper()
 	h, d, _, tokens, _, _, _ := credentialHost(w)
 	h.Home = t.TempDir()
-	putFile(t, testRecords(h.Home).recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
+	putFile(t, h.recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
 	return h, d, tokens
 }
 
@@ -27,6 +28,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 func prefetchManifest(t *testing.T, h Host, edit func(map[string]any)) string {
 	t.Helper()
 	return editedManifest(t, func(f map[string]any) {
+		f["claude_dir"] = h.Home + "/.ensemble/docker-state/worker_1/claude"
 		f["prefetch"] = map[string]any{"repo": "acme/app", "ref": "main"}
 		if edit != nil {
 			edit(f)
@@ -119,10 +121,10 @@ func TestPrefetchSkippedForExistingWorkspace(t *testing.T) {
 
 // A volume a racing start created carries that start's prefetch-start label: not this start's to prefetch or remove.
 func TestPrefetchRacingCreate(t *testing.T) {
-	w := &world{labels: goodLabels(), otherNonce: true, state: "matching"}
+	w := &world{labels: goodLabels(), otherNonce: true}
 	h, d, tokens := prefetchHost(t, w)
 	h.GitHub.(*fakeTokens).prefetch = errors.New("must not run")
-	if _, err := h.Start(context.Background(), prefetchManifest(t, h, func(f map[string]any) { f["state"] = "keep" })); err != nil {
+	if _, err := h.Start(context.Background(), prefetchManifest(t, h, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if run, _ := helperRun(d); run != nil || hasCall(d, "volume rm") || slices.Contains(d.verbs(), "run --rm") {
@@ -143,7 +145,7 @@ func TestPrefetchVolumeNonce(t *testing.T) {
 	// Without prefetch, the create is unchanged.
 	w2 := &world{labels: goodLabels()}
 	h2, d2, _ := prefetchHost(t, w2)
-	path := editedManifest(t, func(f map[string]any) { f["claude_dir"] = ClientHomes + "/claude" })
+	path := editedManifest(t, func(f map[string]any) { f["claude_dir"] = h2.Home + "/.ensemble/docker-state/worker_1/claude" })
 	if _, err := h2.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ func TestPrefetchOrder(t *testing.T) {
 		}
 		return base.respond(args, stdin)
 	}}
-	h = withRunner(h, d)
+	h.Docker = d
 	path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -192,30 +194,28 @@ func TestPrefetchOrder(t *testing.T) {
 func TestPrefetchFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(*testing.T, *world, Host)
+		setup func(*world, Host)
 		code  protocol.Code
 		want  string
 	}{
-		{"helper fails", func(_ *testing.T, w *world, _ Host) {
+		{"helper fails", func(w *world, _ Host) {
 			w.prefetchErr = &docker.CommandError{Exit: 128, Stderr: "fatal: Remote branch main not found"}
 		}, protocol.StartFailed, "Prefetching acme/app at main failed."},
-		{"github refuses", func(_ *testing.T, _ *world, h Host) {
+		{"github refuses", func(_ *world, h Host) {
 			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-broker-bot is not installed on acme/app")
 		}, protocol.GitHubFailed, "not installed on acme/app"},
-		{"no default image or run record", func(t *testing.T, _ *world, h Host) {
-			if err := os.Remove(testRecords(h.Home).recordPath(imageKey)); err != nil {
-				t.Fatal(err)
-			}
-			putFile(t, testRecords(h.Home).recordPath(strings.Repeat("c", 64)), `{"package":"/p","base_image":"dummy-env:test"}`)
+		{"no default image or run record", func(_ *world, h Host) {
+			_ = os.Remove(h.recordPath(imageKey))
+			_ = os.WriteFile(h.recordPath(strings.Repeat("c", 64)), []byte(`{"package":"/p","base_image":"dummy-env:test"}`), 0o600)
 		}, protocol.StartFailed, "No default worker image to prefetch with, and no build record of ensemble-worker:" + imageKey + " to build one from; run ensemble-broker build without a base image."},
-		{"workers network missing", func(_ *testing.T, w *world, _ Host) {
+		{"workers network missing", func(w *world, _ Host) {
 			w.proxy = labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })
 		}, protocol.EgressUnavailable, "has no valid workers network labels"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &world{labels: goodLabels()}
 			h, d, tokens := prefetchHost(t, w)
-			tc.setup(t, w, h)
+			tc.setup(w, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["gateway"] = "mini-op" })
 			_, err := h.Start(context.Background(), path)
 			e := protoErr(t, err)
@@ -239,7 +239,7 @@ func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv)
 	h, base, _ := prefetchHost(t, w)
 	e := newBuildEnv(t)
 	h.Home, h.Lock, h.Releases = e.home, e.lock, e.releases
-	putFile(t, testRecords(h.Home).recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
+	putFile(t, h.recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
 	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" || args[0] == "tag" || args[0] == "container" && args[1] == "ls" ||
 			args[0] == "run" && slices.Contains(args, "none") && !slices.Contains(args, "CHOWN") ||
@@ -248,7 +248,7 @@ func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv)
 		}
 		return base.respond(args, stdin)
 	}}
-	h = withRunner(h, d)
+	h.Docker = d
 	return h, d, e
 }
 
@@ -275,7 +275,7 @@ func TestPrefetchBuildsMissingDefaultImage(t *testing.T) {
 		t.Fatalf("built after the helper: %q", d.verbs())
 	}
 	// The build recorded a default variant, which the next prefetch finds without building.
-	if data, err := os.ReadFile(testRecords(h.Home).recordPath(e.key)); err != nil || !strings.Contains(string(data), `"base_image":""`) {
+	if data, err := os.ReadFile(h.recordPath(e.key)); err != nil || !strings.Contains(string(data), `"base_image":""`) {
 		t.Fatalf("record %s %v", data, err)
 	}
 	if detached(d) == nil {
@@ -343,7 +343,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 				}
 				return base.respond(args, stdin)
 			}}
-			h = withRunner(h, d)
+			h.Docker = d
 			tc.setup(t, lw, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 			_, err := h.Start(context.Background(), path)
@@ -448,21 +448,21 @@ func TestDefaultImageNewest(t *testing.T) {
 	w := &world{labels: goodLabels()}
 	h, _, _ := prefetchHost(t, w)
 	older := strings.Repeat("c", 64)
-	putFile(t, testRecords(h.Home).recordPath(older), `{"package":"/p","base_image":""}`)
+	putFile(t, h.recordPath(older), `{"package":"/p","base_image":""}`)
 	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(testRecords(h.Home).recordPath(older), past, past); err != nil {
+	if err := os.Chtimes(h.recordPath(older), past, past); err != nil {
 		t.Fatal(err)
 	}
 	// A newer variant on a base image never counts.
-	putFile(t, testRecords(h.Home).recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
-	h = withRunner(h, &fakeDocker{respond: func(args []string, _ []byte) ([]byte, error) {
+	putFile(t, filepath.Join(h.Home, ".ensemble/docker/images", strings.Repeat("e", 64)+".json"), `{"package":"/p","base_image":"x:y"}`)
+	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
 		labels := goodLabels()
 		labels["ensemble.key"] = key
 		return inspectJSON("sha256:"+strings.Repeat(key[:1], 64), labels, time.Time{}), nil
-	}})
-	info, err := h.defaultImage(context.Background(), h.Daemons[0], testRecords(h.Home), "ensemble-worker:"+imageKey)
+	}}
+	info, err := h.defaultImage(context.Background(), "ensemble-worker:"+imageKey)
 	if err != nil || info.ID != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("%+v %v", info.ID, err)
 	}

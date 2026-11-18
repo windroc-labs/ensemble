@@ -8,7 +8,6 @@ from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.tui import AFTER_LIMIT, QUEUED, ClaudeTui, on_hook
-from ensemble.session.engine.client_state import VolumeHome, home_path
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -26,7 +25,7 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from tests.session.state_volumes import serve, stored
+from ensemble.utils import docker_home
 from tests.session.unit.clients.claude.support import (
     CEILING,
     CONFIG,
@@ -46,7 +45,6 @@ from tests.session.unit.clients.claude.support import (
     Base,
     ClaudeCommon,
     epoch,
-    homed,
     reference,
     said,
     text,
@@ -395,7 +393,7 @@ NATIVE_TRUST = """\
 class TuiPayloadTest(Base):
     def setUp(self):
         super().setUp()
-        self.run = homed(ClaudeClient({}).tui())
+        self.run = ClaudeClient({}).tui()
         self.path = os.path.join(self.tmp, "t.jsonl")
         self.run.restore(
             Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID),
@@ -533,7 +531,7 @@ class TuiPayloadTest(Base):
                 self.assertEqual(self.run.hook_events(label, payload), events)
 
     def test_it_binds_the_sid_it_launched_or_restored_once(self):
-        launched = homed(ClaudeClient({}).tui())
+        launched = ClaudeClient({}).tui()
         launched.launch(Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID), HOOK)
         for run in (launched, self.run):
             with self.subTest(run=run):
@@ -542,11 +540,11 @@ class TuiPayloadTest(Base):
                 )
                 self.assertEqual(run.hook_events("SessionStart", {"session_id": SID}), [])
         self.assertEqual(
-            homed(ClaudeClient({}).tui()).hook_events("SessionStart", {"session_id": SID}), []
+            ClaudeClient({}).tui().hook_events("SessionStart", {"session_id": SID}), []
         )
 
     def test_the_trust_dialog_needs_its_native_rendering(self):
-        run, dialog = homed(ClaudeClient({}).tui()), "Quick safety check"
+        run, dialog = ClaudeClient({}).tui(), "Quick safety check"
         self.assertEqual(ClaudeTui.dialogs, (dialog,))
         option = "│ ❯ 1. Yes, I trust this folder\n│   2. No, exit\n"
         for screen, shown in (
@@ -569,7 +567,7 @@ class TuiPayloadTest(Base):
 
 class StopFailureTest(Base):
     def launched(self):
-        run = homed(ClaudeClient({}).tui())
+        run = ClaudeClient({}).tui()
         run.launch(Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID), HOOK)
         run.hook_events("SessionStart", {"session_id": SID})
         return run
@@ -676,13 +674,13 @@ class TranscriptCase(Base):
         patch = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(self.tmp, "c")})
         patch.start()
         self.addCleanup(patch.stop)
-        self.run = homed(ClaudeClient({}).tui())
+        self.run = ClaudeClient({}).tui()
         spec = Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID)
         self.path = self.run.launch(spec, HOOK).transcript
         self.run.hook_events("SessionStart", {"session_id": SID})
 
-    def launched(self, home=None, **spec):
-        run = homed(ClaudeClient({}).tui(), home)
+    def launched(self, **spec):
+        run = ClaudeClient({}).tui()
         run.launch(
             Spec(**{"workdir": self.work, "access": Access(cwd=self.work), "sid": SID, **spec}),
             HOOK,
@@ -695,7 +693,7 @@ class TranscriptCase(Base):
             f.write(end.join(r if isinstance(r, str) else json.dumps(r) for r in records) + end)
 
     def restored(self):
-        run = homed(ClaudeClient({}).tui())
+        run = ClaudeClient({}).tui()
         run.restore(
             Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID),
             {"transcript": self.path, "start": 0},
@@ -766,13 +764,7 @@ class TranscriptTest(TranscriptCase):
             run.hook_callback(),
             HookCallback(
                 ClaudeTui.__module__,
-                {
-                    "transcript": self.path,
-                    "start": size,
-                    "store": run.common.store,
-                    "name": "",
-                    "home": {"kind": "local"},
-                },
+                {"transcript": self.path, "start": size, "store": run.common.store, "name": ""},
             ),
         )
         self.assertEqual(run.observe(), [])
@@ -783,7 +775,7 @@ class TranscriptTest(TranscriptCase):
         self.append(PROMPT, said("m1", text("X")))
         size = os.path.getsize(self.path)
         self.append(said("m2", text("Y")))
-        run = homed(ClaudeClient({}).tui())
+        run = ClaudeClient({}).tui()
         run.restore(
             Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID),
             {"transcript": self.path, "start": size},
@@ -793,13 +785,7 @@ class TranscriptTest(TranscriptCase):
             run.hook_callback(),
             HookCallback(
                 ClaudeTui.__module__,
-                {
-                    "transcript": self.path,
-                    "start": size,
-                    "store": run.common.store,
-                    "name": "",
-                    "home": {"kind": "local"},
-                },
+                {"transcript": self.path, "start": size, "store": run.common.store, "name": ""},
             ),
         )
 
@@ -818,7 +804,7 @@ class TranscriptTest(TranscriptCase):
                 self.subTest(state=state),
                 self.assertRaisesRegex(ConfigError, "transcript cursor"),
             ):
-                homed(ClaudeClient({}).tui()).restore(
+                ClaudeClient({}).tui().restore(
                     Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID), state
                 )
 
@@ -1193,33 +1179,21 @@ CUT = "2026-10-15T12:00:00Z"
 
 
 class DockerHomeTest(TranscriptCase):
-    """A transcript in a Docker session's state volume, which its container can write."""
+    """A transcript under a Docker session's home, which its container can write."""
 
     def setUp(self):
         super().setUp()
-        self.enterContext(serve())
-        home = stored("w", "claude")
+        home = docker_home("w", "claude")
         self.enterContext(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": home}))
-        self.run = self.launched(VolumeHome("w", "claude"))
+        self.run = self.launched()
         self.run.hook_events("SessionStart", {"session_id": SID})
-        self.path = ClaudeCommon({}).transcript(self.work, SID)
+        self.path = self.run.transcript
         self.outside = os.path.join(self.tmp, "outside.jsonl")
         with open(self.outside, "w", encoding="utf-8") as f:
             f.write(json.dumps(said("m1", text("host secret"))) + "\n")
 
-    def submitted(self, **payload):
-        call = HookCall(
-            label="UserPromptSubmit",
-            payload={"session_id": SID, **payload},
-            sid=SID,
-            workdir=self.work,
-            events=None,
-            state=self.run.hook_callback().state,
-        )
-        return on_hook(call)
-
     def test_a_regular_transcript_there_is_read(self):
-        self.assertTrue(self.path.startswith(stored("w", "claude") + os.sep))
+        self.assertTrue(self.path.startswith(docker_home("w", "claude") + os.sep))
         self.append(PROMPT, said("m1", text("A")))
         self.assertEqual(self.run.observe(), [Reply("A")])
 
@@ -1242,23 +1216,6 @@ class DockerHomeTest(TranscriptCase):
         )
         os.symlink(target, projects)
         self.assertEqual(self.run.observe(), [])
-
-    def test_on_hook_reads_through_persisted_home(self):
-        self.assertEqual(
-            self.run.hook_callback().state["home"],
-            {"kind": "volume", "session": "w", "client": "claude"},
-        )
-        self.append(PROMPT, limited(WEEKLY))
-        self.assertEqual(self.submitted(), {"session_id": SID, AFTER_LIMIT: True})
-        self.assertEqual(self.run.reply({"transcript_path": self.path}), WEEKLY)
-
-    def test_a_payload_transcript_outside_the_home_is_not_read(self):
-        with open(self.outside, "a", encoding="utf-8") as f:
-            f.write(json.dumps(limited(WEEKLY)) + "\n")
-        self.append(PROMPT, said("m1", text("A")))
-        payload = {"transcript_path": self.outside}
-        self.assertEqual(self.submitted(**payload), {"session_id": SID, **payload})
-        self.assertEqual(self.run.reply(payload), "")
 
 
 class ContinuationTest(TranscriptCase):
@@ -1322,27 +1279,6 @@ class ContinuationTest(TranscriptCase):
                         )
                     )
                 )
-
-    def test_on_hook_drops_bad_home(self):
-        state = self.run.hook_callback().state
-        for home in (
-            None,
-            {},
-            {"kind": "nope"},
-            {"kind": "local", "session": "w"},
-            {"kind": "volume", "session": "../w", "client": "claude"},
-            {"kind": "volume", "session": "w"},
-        ):
-            with self.subTest(home=home):
-                call = HookCall(
-                    label="Stop",
-                    payload={"session_id": SID},
-                    sid=SID,
-                    workdir=self.work,
-                    events=None,
-                    state={**state, "home": home},
-                )
-                self.assertIsNone(on_hook(call))
 
     def test_resumed_callback_keeps_the_chain(self):
         self.append(self.marker())
@@ -1413,9 +1349,9 @@ class ContinuationTest(TranscriptCase):
         self.append(self.marker())
         path = self.target(NEXT, said("old", text("past")))
         resumed = self.launched(resume=True)
-        self.assertEqual(resumed.transcript, home_path(os.environ["CLAUDE_CONFIG_DIR"], path))
+        self.assertEqual(resumed.transcript, path)
         state = resumed.hook_callback().state
-        restored = homed(ClaudeClient({}).tui())
+        restored = ClaudeClient({}).tui()
         restored.restore(Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID), state)
         self.assertEqual(restored.observe(), [])
         for sid in (SID, NEXT):

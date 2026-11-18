@@ -12,7 +12,6 @@ from unittest import mock
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex import common as codex_common
 from ensemble.session.clients.codex.tui import decode
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     Activity,
     ClientBound,
@@ -43,7 +42,7 @@ from tests.session.unit.clients.codex.support import (
     committed_headless,
     packaged,
 )
-from tests.session.unit.clients.support import holds, homed
+from tests.session.unit.clients.support import holds
 
 CODEX = ("-s", "danger-full-access", "-c", 'approval_policy="on-request"')
 
@@ -57,13 +56,13 @@ def default_config():
 
 class HeadlessTest(Base):
     def test_native_turn_started_is_acceptance_and_resets_the_reply(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         run.last_reply = "old"
         self.assertEqual(list(run.parse({"type": "turn.started"})), [TurnStarted()])
         self.assertEqual(list(run.parse({"type": "turn.completed"})), [TurnEnd("")])
 
     def test_failed_turn_preserves_native_error_kind(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         self.assertEqual(
             list(
                 run.parse(
@@ -80,7 +79,7 @@ class HeadlessTest(Base):
         )
 
     def run_instance(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         run.launch(dataclasses.replace(self.spec, prompt="hello"))
         run.commit()
         return run
@@ -98,7 +97,7 @@ class HeadlessTest(Base):
             list(run.parse({"type": "thread.started", "thread_id": NATIVE}))
 
     def test_complete_messages_and_final_result_keep_blank_lines(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         texts = ["one\n\nsecond line\n", "[ensemble-progress:start] x", "three"]
         lines = [
             json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}})
@@ -110,7 +109,7 @@ class HeadlessTest(Base):
         )
 
     def test_activity_and_invalid_record_diagnostics(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         self.assertEqual(
             list(run.events(["not json", "[]"])),
             [
@@ -143,7 +142,7 @@ class HeadlessTest(Base):
         for kind in ("error", "turn.failed"):
             for message in messages:
                 with self.subTest(kind=kind, message=message):
-                    run = homed(self.client.headless())
+                    run = self.client.headless()
                     record = (
                         {"type": kind, "message": message}
                         if kind == "error"
@@ -227,7 +226,7 @@ class HeadlessTest(Base):
         )
         for message, expected in cases:
             with self.subTest(message=message):
-                run = homed(self.client.headless())
+                run = self.client.headless()
                 self.assertEqual(
                     list(run.parse({"type": "error", "message": message})),
                     [Stderr(message), LimitHit(expected)],
@@ -243,14 +242,14 @@ class HeadlessTest(Base):
         ):
             message = f"You’ve hit your usage limit. Try again at {value}."
             with self.subTest(value=value):
-                run = homed(self.client.headless())
+                run = self.client.headless()
                 self.assertEqual(
                     list(run.parse({"type": "error", "message": message})),
                     [Stderr(message), LimitHit(None)],
                 )
 
     def test_arbitrary_error_is_not_usage_limit(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         message = "network error mentioning a usage limit"
         self.assertEqual(list(run.parse({"type": "error", "message": message})), [Stderr(message)])
 
@@ -262,7 +261,6 @@ class ContainerLaunch(Base):
             "host.docker.internal",
             Permission.AUTO,
             Container("/image/bin", "/image/python", "/image/source", "/run/ensemble"),
-            home=LocalHome(),
         )
 
     def test_both_modes_request_the_same_history_only_client_home(self):
@@ -339,7 +337,7 @@ class ContainerLaunch(Base):
     def test_a_container_launch_ends_its_flags_with_the_unattended_keys(self):
         supplied = ("-c", 'cli_auth_credentials_store="keyring"')
         spec = dataclasses.replace(self.spec, prompt="hi", flags=supplied)
-        run = homed(self.client.headless())
+        run = self.client.headless()
         run._context = self.runtime
         argv = list(run.launch(spec).argv)
         options = argv[: argv.index("--")]
@@ -383,7 +381,7 @@ class ContainerLaunch(Base):
             self.client.headless()._home().files()
 
     def test_headless_native_events_resume_in_a_terminal_and_back(self):
-        run = homed(self.client.headless())
+        run = self.client.headless()
         run._context = self.runtime
         first = run.launch(dataclasses.replace(self.spec, prompt="one"))
         run.commit()
@@ -422,7 +420,7 @@ class ContainerLaunch(Base):
     def test_container_resume_rejects_missing_mismatched_and_linked_history(self):
         self.prepare()
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        run = homed(self.client.headless())
+        run = self.client.headless()
         run._context = self.runtime
         spec = dataclasses.replace(self.spec, resume=True)
         with self.assertRaisesRegex(ConfigError, "missing Codex session file"):

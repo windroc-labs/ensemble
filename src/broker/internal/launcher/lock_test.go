@@ -38,7 +38,7 @@ func TestLockHolder(t *testing.T) {
 				t.Fatalf("query mutated Docker: %q", args)
 				return nil, nil
 			}}
-			got, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", "")
+			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -63,7 +63,7 @@ func TestLockHolderEmptyAndFailures(t *testing.T) {
 		"empty":               {},
 		"disappeared":         {list: []byte(lockID), err: &docker.CommandError{Exit: 1, Stderr: "No such container"}},
 		"inspect failed":      {list: []byte(lockID), err: errors.New("bad inspect"), want: protocol.StartFailed},
-		"inspect unreachable": {list: []byte(lockID), err: unreachableErr, want: protocol.DockerUnreachable},
+		"inspect unreachable": {list: []byte(lockID), err: docker.ErrUnreachable, want: protocol.DockerUnreachable},
 		"malformed":           {list: []byte(lockID), inspect: []byte(`[]`), want: protocol.StartFailed},
 		"invalid ID":          {list: []byte("--help"), want: protocol.StartFailed},
 		"different lock":      {list: []byte(lockID), inspect: lockInspect(lockID, container, "running", map[string]string{"windroc.lock": "other"})},
@@ -75,14 +75,14 @@ func TestLockHolderEmptyAndFailures(t *testing.T) {
 				}
 				return tc.inspect, tc.err
 			}}
-			got, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", "")
+			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
 			if code(t, err) != tc.want || got != nil {
 				t.Fatalf("%+v %v", got, err)
 			}
 		})
 	}
-	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	if _, err := (Host{}).lockHolder(context.Background(), Daemon{Runner: d}, "dummy", ""); code(t, err) != protocol.DockerUnreachable {
+	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }}
+	if _, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", ""); code(t, err) != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
 }

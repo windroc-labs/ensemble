@@ -128,10 +128,10 @@ func (w *lockWorld) host(t *testing.T, name string) (Host, string, *fakeDocker) 
 		}
 		return base.respond(args, stdin)
 	}}
-	h = withRunner(h, d)
+	h.Docker = d
 	path := editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = name, "ensemble-ws-"+name, "dummy", name
-		f["claude_dir"] = ClientHomes + "/claude"
+		f["claude_dir"] = w.home + "/.ensemble/docker-state/" + name + "/claude"
 	})
 	return h, path, d
 }

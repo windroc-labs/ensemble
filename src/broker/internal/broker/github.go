@@ -25,23 +25,28 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// Installation tokens are never stored: only the container's files hold them.
+// The broker-only item: each App's bot user ID. Installation tokens are never stored: only the container's files hold
+// them.
 const (
 	usersService = "ensemble-broker-github-users"
 	tokenDir     = docker.GitHubDir
 )
 
-// HostContainer is the host's gh, not a container.
+// HostContainer is host-gh-login's audit consumer: the host's gh, not a container.
 const HostContainer = "host/gh"
 
+// hostPermissions are all the host's gh may do: push, open and merge pull requests, change workflows, and read checks,
+// runs and statuses.
 var hostPermissions = map[string]string{"contents": "write", "pull_requests": "write", "workflows": "write",
 	"checks": "read", "actions": "read", "statuses": "read", "metadata": "read"}
 
-// revocationTimeout bounds each step that must end whatever the caller's context.
+// revocationTimeout bounds each in-command step that must end whatever the caller's context: a rollback's or close's
+// revocations, all on one context, and close's read of the token files.
 var revocationTimeout = 30 * time.Second
 
-// cloneScript: git reads the token through a command-line credential helper, so the clone's config and remote URL
-// never hold it.
+// cloneScript shallow-clones branch or tag $2 of github.com/$1 into $3 with the prefetch token on stdin, kept only in
+// $HOME (the helper's tmpfs). git reads it through a command-line credential helper, so the clone's config and remote
+// URL never hold it, and runs none of the repo's hooks.
 const cloneScript = `set -eu
 umask 077
 cat > "$HOME/token"
@@ -49,7 +54,8 @@ exec git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helpe
 	`-c 'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; printf "password=%s\n" "$(cat "$HOME/token")"; }; f' ` +
 	`clone --quiet --depth 1 --branch "$2" -- "https://github.com/$1.git" "$3"`
 
-// tokensScript follows no symlink, the directory's own included.
+// tokensScript lists the token files in directory $1, at most maxTokenFiles, one line each: name, mtime seconds, and
+// the first 256 bytes. It follows no symlink, the directory's own included; a missing directory lists nothing.
 const tokensScript = `[ -d "$1" ] || exit 0
 find "$1" -maxdepth 1 -type f ! -name '.*' | head -n 100 | while IFS= read -r f; do
 	if [ -f "$f" ] && [ ! -L "$f" ]; then
@@ -64,20 +70,25 @@ var (
 	decimal           = regexp.MustCompile(`^[0-9]{1,18}$`)
 )
 
+// prefetchPermissions is all a prefetch token may do: read its one repository's contents.
 var prefetchPermissions = map[string]string{"contents": "read"}
 
+// botUser is what login github keeps in the users item: the App's slug and its bot user's ID.
 type botUser struct {
 	Slug string `json:"slug"`
 	ID   int64  `json:"id"`
 }
 
+// AppKeys reads a GitHub App's private-key item.
 type AppKeys interface {
 	AppAccount(app string) (string, error)
 	AppKey(app, account string) ([]byte, error)
 }
 
-// GitHub keeps no copy of a token: it is revoked by the command that issued it or read back at close, else expires
-// within the hour.
+// GitHub issues installation tokens per command and keeps no copy: each is written into its container's token file and
+// otherwise held only in memory, to be revoked in the command that issued it (a start's rollback, a prefetch) or read
+// back from the container at close; any other expires within the hour. Audit (nil: none) gets each token's outcome,
+// never its value.
 type GitHub struct {
 	Keychain SecretKeychain
 	Apps     AppKeys
@@ -85,6 +96,7 @@ type GitHub struct {
 	Audit    *audit.Recorder
 }
 
+// FileLock is an exclusive flock on path; create adds a missing 0600 file in a 0700 directory.
 func FileLock(path string, create bool) func() (func(), error) {
 	return func() (func(), error) {
 		flags := os.O_RDWR
@@ -131,15 +143,15 @@ func loginError(app string) *protocol.Error {
 	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+app+".")
 }
 
-// writeError never carries Docker's stderr.
+// writeError is the protocol's account of a token file write that failed, never Docker's stderr.
 func writeError(err error) error {
-	if u, ok := errors.AsType[*docker.Unreachable](err); ok {
-		return fmt.Errorf("GitHub token injection: %w", u)
+	if errors.Is(err, docker.ErrUnreachable) {
+		return fmt.Errorf("GitHub token injection: %w", docker.ErrUnreachable)
 	}
 	return errors.New("writing a GitHub token into the container failed")
 }
 
-// redacted: only a protocol error can hold a secret.
+// redacted is err with each secret replaced: a protocol error as a redacted copy; the others hold none.
 func redacted(err error, secrets ...string) error {
 	var e *protocol.Error
 	if !errors.As(err, &e) {
@@ -150,7 +162,7 @@ func redacted(err error, secrets ...string) error {
 	return &c
 }
 
-// detached: a cancelled caller still revokes.
+// detached is a context of its own for an in-command revocation: a cancelled caller still revokes.
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), revocationTimeout)
 }
@@ -159,7 +171,8 @@ func (g GitHub) note(container, result, reason string, m credential.Material, re
 	credential.Note(g.Audit, audit.GitHubToken, container, result, reason, m, repos)
 }
 
-// revoke runs on ctx alone; once it ends, the rest are audited unrevoked. A failure is never retried or returned.
+// revoke revokes each of container's tokens once, in order, on ctx alone; once ctx ends, the rest are audited
+// unrevoked without a request. A failure is audited, never retried or returned.
 func (g GitHub) revoke(ctx context.Context, container string, tokens []credential.Material) {
 	for _, m := range tokens {
 		if err := ctx.Err(); err != nil {
@@ -175,6 +188,7 @@ func (g GitHub) revoke(ctx context.Context, container string, tokens []credentia
 	}
 }
 
+// targets signs the App JWT and lists what a grant covers: every installation.
 func (g GitHub) targets(ctx context.Context) (jwt string, _ []github.Installation, _ error) {
 	jwt, err := g.jwt(AppKeyService)
 	if err != nil {
@@ -187,7 +201,8 @@ func (g GitHub) targets(ctx context.Context) (jwt string, _ []github.Installatio
 	return jwt, installs, nil
 }
 
-// issue gives no token to an account that is not a GitHub login, so no file name.
+// issue issues in's token limited to permissions and audits it as result with what it reaches. An account that is
+// not a GitHub login, so no file name, gets none.
 func (g GitHub) issue(ctx context.Context, jwt string, in github.Installation, permissions map[string]string, container, result string) (credential.Material, error) {
 	if !github.Login.MatchString(in.Account) {
 		return credential.Material{}, protocol.New(protocol.GitHubFailed, "GitHub named an installation account that is not a GitHub login.")
@@ -201,6 +216,7 @@ func (g GitHub) issue(ctx context.Context, jwt string, in github.Installation, p
 	return m, nil
 }
 
+// describe audits m as result with the repositories it reaches; a failed listing is described, never returned.
 func (g GitHub) describe(ctx context.Context, container, result string, m credential.Material, jwt string) {
 	if g.Audit == nil {
 		return
@@ -230,7 +246,7 @@ func expiries(tokens []credential.Material) []protocol.Expiry {
 	return out
 }
 
-// Issue: the caller owns delivery and rollback after success.
+// Issue prepares every installation token; the caller owns delivery and rollback after success.
 func (g GitHub) Issue(ctx context.Context, _ string, permissions map[string]string, container string) (commands []credential.Command, revoke func(), _ []protocol.Expiry, err error) {
 	jwt, targets, err := g.targets(ctx)
 	if err != nil {
@@ -271,7 +287,8 @@ func (g GitHub) Issue(ctx context.Context, _ string, permissions map[string]stri
 	}, expiries(issued), nil
 }
 
-// Refresh never revokes a replaced token: it expires. A new one whose write failed is revoked.
+// Refresh writes container a new token per current installation of app, limited to permissions, over each file. A replaced token is never revoked: it expires. A new one whose write failed never
+// reached the container and is revoked.
 func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
 	jwt, targets, err := g.targets(ctx)
 	if err != nil {
@@ -294,7 +311,10 @@ func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]st
 	return expiries(renewed), nil
 }
 
-// HostLogin erases the token slice once login returns and revokes a failed login's token; a replaced one expires.
+// HostLogin issues a token of the host App's only installation, limited to hostPermissions, and gives it to login, the
+// host gh's login, which reads it from the slice; the slice is erased once login returns. A failed login's token is
+// revoked, and the error says whether that failed. The audit gets one refresh line. A replaced host token is never
+// revoked: it expires, as Refresh's do.
 func (g GitHub) HostLogin(ctx context.Context, login func(token []byte) error) (protocol.Expiry, error) {
 	g.Audit.Renewing("")
 	jwt, err := g.jwt(HostAppKeyService)
@@ -341,8 +361,10 @@ func tokens(list []credential.Material) []string {
 	return out
 }
 
-// Revoke treats the token files as untrusted: they are the container's. A failed read is audited, its tokens left
-// to expire. Each audited expiry is the file's mtime, no later than now, plus an hour.
+// Revoke revokes the installation tokens read from container's token files through read, which runs argv as agent
+// there: the files are the container's, so untrusted. The read and the revocations each get revocationTimeout of their
+// own; an absent container has nothing to revoke, and any other failed read is audited, its tokens left to expire.
+// Each audited expiry is the file's mtime, no later than now, plus an hour.
 func (g GitHub) Revoke(ctx context.Context, container string, read func(ctx context.Context, argv []string) ([]byte, error)) {
 	rctx, cancel := detached(ctx)
 	out, err := read(rctx, []string{"/bin/sh", "-c", tokensScript, "sh", tokenDir})
@@ -364,7 +386,8 @@ func (g GitHub) Revoke(ctx context.Context, container string, read func(ctx cont
 	g.revoke(rctx, container, files)
 }
 
-// tokenFiles errors on more lines than the script lists.
+// tokenFiles parses tokensScript's output: each installation token once, skipping any line that is not a login's
+// file, a decimal mtime and a token of that shape; more lines than the script lists is an error.
 func (g GitHub) tokenFiles(out []byte) ([]credential.Material, error) {
 	text := strings.TrimSuffix(string(out), "\n")
 	if text == "" {
@@ -391,7 +414,9 @@ func (g GitHub) tokenFiles(out []byte) ([]credential.Material, error) {
 	return files, nil
 }
 
-// Prefetch's token reads only repo's contents and is revoked once the prefetch returns.
+// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container with
+// argv and stdin. The token it gives run reads only repo's contents and is revoked once the prefetch returns, kept
+// nowhere but in memory and the helper's tmpfs meanwhile.
 func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error {
 	jwt, err := g.jwt(AppKeyService)
 	if err != nil {
@@ -431,8 +456,8 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 	stdin := []byte(token)
 	defer erase(stdin)
 	if err := run([]string{"/bin/sh", "-c", cloneScript, "sh", repo, ref, dir}, stdin); err != nil {
-		if u, ok := errors.AsType[*docker.Unreachable](err); ok {
-			return protocol.New(protocol.DockerUnreachable, u.Error())
+		if errors.Is(err, docker.ErrUnreachable) {
+			return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
 		}
 		failed := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
 		failed.Cause = github.Redact(docker.Diagnostic(err), token)
@@ -441,6 +466,7 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 	return nil
 }
 
+// installError is the protocol's account of err, looking up the App's installation on prefetch's repo.
 func installError(repo string, err error) *protocol.Error {
 	var se *github.StatusError
 	if errors.As(err, &se) && se.Status == http.StatusNotFound {
@@ -449,6 +475,8 @@ func installError(repo string, err error) *protocol.Error {
 	return apiError(err)
 }
 
+// SaveUser asks GitHub which App key item app's key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
+// both under app, for start to check and report; out gets its one line.
 func (g GitHub) SaveUser(ctx context.Context, app string, out io.Writer) error {
 	rerun := "; rerun ensemble-broker login github " + app
 	jwt, err := g.jwt(app)
@@ -472,7 +500,7 @@ func (g GitHub) SaveUser(ctx context.Context, app string, out io.Writer) error {
 	return err
 }
 
-// Ready never reads the key.
+// Ready checks, without reading the key, that app is the App login github saved and its key item is in place.
 func (g GitHub) Ready(app string) error {
 	if _, err := g.BotUserID(app); err != nil {
 		return err
@@ -481,6 +509,7 @@ func (g GitHub) Ready(app string) error {
 	return err
 }
 
+// BotUserID is app's bot user ID as login github saved it; another app than the saved one is refused.
 func (g GitHub) BotUserID(app string) (int64, error) {
 	rerun := ": run ensemble-broker login github " + AppKeyService + "."
 	missing := protocol.New(protocol.LoginRequired, "No GitHub App login"+rerun)

@@ -217,7 +217,6 @@ class EnvironmentCheckTest(Case):
                 "gateway": "mini-op",
                 "plugins": [],
                 "lock": "mini-op",
-                "daemon": "local",
                 "credentials": {
                     "env": [
                         {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
@@ -236,7 +235,6 @@ class EnvironmentCheckTest(Case):
         assert spec is not None
         self.assertFalse(spec.prefetch)
         self.assertEqual(spec.spec.image, "mini-op:env")
-        self.assertEqual(spec.spec.daemon, "local")
         self.assertEqual(
             found["roles"]["verifier"]["environment"], {"name": "mini-op", "prefetch": True}
         )

@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	RefreshAhead = 10 * time.Minute // before the earliest delivered expiry
-	RetryAfter   = time.Minute
+	RefreshAhead = 10 * time.Minute // a token provider is renewed this long before its earliest delivered expiry
+	RetryAfter   = time.Minute      // a failed provider is tried again this long after
 )
 
-// Deadline: past At, a caller without a newer confirmation performs Action ("close").
+// Deadline is when a caller must act without a newer confirmation: past At, it performs Action ("close": close the
+// container), reporting Reason.
 type Deadline struct {
 	At     string `json:"at"`
 	Action string `json:"action"`
@@ -30,13 +31,15 @@ type ResultError struct {
 	Cause   string        `json:"cause,omitempty"`
 }
 
+// ProviderResult is a token provider renewed (its earliest new expiry) or failed.
 type ProviderResult struct {
 	Credential string       `json:"credential"`
 	ExpiresAt  *string      `json:"expires_at"`
 	Error      *ResultError `json:"error"`
 }
 
-// MaintainResult's NextCheck nil: never; Deadline nil: none.
+// MaintainResult is everything a caller needs to schedule: when to call again (nil: never), the deadline it enforces
+// meanwhile (nil: none), and each provider's outcome.
 type MaintainResult struct {
 	Container string           `json:"container"`
 	NextCheck *string          `json:"next_check"`
@@ -44,10 +47,12 @@ type MaintainResult struct {
 	Results   []ProviderResult `json:"results"`
 }
 
-// tokenProvider's deadline, when set, is why a caller closes the container once the kind's material expires.
+// tokenProvider is one renewable kind's maintenance: renew delivers fresh material into the container and records its
+// expiries through record, returning them; failed is the message for an unclassified error, %s the container;
+// deadline, when set, is the reason a caller closes the container once the kind's delivered material expires.
 type tokenProvider struct {
 	kind     credential.Kind
-	renew    func(h Host, ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error)
+	renew    func(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error)
 	failed   string
 	deadline string
 }
@@ -55,16 +60,16 @@ type tokenProvider struct {
 var tokenProviders = []tokenProvider{
 	{
 		kind:     credential.Codex,
-		renew:    Host.renewCodex,
+		renew:    renewCodex,
 		failed:   "Writing Codex credentials into %s failed.",
 		deadline: "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume.",
 	},
-	{kind: credential.GitHub, renew: Host.renewGitHub, failed: "Writing a GitHub token into %s failed."},
-	{kind: credential.Linear, renew: Host.renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
+	{kind: credential.GitHub, renew: renewGitHub, failed: "Writing a GitHub token into %s failed."},
+	{kind: credential.Linear, renew: renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
 }
 
-func (h Host) renewLinear(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
-	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, d, container))
+func renewLinear(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
+	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, container))
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +77,10 @@ func (h Host) renewLinear(ctx context.Context, d Daemon, m Manifest, container s
 	return times, record(times)
 }
 
-// renewCodex records the expiry as Codex's publication, so a retry after a failed record delivers the renewed login.
-func (h Host) renewCodex(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
-	exec := h.agentExec(ctx, d, container)
+// renewCodex renews the login only when due and no concurrent run has, and records the expiry as Codex's
+// publication, so a retry after a failed record delivers the login already renewed.
+func renewCodex(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
+	exec := h.agentExec(ctx, container)
 	inject := func(argv []string, data []byte) error { return exec(append(argv, m.CodexDir), data) }
 	expiry, err := h.Codex.Refresh(ctx, inject, func(expiry string) error { return record([]string{expiry}) })
 	if err != nil {
@@ -84,12 +90,13 @@ func (h Host) renewCodex(ctx context.Context, d Daemon, m Manifest, container st
 	return []string{expiry}, nil
 }
 
-// renewGitHub leaves the replaced tokens to expire.
-func (h Host) renewGitHub(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
+// renewGitHub writes a new token per current installation of the manifest's App over the container's and records
+// their expiries; the tokens replaced expire.
+func renewGitHub(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
 	if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 		return nil, injected(err, protocol.RefreshFailed, "GitHub renewal for "+container+" failed.")
 	}
-	expiries, err := h.GitHub.Refresh(ctx, m.GitHubApp, m.GitHubPermissions, container, h.agentExec(ctx, d, container))
+	expiries, err := h.GitHub.Refresh(ctx, m.GitHubApp, m.GitHubPermissions, container, h.agentExec(ctx, container))
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +104,10 @@ func (h Host) renewGitHub(ctx context.Context, d Daemon, m Manifest, container s
 	return times, record(times)
 }
 
-// Maintain fails only for a manifest that is unreadable, not the container's or not safely mounted; a provider's
-// failure is its own result.
+// Maintain renews each token provider of the container started with path that is due (every one with renew)
+// and says when to call again. A provider's failure
+// is its own result, never the command's: only a manifest that is unreadable, not the container's or not safely
+// mounted fails it.
 func (h Host) Maintain(ctx context.Context, container, path string, renew bool) (MaintainResult, error) {
 	h.Audit.Begin(container, nil)
 	data, err := os.ReadFile(path)
@@ -113,10 +122,6 @@ func (h Host) Maintain(ctx context.Context, container, path string, renew bool) 
 		return MaintainResult{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: maintain needs the container's manifest.")
 	}
 	if err := h.checkMounts(m); err != nil {
-		return MaintainResult{}, err
-	}
-	d, _, err := h.find(ctx, m.Daemon, protocol.InternalError)
-	if err != nil {
 		return MaintainResult{}, err
 	}
 	now := h.now()
@@ -140,7 +145,7 @@ func (h Host) Maintain(ctx context.Context, container, path string, renew bool) 
 			consider(at)
 			continue
 		}
-		expires, err := p.renew(h, ctx, d, m, container, func(expires []string) error {
+		expires, err := p.renew(ctx, h, m, container, func(expires []string) error {
 			if earliest(expires) == nil {
 				return tokensFailed(m)
 			}
@@ -173,6 +178,7 @@ func (h Host) Maintain(ctx context.Context, container, path string, renew bool) 
 	return result, nil
 }
 
+// deadlineOf is the earliest recorded expiry among held kinds with a deadline; nil for none.
 func deadlineOf(record TokenRecord, held []credential.Kind) *Deadline {
 	var deadline *Deadline
 	var first time.Time
@@ -188,6 +194,8 @@ func deadlineOf(record TokenRecord, held []credential.Kind) *Deadline {
 	return deadline
 }
 
+// dueAt is when kind is next due: once its retry time has passed, RefreshAhead before its earliest recorded expiry;
+// now without a record.
 func dueAt(record TokenRecord, kind credential.Kind, now time.Time) time.Time {
 	at := now
 	if expiry := earliest(record.Expires[kind]); expiry != nil {
@@ -199,7 +207,7 @@ func dueAt(record TokenRecord, kind credential.Kind, now time.Time) time.Time {
 	return at
 }
 
-// earliest is nil when any time is not RFC 3339.
+// earliest is expires' earliest time; nil when it is empty or holds a time that is not RFC 3339.
 func earliest(expires []string) *time.Time {
 	var first *time.Time
 	for _, e := range expires {
@@ -214,7 +222,7 @@ func earliest(expires []string) *time.Time {
 	return first
 }
 
-// resultError caps diagnostics as an error envelope's are.
+// resultError is e as a result carries it: its diagnostics single-line and capped, as an error envelope's are.
 func resultError(e *protocol.Error) *ResultError {
 	r := &ResultError{Code: e.Code, Message: protocol.Text(e.Message)}
 	if e.Cause != "" {

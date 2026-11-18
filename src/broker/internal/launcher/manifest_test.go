@@ -47,8 +47,8 @@ func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
 	if err != nil || !m.HasHook || m.HookPath != "/usr/local/bin/ensemble-session" || m.Labels["team"] != "crew" {
 		t.Fatalf("%+v %v", m, err)
 	}
-	base := `"client":"claude","generation":"0123456789abcdef0123456789abcdef","daemon":"D1","image":"ensemble-worker:` +
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","state":"new","claude_dir":"/c","claude_account":"work","labels":{}`
+	base := `"client":"claude","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` +
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","claude_dir":"/c","claude_account":"work","labels":{}`
 	if _, err := ParseManifest([]byte(`{"name":"w",` + base + `}`)); err != nil {
 		t.Fatal(err)
 	}

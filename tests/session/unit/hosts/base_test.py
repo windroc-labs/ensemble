@@ -25,7 +25,6 @@ from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     CapacityRow,
     ClientContext,
-    ClientHome,
     Hosts,
     Launch,
     SessionRow,
@@ -87,17 +86,10 @@ class HostDefaults(Case):
     def test_a_host_hands_its_client_no_container(self):
         self.assertEqual(
             [f.name for f in dataclasses.fields(ClientContext)],
-            ["host_address", "permission", "container", "home"],
+            ["host_address", "permission", "container"],
         )
         self.assertIsNone(MinimalHost("m")._client_context().container)
         self.assertIsNone(LOCAL_CONTEXT.container)
-
-    def test_a_host_picks_the_local_home_store(self):
-        home = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
-        for client_home in (home, None):
-            with self.subTest(home=client_home):
-                store = MinimalHost("m")._home_store("w", client_home)
-                self.assertEqual(store.persisted(), {"kind": "local"})
 
     def test_a_host_without_workspaces_removes_none(self):
         self.assertEqual(MinimalHost("m").remove_workspaces("/w/TASK-1/agent"), [])
