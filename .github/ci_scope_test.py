@@ -480,8 +480,7 @@ class Aggregate(unittest.TestCase):
                 "changes",
                 "lint",
                 "repository",
-                "unit",
-                "coverage",
+                "github",
                 "integration",
                 "mini-op",
                 "broker",
@@ -495,10 +494,17 @@ class Aggregate(unittest.TestCase):
             "broker": str(full).lower(),
         }
         result["repository"]["result"] = "skipped" if docs or version else "success"
-        result["unit"]["result"] = "skipped" if docs or version else "success"
-        result["coverage"]["result"] = "skipped" if docs or version else "success"
+        result["github"]["result"] = "skipped" if docs or version else "success"
         result["integration"]["result"] = "skipped" if docs or version else "success"
         result["broker"]["result"] = "success" if full else "skipped"
+        return result
+
+    def main_needs(self, *, docs=False, version=False, **kwargs):
+        """The needs of main's ci.yml, which the org ruleset runs until main calls python.yml."""
+        result = self.needs(docs=docs, version=version, **kwargs)
+        del result["python"], result["github"]
+        tests = "skipped" if docs or version else "success"
+        result["unit"], result["coverage"] = {"result": tests}, {"result": tests}
         return result
 
     def test_repo_guards_jobs_must_succeed_and_only_pull_requests_run_github_dir_pr(self):
@@ -531,23 +537,59 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(scope.gate(self.needs(full=False, docs=True), "pull_request"), [])
         self.assertEqual(scope.gate(self.needs(full=False, version=True), "pull_request"), [])
 
-    def test_merge_group_requires_full_scope_and_diff_coverage(self):
+    def test_merge_group_requires_full_scope(self):
+        self.assertEqual(scope.gate(self.needs(), "merge_group"), [])
+        self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
+
+    def test_main_ci_yml_needs_pass_in_every_scope_and_event(self):
+        for kwargs in (
+            {},
+            {"full": False},
+            {"full": False, "docs": True},
+            {"full": False, "version": True},
+            {"event": "push"},
+            {"event": "merge_group"},
+        ):
+            event = kwargs.get("event", "pull_request")
+            with self.subTest(**kwargs):
+                self.assertEqual(scope.gate(self.main_needs(**kwargs), event), [])
+
+    def test_python_and_main_ci_yml_jobs_never_mix(self):
         needs = self.needs()
+        needs["unit"] = needs["coverage"] = {"result": "success"}
+        self.assertEqual(
+            scope.gate(needs, "pull_request"), ["unit: not gated", "coverage: not gated"]
+        )
+        needs = self.main_needs()
+        needs["github"] = {"result": "success"}
+        self.assertEqual(scope.gate(needs, "pull_request"), ["github: not gated"])
+        needs = self.needs()
+        del needs["python"]
+        self.assertEqual(
+            scope.gate(needs, "pull_request"),
+            [
+                "unit: expected success, got None",
+                "coverage: expected success, got None",
+                "github: not gated",
+            ],
+        )
+
+    def test_main_ci_yml_merge_group_requires_diff_coverage(self):
+        needs = self.main_needs()
         self.assertEqual(scope.gate(needs, "merge_group"), [])
         needs["coverage"]["result"] = "skipped"
         self.assertTrue(scope.gate(needs, "merge_group"))
-        self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
 
-    def test_push_passes_whatever_coverage_reports(self):
+    def test_main_ci_yml_push_passes_whatever_coverage_reports(self):
         for outcome in ("success", "failure", "cancelled", "skipped"):
-            needs = self.needs(event="push")
+            needs = self.main_needs(event="push")
             needs["coverage"]["result"] = outcome
             with self.subTest(outcome=outcome):
                 self.assertEqual(scope.gate(needs, "push"), [])
                 self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
 
-    def test_push_without_a_coverage_result_fails(self):
-        needs = self.needs(event="push")
+    def test_main_ci_yml_push_without_a_coverage_result_fails(self):
+        needs = self.main_needs(event="push")
         del needs["coverage"]
         self.assertEqual(
             scope.gate(needs, "push"),
@@ -562,33 +604,36 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(scope.gate(needs, "pull_request"), [])
 
     def test_failure_cancel_and_unexpected_skip_always_fail(self):
-        for job in self.needs():
-            for outcome in ("failure", "cancelled", "skipped", "unknown"):
-                needs = self.needs()
-                needs[job]["result"] = outcome
-                with self.subTest(job=job, outcome=outcome):
-                    failures = scope.gate(needs, "pull_request")
-                    self.assertTrue(failures)
-                    self.assertIn(job, " ".join(failures))
+        for shape in (self.needs, self.main_needs):
+            for job in shape():
+                for outcome in ("failure", "cancelled", "skipped", "unknown"):
+                    needs = shape()
+                    needs[job]["result"] = outcome
+                    with self.subTest(shape=shape.__name__, job=job, outcome=outcome):
+                        failures = scope.gate(needs, "pull_request")
+                        self.assertTrue(failures)
+                        self.assertIn(job, " ".join(failures))
 
     def test_expected_skip_is_not_failure_or_cancel_and_unexpected_success_fails(self):
-        for job, kwargs in (
-            ("repository", {"full": False, "docs": True}),
-            ("repository", {"full": False, "version": True}),
-            ("broker", {"full": False}),
-            ("broker", {"full": False, "docs": True}),
-            ("broker", {"full": False, "version": True}),
-            ("integration", {"full": False, "docs": True}),
-            ("unit", {"full": False, "docs": True}),
-            ("coverage", {"full": False, "docs": True}),
-            ("unit", {"full": False, "version": True}),
-            ("coverage", {"full": False, "version": True}),
-            ("integration", {"full": False, "version": True}),
+        for shape, job, kwargs in (
+            (self.needs, "repository", {"full": False, "docs": True}),
+            (self.needs, "repository", {"full": False, "version": True}),
+            (self.needs, "broker", {"full": False}),
+            (self.needs, "broker", {"full": False, "docs": True}),
+            (self.needs, "broker", {"full": False, "version": True}),
+            (self.needs, "integration", {"full": False, "docs": True}),
+            (self.needs, "github", {"full": False, "docs": True}),
+            (self.needs, "github", {"full": False, "version": True}),
+            (self.needs, "integration", {"full": False, "version": True}),
+            (self.main_needs, "unit", {"full": False, "docs": True}),
+            (self.main_needs, "coverage", {"full": False, "docs": True}),
+            (self.main_needs, "unit", {"full": False, "version": True}),
+            (self.main_needs, "coverage", {"full": False, "version": True}),
         ):
             for result in ("failure", "cancelled", "success"):
-                needs = self.needs(**kwargs)
+                needs = shape(**kwargs)
                 needs[job]["result"] = result
-                with self.subTest(job=job, result=result):
+                with self.subTest(shape=shape.__name__, job=job, result=result):
                     self.assertTrue(scope.gate(needs, kwargs.get("event", "pull_request")))
 
     def test_classifier_failure_or_invalid_output_cannot_authorize_skips(self):
@@ -611,28 +656,24 @@ class Aggregate(unittest.TestCase):
         needs["changes"]["result"] = "failure"
         self.assertTrue(scope.gate(needs, "pull_request"))
 
-    def test_ci_without_any_repo_guards_job_passes_but_a_partial_set_fails(self):
-        for event in ("pull_request", "push", "merge_group"):
-            needs = self.needs(event=event)
-            for job in REPO_GUARDS:
-                del needs[job]
-            with self.subTest(event=event):
-                self.assertEqual(scope.gate(needs, event), [])
-            for job in REPO_GUARDS:
-                needs = self.needs(event=event)
-                del needs[job]
-                with self.subTest(event=event, missing=job):
-                    self.assertEqual(len(scope.gate(needs, event)), 1)
-                    self.assertRegex(
-                        scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
-                    )
+    def test_every_repo_guards_job_is_required(self):
+        for shape in (self.needs, self.main_needs):
+            for event in ("pull_request", "push", "merge_group"):
+                for job in set(REPO_GUARDS) & set(shape()) - {"python"}:
+                    needs = shape(event=event)
+                    del needs[job]
+                    with self.subTest(shape=shape.__name__, event=event, missing=job):
+                        self.assertEqual(len(scope.gate(needs, event)), 1)
+                        self.assertRegex(
+                            scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
+                        )
 
     def test_a_needed_job_without_an_expectation_fails(self):
         for event in ("pull_request", "push", "merge_group"):
             needs = self.needs(event=event)
-            needs["python"] = {"result": "failure"}
+            needs["extra"] = {"result": "failure"}
             with self.subTest(event=event):
-                self.assertEqual(scope.gate(needs, event), ["python: not gated"])
+                self.assertEqual(scope.gate(needs, event), ["extra: not gated"])
 
     def test_missing_or_malformed_needs_and_non_full_push_fail(self):
         for needs in ({}, [], {"changes": None}, {**self.needs(), "unit": "success"}):
@@ -726,41 +767,41 @@ class Workflow(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", ci)
         self.assertNotIn("actions: write", ci)
         self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
-        self.assertIn("github.event.merge_group.base_sha", job("coverage"))
         worker = WORKFLOW.with_name("worker-image.yml").read_text()
         self.assertIn("  merge_group:\n    types: [checks_requested]", worker)
         self.assertIn("github.event.merge_group.head_sha", worker)
         self.assertIn("github.event.merge_group.base_sha", worker)
 
-    def test_every_event_merges_unit_coverage_and_push_coverage_is_advisory(self):
-        unit, coverage = job("unit"), job("coverage")
-        self.assertIn("RUN_TESTS_COVERAGE: collect\n", unit)
-        unit_steps = dict(
-            step.split("\n", 1) for step in re.split(r"(?m)^      - name: ", unit)[1:]
-        )
-        for name, step in unit_steps.items():
-            with self.subTest(step=name):
-                coverage_only = name in ("Install pinned coverage", "Preserve unit coverage")
-                self.assertEqual(PUSH_ADVISORY in step, coverage_only)
-                self.assertNotIn("'push'", step.replace(PUSH_ADVISORY, ""))
-        header, steps = coverage.split("\n    steps:\n")
-        self.assertIn(f"\n    {PUSH_ADVISORY}", header)
-        self.assertNotIn("'push'", header.replace(PUSH_ADVISORY, ""))
-        steps = re.split(r"(?m)^      - name: ", steps)[1:]
-        names = [step.split("\n", 1)[0] for step in steps]
-        self.assertEqual(
-            names[-2:], ["Diff coverage of changed src lines", "Require unchanged checkout"]
-        )
-        self.assertNotIn(PUSH_ADVISORY, "".join(steps))
-        self.assertIn("if: ${{ github.event_name != 'push' }}", steps[-2])
+    def test_unit_coverage_and_cyclic_imports_run_on_repo_guards_python(self):
+        text = WORKFLOW.read_text()
+        for name in ("unit", "coverage"):
+            with self.subTest(job=name):
+                self.assertNotRegex(text, rf"(?m)^  {name}:$")
+        for obsolete in ("--unit", "coverage_gate.py", "RUN_TESTS_COVERAGE", "cyclic-import"):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, text)
         self.assertIn(
-            "name: unit-coverage-merged-${{ github.run_id }}-${{ github.run_attempt }}\n"
-            "          path: ${{ runner.temp }}/unit-coverage-merged/\n"
-            "          if-no-files-found: error\n"
-            "          retention-days: 30\n",
-            coverage,
+            "      coverage-shards: '"
+            '["tests/session/unit", "tests/orchestrator/unit", '
+            '"tests/delegate/unit tests/manager/unit tests/unit tests/utils/unit"]'
+            "'\n",
+            job("python"),
         )
-        self.assertIn('>> "$GITHUB_STEP_SUMMARY"', coverage)
+        self.assertIn(
+            "run: pylint --disable=all --enable=duplicate-code src/ensemble\n", job("lint")
+        )
+
+    def test_github_tooling_tests_keep_their_coverage_dependency(self):
+        github = job("github")
+        self.assertIn("    name: GitHub tooling tests\n", github)
+        self.assertIn('python3 -m pip install coverage=="$COVERAGE_VERSION"', github)
+        self.assertIn(
+            "run: python3 -X faulthandler .github/run_tests.py 'GitHub tooling' .github\n", github
+        )
+        self.assertIn("run: chmod -R a-w src\n", github)
+        self.assertIn(
+            "      - name: Require unchanged checkout\n        if: ${{ always() }}", github
+        )
 
     def test_pr_edits_start_no_ci_run(self):
         text = WORKFLOW.read_text()
@@ -780,13 +821,18 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: ${{ always() }}\n", ci)
         self.assertIn("    name: CI\n", ci)
         jobs = set(re.findall(r"(?m)^  ([\w-]+):$", text.split("\njobs:\n", 1)[1]))
-        self.assertLessEqual({"changes", "lint", "unit", "mini-op", "ci"}, jobs)
+        self.assertLessEqual({"changes", "lint", "github", "mini-op", "ci"}, jobs)
         for name in jobs - {"changes", "mini-op", "ci", *REPO_GUARDS}:
             with self.subTest(job=name):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
 
     def test_repo_guards_jobs_call_main_with_no_secrets_or_permissions(self):
-        calls = {"github-dir-pr": "github-dir-pr.yml", "go": "go.yml", "jscpd": "jscpd.yml"}
+        calls = {
+            "github-dir-pr": "github-dir-pr.yml",
+            "go": "go.yml",
+            "jscpd": "jscpd.yml",
+            "python": "python.yml",
+        }
         self.assertEqual(set(calls), set(REPO_GUARDS))
         for name, workflow in calls.items():
             body = job(name)
@@ -800,7 +846,7 @@ class Workflow(unittest.TestCase):
         needs = re.search(r"(?m)^    needs: \[(.*)\]$", job("ci"))[1].split(", ")
         self.assertEqual(
             needs,
-            ["changes", "lint", "repository", "unit", "coverage", "integration", "broker"]
+            ["changes", "lint", "repository", "github", "integration", "broker"]
             + ["mini-op", *REPO_GUARDS],
         )
         self.assertNotIn(".github changes in their own PR", job("lint"))
@@ -808,7 +854,7 @@ class Workflow(unittest.TestCase):
 
     def test_root_tests_run_in_every_code_scope(self):
         condition = "if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}"
-        for name in ("repository", "unit", "integration"):
+        for name in ("repository", "github", "integration"):
             with self.subTest(job=name):
                 self.assertIn(f"    {condition}\n", job(name))
 

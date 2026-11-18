@@ -1,10 +1,30 @@
 # CI workflows, gates, runners and this ownership policy.
 /.github/** @windroc
 
-# Lint, types, import contracts, dead code, spelling and scan exclusions.
-/pyproject.toml @windroc
-/.gitignore @windroc
+# Lint, types, import contracts, dead code, spelling and scan exclusions: every Python tool config
+# and test hook name, at any depth, so a nearer copy cannot override the root one.
+pyproject.toml @windroc
+setup.py @windroc
+ruff.toml @windroc
+.ruff.toml @windroc
+setup.cfg @windroc
+tox.ini @windroc
+pytest.ini @windroc
+conftest.py @windroc
+.coveragerc @windroc
+mypy.ini @windroc
+.mypy.ini @windroc
+pyrightconfig.json @windroc
+sitecustomize.py @windroc
+usercustomize.py @windroc
+.importlinter @windroc
+.gitignore @windroc
+.gitattributes @windroc
 /.githooks/** @windroc
+
+# The Python version and resolved dependencies every check installs.
+/uv.lock @windroc
+/.python-version @windroc
 
 # Repository check discovery, policy, exceptions and test isolation.
 /tests/*.py @windroc
@@ -13,6 +33,7 @@
 /tests/guard_checks/** @windroc
 /tests/guard_data/** @windroc
 /tests/utils/sandbox.py @windroc
+/tests/integration/import_contracts_integration_test.py @windroc
 
 # Protocol schemas, fixture expectations and recorded test oracles.
 /src/broker/protocol/** @windroc
