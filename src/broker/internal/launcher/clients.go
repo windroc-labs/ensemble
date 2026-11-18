@@ -108,6 +108,10 @@ type variant struct {
 	ImagePlugins []string `json:"image_plugins"`
 }
 
+func (v variant) spec() BuildSpec {
+	return BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}
+}
+
 var variantFile = regexp.MustCompile(`^([0-9a-f]{64})\.(json|replaced)$`)
 
 // daemonPattern is a usable Docker daemon ID: docker info prints untrusted text, and the ID names a Mac directory.
@@ -384,14 +388,14 @@ func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string,
 		return false, "Cannot create a build directory."
 	}
 	defer os.RemoveAll(tmp)
-	p, err := h.prepare(ctx, d, v.Package, BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}, tmp)
+	p, err := h.prepare(ctx, d, v.Package, v.spec(), tmp)
 	if err != nil {
 		return drop(message(err))
 	}
 	if p.key != key {
 		return drop("its inputs now make another key")
 	}
-	if _, err := h.rebuild(ctx, d, r, tmp, key, p.version, p.dirs, p.spec, p.baseID, latest); err != nil {
+	if _, err := h.rebuild(ctx, d, r, p, latest); err != nil {
 		return false, message(err)
 	}
 	return true, ""

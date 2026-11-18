@@ -52,7 +52,7 @@ func (h Host) defaultImage(ctx context.Context, d Daemon, r records, run string)
 	if data, err := os.ReadFile(r.recordPath(strings.TrimPrefix(run, "ensemble-worker:"))); err != nil || json.Unmarshal(data, &v) != nil || !filepath.IsAbs(v.Package) {
 		return imageInfo{}, protocol.New(protocol.StartFailed, "No default worker image to prefetch with, and no build record of "+run+" to build one from; run ensemble-broker build without a base image.")
 	}
-	built, err := h.build(ctx, d, r, v.Package, BuildSpec{}, -1)
+	built, err := h.build(ctx, d, r, variant{Package: v.Package}, -1)
 	var e *protocol.Error
 	if errors.As(err, &e) && e.Code != protocol.DockerUnreachable {
 		// start's protocol has no build_failed.
