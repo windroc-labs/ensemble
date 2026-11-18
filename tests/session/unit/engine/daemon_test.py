@@ -8,6 +8,7 @@ import json
 import os
 import re
 import threading
+from typing import ClassVar
 from unittest import mock
 
 from ensemble.session.engine import daemon
@@ -146,7 +147,7 @@ class DockerCallTest(Case):
 
 
 class RecordTest(Case):
-    GOOD = {
+    GOOD: ClassVar[dict[str, str]] = {
         "name": "remote",
         "id": "ABCD:EFGH:IJKL",
         "endpoint": "ssh://u@pc",
