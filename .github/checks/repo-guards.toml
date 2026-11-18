@@ -31,3 +31,331 @@ rule = "Skip"
 function = "TestPluginCheckScript"
 count = 2
 reason = "Needs node and a non-root user to test unreadable files; CI runners have node and run as a non-root user."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = ".github/coverage_gate_test.py"
+rule = "skipTest"
+function = "Report.data"
+count = 1
+reason = "Needs coverage.py; CI's Unit job installs it, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = ".github/run_tests_test.py"
+rule = "skipTest"
+function = "Coverage.start"
+count = 1
+reason = "Needs coverage.py; CI's Unit job installs it, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "coverage"
+file = "src/ensemble/manager/engine/holder.py"
+rule = "no cover"
+function = "Holder.run"
+count = 1
+reason = "Hands the terminal to the held command's own process group and forwards signals, which unit tests cannot do; integration tests run it."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/promote.py"
+rule = "BLE001"
+function = "Promoter.pending"
+count = 1
+reason = "Keeps reading the other handoffs when one handoff fails to load."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/promote.py"
+rule = "BLE001"
+function = "Promoter.run"
+count = 1
+reason = "Keeps processing the other handoffs when one promotion fails."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/promote.py"
+rule = "BLE001"
+function = "run_prune"
+count = 1
+reason = "A prune failure is logged and leaves the promotions intact."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/router.py"
+rule = "BLE001"
+function = "start_run"
+count = 1
+reason = "A recorded launch may fail; the router logs the error and goes on."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/run_comments.py"
+rule = "BLE001"
+function = "run"
+count = 1
+reason = "Forwards any failure of the bounded call to the caller thread."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/writeback.py"
+rule = "BLE001"
+function = "finish"
+count = 1
+reason = "Never raises, so the session comment's end is still written after failed steps."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/orchestrator/engine/writeback.py"
+rule = "BLE001"
+function = "progress"
+count = 1
+reason = "A progress sink failure is reported and must not stop the run."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/session/clients/claude/replies.py"
+rule = "BLE001"
+function = "on_hook"
+count = 1
+reason = "Reply bookkeeping must never fail the Claude hook or keep its done line; errors go to stderr."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/session/clients/codex/tui/replies.py"
+rule = "BLE001"
+function = "on_hook"
+count = 1
+reason = "Steer reply bookkeeping must never fail the Codex hook or keep its done line; errors go to stderr."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff-format"
+file = "src/ensemble/session/harness/guard.py"
+rule = "skip"
+function = ""
+count = 1
+reason = "Keeps the SGR code table packed several entries per line so it reads as a table."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/session/modes/headless.py"
+rule = "BLE001"
+function = "HeadlessMode._pump"
+count = 1
+reason = "Forwards any failure of the event pump to the caller thread."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/session/modes/in_process.py"
+rule = "BLE001"
+function = "InProcessMode._pump"
+count = 1
+reason = "Forwards any failure of the in-process run to the caller thread."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff"
+file = "src/ensemble/session/modes/tui_hook.py"
+rule = "BLE001"
+function = "run"
+count = 1
+reason = "The hook must never fail the client; the error is logged and the hook returns False."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "coverage"
+file = "src/ensemble/utils/process_control.py"
+rule = "no cover"
+function = "ProcessControl.serve"
+count = 1
+reason = "The detached runner's control socket server binds a Unix socket and launches the group in a separate process, which unit tests do not run."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "coverage"
+file = "src/ensemble/utils/process_control.py"
+rule = "no cover"
+function = "_Group._anchor"
+count = 1
+reason = "Runs only in the forked group leader, which spawns the program and ends in os._exit, so coverage cannot record it."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/delegate/integration/opencode_integration_test.py"
+rule = "skipIf"
+function = ""
+count = 1
+reason = "Needs node for the fake OpenCode TUI; CI runners have node, so the tests run there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff-format"
+file = "tests/delegate/unit/engine/ready_gate_test.py"
+rule = "skip"
+function = "Done.test_the_prds_cases_only_no_checks_and_all_passing_pass"
+count = 2
+reason = "Keeps one case per line so the case table stays readable."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff-format"
+file = "tests/delegate/unit/engine/ready_gate_test.py"
+rule = "skip"
+function = "Errors.test_a_failed_view_fails_without_touching_the_pr"
+count = 1
+reason = "Keeps one case per line so the case table stays readable."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff-format"
+file = "tests/delegate/unit/engine/ready_gate_test.py"
+rule = "skip"
+function = "Pending.test_every_pending_state_waits"
+count = 1
+reason = "Keeps one pending state per line so the case table stays readable."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "ruff-format"
+file = "tests/delegate/unit/engine/runner_test.py"
+rule = "skip"
+function = "InProcess.test_a_pull_request_run_passes_the_ready_gate_before_it_finishes"
+count = 1
+reason = "Keeps one case per row so the case table stays readable."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/integration/github_runner_integration_test.py"
+rule = "skipUnless"
+function = "Supervise.test_a_tmux_server_outliving_the_run_fails_it"
+count = 1
+reason = "Needs tmux; skipped where tmux is not installed."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/integration/isolation_integration_test.py"
+rule = "skipUnless"
+function = "SandboxGates.test_supervisor_stops_all_of_its_private_tmux_servers"
+count = 1
+reason = "Needs tmux; skipped where tmux is not installed."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/integration/mini_op_lq_integration_test.py"
+rule = "SkipTest"
+function = "zsh"
+count = 1
+reason = "Skips only outside CI when zsh is missing; under GitHub Actions it fails instead, and CI installs zsh."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/integration/ruff_hook_integration_test.py"
+rule = "SkipTest"
+function = "pinned_ruff"
+count = 1
+reason = "Skips only outside CI when the pinned ruff is missing; under GitHub Actions it fails instead, and CI installs that ruff."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/manager/integration/opencode_plugin_integration_test.py"
+rule = "skipIf"
+function = ""
+count = 1
+reason = "Needs node to run the OpenCode plugin; CI runners have node, so the tests run there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/contracts/host.py"
+rule = "skipTest"
+function = "HostContract.test_a_host_that_cannot_show_returns_each_display_as_given"
+count = 1
+reason = "Applies only to a Host that cannot show, so attachable Hosts skip it; the FakeHost contract runs it."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/contracts/host.py"
+rule = "skipTest"
+function = "HostContract.test_a_session_on_a_host_that_cannot_show_refuses_show_attach_command_and_screen"
+count = 1
+reason = "Applies only to a Host that cannot show, so attachable Hosts skip it; the FakeHost contract runs it."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/contracts/host.py"
+rule = "skipTest"
+function = "HostContract.test_an_unattachable_host_names_no_attach_target"
+count = 1
+reason = "Applies only to a Host that cannot show, so attachable Hosts skip it; the FakeHost contract runs it."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/clients/opencode/tui_integration_test.py"
+rule = "skipIf"
+function = ""
+count = 1
+reason = "Needs node to run plugin.js for the OpenCode TUI; CI runners have node, so the tests run there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/harness/clients_integration_test.py"
+rule = "skipIf"
+function = ""
+count = 1
+reason = "Needs node to run plugin.js for the OpenCode TUI; CI runners have node, so the tests run there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/harness/crash_resume_integration_test.py"
+rule = "skipTest"
+function = "ReclaimTest.test_only_the_harness_holds_the_lifecycle_pipe"
+count = 1
+reason = "Reads /proc, so it runs only on Linux; CI runs on Linux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/hosts/tmux/managed_integration_test.py"
+rule = "skipTest"
+function = "ManagedIntegrationTest.test_linux_subreaper_catches_fast_setsid_daemon"
+count = 1
+reason = "Linux only, since macOS setsid daemon leakage is approved and documented; CI runs on Linux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/live_tmux_integration_test.py"
+rule = "skipTest"
+function = "Cleanup.test_cleanups_kill_the_server_and_client_and_remove_the_root"
+count = 1
+reason = "Passes on the nested test's skip when tmux is not installed; CI's integration job installs tmux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/integration/tui_integration_test.py"
+rule = "skipTest"
+function = "TuiTest.test_an_unreachable_display_server_keeps_guard_inventory_and_worker_running"
+count = 1
+reason = "Root can connect to a mode 000 socket; CI runs as a non-root user, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/live_tmux.py"
+rule = "skipTest"
+function = "Server.__init__"
+count = 1
+reason = "Skips the calling test when tmux is not installed; CI's integration job installs tmux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/session/unit/clients/claude/common_test.py"
+rule = "skipIf"
+function = "SessionStatusTest.test_an_unreadable_project_dir_is_unknown"
+count = 1
+reason = "Root can read a mode 000 directory; CI runs as a non-root user, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/utils/integration/sandbox_integration_test.py"
+rule = "skipUnless"
+function = "Probes.test_a_zombie_exists_but_is_gone_and_a_reaped_pid_does_not_exist"
+count = 1
+reason = "Needs os.waitid (Linux, or macOS on Python 3.13+); CI runs on Linux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "unittest"
+file = "tests/utils/unit/files_test.py"
+rule = "skipIf"
+function = "RemoveTree.test_an_unreadable_directory_is_skipped_and_the_retry_raises"
+count = 1
+reason = "Root ignores permissions; CI runs as a non-root user, so the test runs there."
