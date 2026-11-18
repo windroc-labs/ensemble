@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
-from typing import NamedTuple
+from typing import Any, NamedTuple, TypedDict
 
 import ensemble.utils
 from ensemble.session.engine import client_state
@@ -159,9 +159,9 @@ class Row(NamedTuple):
 PS_FIELDS = 4
 
 
-def _record(name: str) -> dict:
+def _record(name: str, leaf: str = SESSION_RECORD) -> dict[str, Any]:
     try:
-        with open(os.path.join(state_dir(name), SESSION_RECORD), encoding="utf-8") as f:
+        with open(os.path.join(state_dir(name), leaf), encoding="utf-8") as f:
             found = json.load(f)
     except (OSError, ValueError, RecursionError):
         return {}
@@ -212,7 +212,7 @@ def _take_owner(name: str) -> int | None:
     return fd
 
 
-def _save_record(name: str, data: Mapping) -> None:
+def _save_record(name: str, data: Mapping[str, object]) -> None:
     save(os.path.join(state_dir(name), SESSION_RECORD), json.dumps(dict(data)), durable=True)
 
 
@@ -250,7 +250,17 @@ def _check_history(name: str, home: str, client: str, transcript: str, image: st
         raise ConfigError(missing)
 
 
-def _report_plan(name: str, plan: Mapping) -> None:
+class _Plan(TypedDict):
+    name: str
+    generation: str
+    image: str
+    image_digest: str
+    workspace: dict[str, str]
+    mounts: list[dict[str, str | bool]]
+    credential: str
+
+
+def _report_plan(name: str, plan: _Plan) -> None:
     """Saves a generation's plan beside its manifest; prints it to stderr."""
     try:
         save(
@@ -415,17 +425,12 @@ def _sessions_at(anchor: str) -> list[str]:
         names = sorted(n for n in os.listdir(root) if SESSION_NAME.fullmatch(n))
     except FileNotFoundError:
         return []
-    found = []
+    found: list[str] = []
     for name in names:
         generation = _record(name).get("generation")
         if not isinstance(generation, str) or not GEN.fullmatch(generation):
             continue
-        try:
-            with open(os.path.join(state_dir(name), f"{generation}.json"), encoding="utf-8") as f:
-                manifest = json.load(f)
-        except (OSError, ValueError, RecursionError):
-            continue
-        if isinstance(manifest, dict) and manifest.get("cwd") == anchor:
+        if _record(name, f"{generation}.json").get("cwd") == anchor:
             found.append(name)
     return found
 
@@ -527,7 +532,7 @@ class DockerHost(Host):
                 raise SessionError(f"host {self.name}: inventory unavailable ({error})") from None
             return [], ()
         listed: list[tuple[Daemon, list[str]]] = []
-        down = []
+        down: list[Daemon] = []
         for daemon in daemons:
             try:
                 rows = None
@@ -686,7 +691,7 @@ class DockerHost(Host):
     def _reclaim(self) -> None:
         """Each daemon that answers; an unreachable one's volumes and markers stay."""
         daemons = self._target().daemons
-        listed = {}
+        listed: dict[Daemon, list[tuple[str, str]]] = {}
         for daemon in daemons:
             try:
                 rows = self._workspaces(daemon)
