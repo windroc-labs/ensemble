@@ -11,9 +11,10 @@ import posixpath
 import re
 import shlex
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
+from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ensemble.session.clients.claude import replies
@@ -104,7 +105,8 @@ class ClaudeTui(Tui):
         self.sid = self.name = ""  # name: its session's, for its reply lines
         self.spec: Spec | None = None
         self.transcript: HomePath | None = None
-        self.start, self.offset = 0, 0
+        self.start: int = 0
+        self.offset: int = 0
         self.last = self.unseen = ""  # the turn's newest text; its turn end's text not yet read
         self.limited = False  # this turn's LimitHit given
         self._origin = self._native = ""
@@ -143,7 +145,7 @@ class ClaudeTui(Tui):
         state = {"transcript": self._origin, "start": self.start, "home": home}
         return HookCallback(__name__, {**state, "store": self.common.store, "name": self.name})
 
-    def restore(self, spec, state):
+    def restore(self, spec: Spec, state: Mapping[str, object]) -> None:
         self.sid, self.name = spec.sid or "", spec.name or ""
         path, start = state.get("transcript"), state.get("start")
         if not (
@@ -187,6 +189,7 @@ class ClaudeTui(Tui):
                     continue
                 if not isinstance(record, dict):
                     continue
+                record = cast("dict[str, object]", record)
                 continuation = self.common.continuation(record, self._native, home, path.root)
                 if continuation:
                     self._ids.add(continuation[0])
@@ -291,7 +294,7 @@ class ClaudeTui(Tui):
         """Keep ensemble identity stable across Claude native continuations."""
         return self.sid if super().session_id(payload) else ""
 
-    def reply(self, payload):
+    def reply(self, payload: dict[str, object]) -> str:
         text = payload.get("last_assistant_message")
         if not isinstance(text, str):
             path = _beside(self.transcript, payload.get("transcript_path"))
@@ -362,7 +365,7 @@ def on_hook(call: HookCall) -> dict | None:
     return call.payload
 
 
-def _beside(origin: HomePath | None, path) -> HomePath | None:
+def _beside(origin: HomePath | None, path: object) -> HomePath | None:
     """`path` when it names a file below `origin`'s home."""
     if origin is None or not isinstance(path, str):
         return None
