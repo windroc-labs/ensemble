@@ -31,13 +31,13 @@ def pytest_cmdline_main(config):
     measuring = sys.modules["coverage"].Coverage.current() if "coverage" in sys.modules else None
 
     def run(env, _tmp):
+        child = {**env, RUNNER: str(os.getpid())}
         if measuring:
             options = ("run:source", "run:branch")
-            env[COVERAGE] = json.dumps(
+            child[COVERAGE] = json.dumps(
                 [measuring.config.config_file, *map(measuring.get_option, options)]
             )
         argv = [sys.executable, "-P", "-X", "faulthandler", "-m", "pytest"]
-        child = {**env, RUNNER: str(os.getpid())}
         return subprocess.run([*argv, *config.invocation_params.args], env=child).returncode
 
     def collect(tmp):

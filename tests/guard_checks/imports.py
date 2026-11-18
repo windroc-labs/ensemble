@@ -81,8 +81,8 @@ def orchestrator_session_imports(repo: str) -> list[str]:
     config = os.path.join(repo, "pyproject.toml")
     if os.path.isfile(config):
         with open(config, "rb") as file:
-            contracts = tomllib.load(file)["tool"]["importlinter"]["contracts"]
-        if any(c.get("ignore_imports") for c in contracts if c["name"] == ORCH_SESSION_CONTRACT):
+            builtin = tomllib.load(file)["tool"]["importlinter"]["contracts"]
+        if any(c.get("ignore_imports") for c in builtin if c["name"] == ORCH_SESSION_CONTRACT):
             found.append(f"pyproject.toml: {ORCH_SESSION_CONTRACT!r} must ignore no imports")
     session = f"{PKG}.{SESSION}."
     for rel, text in _files(os.path.join(repo, ORCH_SRC), ".py"):

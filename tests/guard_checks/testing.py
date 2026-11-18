@@ -168,8 +168,16 @@ def test_gate_mutation(repo: str) -> list[str]:
             named = [node.slice] if isinstance(node, ast.Subscript) else []
             if isinstance(node, ast.Call):
                 named = [arg for arg in node.args if isinstance(arg, ast.Constant)]
-            names = [name] if isinstance(node, ast.Name | ast.Attribute) else []
-            names += [_boundary_name(key, aliases) for key in named]
+            base = node
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            imported = isinstance(base, ast.Name) and base.id in aliases
+            names = [name] if isinstance(node, ast.Name | ast.Attribute) and imported else []
+            names += [
+                text
+                for text in (_boundary_name(key, aliases) for key in named)
+                if not text.endswith(".py")
+            ]
             if any(_within(reached, target) for reached in names for target in GATE_HOLDERS):
                 found.add(f"{rel}:{node.lineno}: interpreter gate access")
             if not isinstance(node, ast.Call) or not node.args:

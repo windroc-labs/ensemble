@@ -338,6 +338,11 @@ class UnitIsolation(Sample):
                 self.assertTrue(found, text)
                 self.assertTrue(all(line.startswith(path + ":") for line in found), found)
 
+    def test_a_path_or_local_named_after_the_runner_is_not_the_gate(self):
+        text = "import os\nconftest = os.path.join('r', 'conftest.py')\nopen(conftest)\n"
+        root = self.tree({"tests/unit/x_test.py": text})
+        self.assertEqual(testing.test_gate_mutation(root), [])
+
     def test_no_migration_exemption_can_be_reintroduced(self):
         root = self.tree({"tests/session/unit/present_test.py": ""})
         self.assertEqual(testing.unit_isolation_allowlist(root), [])
