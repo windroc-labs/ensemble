@@ -1,7 +1,10 @@
 """Owned tmux fixture cleanup, including failed shutdown and locked allocation, the processes
-a supervised run leaves behind, and a tree's project import roots.
+a supervised run leaves behind, the sandbox environment and supervised child, and a tree's project
+import roots.
 """
 
+import contextlib
+import io
 import os
 import signal
 import tempfile
@@ -242,3 +245,112 @@ class Scratch(Case):
         self.assertTrue(all(map(os.path.isdir, (real, raw, default))))
         owner.doCleanups()
         self.assertFalse(any(map(os.path.exists, (real, raw, default))))
+
+
+class SandboxEnv(Case):
+    def test_the_sandbox_replaces_whatever_would_steer_a_test(self):
+        caller = {
+            "PATH": "/bin",
+            "KEPT": "1",
+            "HOME": "/real/home",
+            "ENSEMBLE_CLIENT": "claude",
+            "ENSEMBLE_GUARD_HOOK_SOCKET": "/run/ensemble/guard/ci/hook",
+            "GIT_DIR": "elsewhere",
+            "TMUX": "/tmp/tmux-1/default,1,0",
+            "PYTHONPATH": "/other/checkout/src",
+        }
+        env = sandbox.sandbox_env(caller, "/sb/tmp", "/repo/.test-sandbox-1", "/repo", "/repo/src")
+        self.assertEqual(
+            env,
+            {
+                "PATH": "/bin",
+                "KEPT": "1",
+                "HOME": "/repo/.test-sandbox-1",
+                "TMPDIR": "/sb/tmp",
+                "TMUX_TMPDIR": "/sb/tmp",
+                "ENSEMBLE_TEST_SANDBOX": "/sb/tmp",
+                "ENSEMBLE_CONTROL_ROOT": "/sb/tmp",
+                "ENSEMBLE_TEST_TMP": "/repo/.test-sandbox-1",
+                "ENSEMBLE_TEST_WORKSPACE": "/repo/.test-sandbox-1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CEILING_DIRECTORIES": "/repo",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": os.pathsep.join(("/repo", "/repo/src")),
+            },
+        )
+
+
+class Supervise(Case):
+    def run_child(self, code, *, servers=(), leaked=()):
+        """(exit code, stderr, what the hooks and the child saw) of one supervised run."""
+        seen = {}
+
+        def child(argv, *, env, check):
+            seen.update(argv=argv, env=env, check=check)
+            seen["dirs_during"] = all(
+                os.path.isdir(env[key]) for key in ("TMPDIR", "ENSEMBLE_TEST_WORKSPACE")
+            )
+            return mock.Mock(returncode=code)
+
+        def collect(tmp):
+            seen.update(collected=tmp, collected_exists=os.path.isdir(tmp))
+
+        stderr = io.StringIO()
+        with (
+            mock.patch("subprocess.run", side_effect=child),
+            mock.patch.object(sandbox, "stop_tmux_servers", return_value=list(servers)) as stop,
+            mock.patch.object(sandbox, "leaked_processes", return_value=list(leaked)) as leaks,
+            mock.patch.object(sandbox, "kill_processes") as kill,
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = sandbox.supervise(
+                ["python3", "-m", "pytest"],
+                Path(self.home),
+                extra_env=lambda tmp: {"EXTRA": tmp},
+                prepare=lambda tmp: seen.update(prepared=tmp, prepared_exists=tmp.is_dir()),
+                collect=collect,
+                grace=3,
+            )
+        seen.update(stop=stop, leaks=leaks, kill=kill)
+        return result, stderr.getvalue(), seen
+
+    def test_the_child_runs_in_the_sandbox_and_its_code_comes_back(self):
+        code, stderr, seen = self.run_child(2)
+        env = seen["env"]
+        tmp, workspace = env["TMPDIR"], env["ENSEMBLE_TEST_WORKSPACE"]
+        self.assertEqual((code, stderr), (2, ""))
+        self.assertEqual((seen["argv"], seen["check"]), (["python3", "-m", "pytest"], False))
+        self.assertEqual(
+            (env["HOME"], env["EXTRA"], env["ENSEMBLE_TEST_SANDBOX"]), (workspace, tmp, tmp)
+        )
+        self.assertEqual(os.path.dirname(workspace), self.home)
+        self.assertTrue(os.path.basename(workspace).startswith(".test-sandbox-"))
+        self.assertEqual(
+            env["PYTHONPATH"].split(os.pathsep)[:2], [self.home, os.path.join(self.home, ".github")]
+        )
+        self.assertEqual((seen["prepared"], seen["collected"]), (Path(tmp), tmp))
+        self.assertTrue(
+            seen["prepared_exists"] and seen["collected_exists"] and seen["dirs_during"]
+        )
+        self.assertFalse(os.path.exists(tmp) or os.path.exists(workspace))
+        seen["leaks"].assert_called_once_with((tmp, workspace), grace=3)
+        seen["kill"].assert_called_once_with([])
+
+    def test_a_child_killed_by_a_signal_exits_128_plus_the_signal(self):
+        self.assertEqual(self.run_child(-signal.SIGKILL)[0], 128 + signal.SIGKILL)
+
+    def test_a_passing_run_that_leaks_fails_and_the_leaks_are_killed(self):
+        leaked = [(400, 1, 400, "sleep 60 /ws/marker")]
+        code, stderr, seen = self.run_child(0, servers=["/sb/tmux-501/default"], leaked=leaked)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            stderr,
+            "leaked after the run: tmux server /sb/tmux-501/default; pid 400: sleep 60 /ws/marker\n",
+        )
+        seen["kill"].assert_called_once_with(leaked)
+
+    def test_a_failing_run_that_leaks_keeps_its_own_code(self):
+        code, stderr, _ = self.run_child(3, leaked=[(400, 1, 400, "sleep 60 /ws/marker")])
+        self.assertEqual(code, 3)
+        self.assertIn("leaked after the run: pid 400", stderr)

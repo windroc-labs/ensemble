@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -167,6 +168,56 @@ def kill_processes(leaked):
     for pid in sorted(pids - groups):
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.kill(pid, signal.SIGKILL)
+
+
+def sandbox_env(caller, tmp, workspace, *import_roots):
+    # The caller's ENSEMBLE_* would steer tests.
+    kept = {key: value for key, value in caller.items() if not key.startswith("ENSEMBLE_")}
+    env = clean_env(
+        {**kept, "HOME": workspace, "ENSEMBLE_TEST_WORKSPACE": workspace}, *import_roots
+    )
+    env.update(
+        HOME=workspace,
+        TMPDIR=tmp,
+        TMUX_TMPDIR=tmp,
+        ENSEMBLE_TEST_SANDBOX=tmp,
+        ENSEMBLE_CONTROL_ROOT=tmp,
+        ENSEMBLE_TEST_TMP=workspace,
+        ENSEMBLE_TEST_WORKSPACE=workspace,
+    )
+    return env
+
+
+def supervise(argv, repo, *, extra_env, prepare, collect, grace=CONTROL_GRACE):
+    """argv's exit code (128 + signal) as a sandboxed child; 1 if it passed but leaked."""
+    repo = Path(repo)
+    with (
+        tempfile.TemporaryDirectory(
+            dir=os.environ.get("ENSEMBLE_TEST_SANDBOX") or os.path.realpath("/tmp")
+        ) as tmp,
+        tempfile.TemporaryDirectory(prefix=".test-sandbox-", dir=repo) as workspace,
+    ):
+        roots = [
+            repo,
+            repo / ".github",
+            *project_roots(str(repo)),
+            sysconfig.get_path("purelib"),
+            sysconfig.get_path("platlib"),
+        ]
+        env = sandbox_env(os.environ, tmp, workspace, *roots)
+        prepare(Path(tmp))
+        try:
+            code = subprocess.run(argv, env={**env, **extra_env(tmp)}, check=False).returncode
+        finally:
+            servers = stop_tmux_servers(tmp, env)
+        processes = leaked_processes((tmp, workspace), grace=grace)
+        kill_processes(processes)
+        collect(tmp)
+    leaks = [f"tmux server {socket}" for socket in servers]
+    leaks += [f"pid {pid}: {args[:200]}" for pid, _, _, args in processes]
+    if leaks:
+        print("leaked after the run: " + "; ".join(leaks), file=sys.stderr)
+    return (128 - code if code < 0 else code) or int(bool(leaks))
 
 
 def git_run(*argv, cwd=None, env=None, **kwargs):
