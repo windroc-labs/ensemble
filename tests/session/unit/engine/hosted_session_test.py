@@ -633,7 +633,7 @@ class InspectTest(Base):
             self.inspect(spec)
         self.assertEqual(status.call_args.kwargs["env"], {"A": "access", "B": "spec"})
 
-    def test_an_unknown_client_is_the_registrys_config_error(self):
+    def test_an_unknown_client_is_the_registry_config_error(self):
         spec = self.recorded("nope")
         with self.assertRaises(ConfigError) as caught:
             self.inspect(spec)
