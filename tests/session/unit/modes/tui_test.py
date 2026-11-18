@@ -723,7 +723,7 @@ class StartTest(Base):
 
     def test_host_client_env_reaches_launch_and_names_the_home_in_metadata(self):
         class Homed(ScanTui):
-            def _home(self):
+            def home(self) -> ClientHome:
                 return ClientHome("fake_dir", "fake", "FAKE_HOME", "fake-token", _settings_files)
 
             def launch(self, spec, hook):
@@ -749,7 +749,7 @@ class StartTest(Base):
                         (
                             NAME,
                             "fake",
-                            run._home(),
+                            run.home(),
                             resume,
                         )
                     ],
@@ -770,7 +770,7 @@ class StartTest(Base):
 
     def test_a_workers_saved_account_names_the_home_on_each_start_never_the_launch(self):
         class Homed(ScanTui):
-            def _home(self):
+            def home(self) -> ClientHome:
                 return ClientHome("claude_dir", "claude", "FAKE_HOME", "claude-setup-token")
 
             def launch(self, spec, hook):
@@ -813,7 +813,7 @@ class StartTest(Base):
         seen = []
 
         class Projected(ScanTui):
-            def _home(self):
+            def home(self) -> ClientHome:
                 return ClientHome(
                     "fake_dir", "fake", "FAKE_HOME", "fake-token", persistent=("sessions",)
                 )

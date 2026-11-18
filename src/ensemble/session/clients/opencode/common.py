@@ -605,7 +605,7 @@ class Homed:
 
     common: OpenCodeCommon
 
-    def _home(self) -> ClientHome:
+    def home(self) -> ClientHome:
         return self.common.home()
 
 

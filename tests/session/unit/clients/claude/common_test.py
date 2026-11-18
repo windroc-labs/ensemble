@@ -341,7 +341,7 @@ class HomeFilesTest(Base):
             f.write(text if isinstance(text, bytes) else text.encode())
 
     def container_settings(self):
-        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files().items()
+        ((name, text),) = ClaudeClient(CONFIG).tui().home().files().items()
         self.assertEqual(name, "settings.json")
         return json.loads(text)
 
@@ -384,7 +384,7 @@ class HomeFilesTest(Base):
 
     def test_the_home_is_claudes_whatever_the_docker_config(self):
         self.assertEqual(
-            dataclasses.replace(ClaudeClient(CONFIG).tui()._home(), files=HOME.files), HOME
+            dataclasses.replace(ClaudeClient(CONFIG).tui().home(), files=HOME.files), HOME
         )
 
     def test_an_explicit_model_or_effort_flag_still_wins(self):

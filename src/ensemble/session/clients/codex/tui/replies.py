@@ -120,7 +120,7 @@ def _valid(state) -> bool:
     )
 
 
-def _load(path: str) -> dict:
+def _load(path: str) -> dict[str, Any]:
     return shared.load(path, _fresh, _valid)
 
 
@@ -135,7 +135,7 @@ def _rollout(path: str) -> HomePath | None:
         return None
 
 
-def _resolve(state: dict, home: HomeStore) -> None:
+def _resolve(state: dict[str, Any], home: HomeStore) -> None:
     if state["rollout"]:
         return
     try:
@@ -161,7 +161,7 @@ def _matches(prompt: str, text: str) -> bool:
     return not prompt or found == prompt
 
 
-def scan(state: dict, home: HomeStore, *, final: str = "", budget: int) -> dict[str, Any]:
+def scan(state: dict[str, Any], home: HomeStore, *, final: str = "", budget: int) -> dict[str, Any]:
     """Each pending steer's progress through the session file, `budget` bytes in all."""
     turn, rollout = state["turn"], _rollout(state["rollout"])
     opening, claimed, steers = turn["opening"], set(turn["claimed"]), {}

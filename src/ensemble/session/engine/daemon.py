@@ -11,9 +11,10 @@ import select
 import subprocess
 import tempfile
 import time
+from typing import TypeAlias
 
 from ensemble.session.engine.types import Daemon, DaemonName, DaemonRecord, SessionError, Target
-from ensemble.utils import DOCKER_STATE, read_regular, save
+from ensemble.utils import DOCKER_STATE, read_beneath, save
 
 CLEARED = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 RUN_TIMEOUT = 10
@@ -32,6 +33,8 @@ GENERATION = re.compile(r"[0-9a-f]{32}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 DAEMON = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
+
+_Json: TypeAlias = dict[str, object] | list[object] | str | float | None
 
 
 class Overflow(OSError):
@@ -62,9 +65,9 @@ def recorded_image(name: str) -> str:
 
 
 def _recorded(path: str, key: str) -> str | None:
-    data = read_regular(path, limit=SESSION_RECORD_MAX)
+    data = read_beneath(os.path.dirname(path), path, limit=SESSION_RECORD_MAX)
     try:
-        found = json.loads(data) if data is not None else None
+        found: _Json = json.loads(data) if data is not None else None
     except (ValueError, RecursionError):
         return None
     value = found.get(key) if isinstance(found, dict) else None
@@ -88,31 +91,31 @@ def save_record(name: str, record: DaemonRecord) -> None:
 def load_record(name: str) -> DaemonRecord | None:
     """None: no record; OSError (EINVAL): malformed."""
     path = _record_path(name)
-    data = read_regular(path, limit=RECORD_MAX + 1)
+    data = read_beneath(os.path.dirname(path), path, limit=RECORD_MAX + 1)
     if data is None:
         return None
     try:
-        found = json.loads(data) if len(data) <= RECORD_MAX else None
+        found: _Json = json.loads(data) if len(data) <= RECORD_MAX else None
     except ValueError:
         found = None
+    fields: dict[str, object] = found if isinstance(found, dict) else {}
+    texts = {k: v for k, v in fields.items() if isinstance(v, str)}
     if (
-        isinstance(found, dict)
-        and set(found) == {"name", "id", "endpoint", "path", "docker"}
-        and all(isinstance(v, str) for v in found.values())
-        and found["name"] in tuple(DaemonName)
-        and DAEMON.fullmatch(found["id"])
-        and TEXT.fullmatch(found["endpoint"])
-        and TEXT.fullmatch(found["path"])
-        and os.path.isabs(found["docker"])
+        set(texts) == set(fields) == {"name", "id", "endpoint", "path", "docker"}
+        and texts["name"] in tuple(DaemonName)
+        and DAEMON.fullmatch(texts["id"])
+        and TEXT.fullmatch(texts["endpoint"])
+        and TEXT.fullmatch(texts["path"])
+        and os.path.isabs(texts["docker"])
     ):
         daemon = Daemon(
-            found["name"],
-            found["endpoint"],
-            found["name"] == DaemonName.REMOTE,
-            found["path"],
-            found["id"],
+            texts["name"],
+            texts["endpoint"],
+            texts["name"] == DaemonName.REMOTE,
+            texts["path"],
+            texts["id"],
         )
-        return DaemonRecord(daemon, found["docker"])
+        return DaemonRecord(daemon, texts["docker"])
     raise OSError(errno.EINVAL, "malformed Docker daemon record", path)
 
 
@@ -168,7 +171,9 @@ def _path(daemon: Daemon) -> str:
     return daemon.path
 
 
-def capped(argv, env, *, input=None, timeout=RUN_TIMEOUT) -> subprocess.CompletedProcess:
+def capped(
+    argv: list[str], env: dict[str, str], *, input: str | None = None, timeout: float = RUN_TIMEOUT
+) -> subprocess.CompletedProcess[str]:
     """argv's text result; Overflow past OUT_MAX bytes of stdout or stderr, or TimeoutExpired."""
     with tempfile.TemporaryFile() as given:
         given.write((input or "").encode())
@@ -189,7 +194,8 @@ def capped(argv, env, *, input=None, timeout=RUN_TIMEOUT) -> subprocess.Complete
     )
 
 
-def _drain(proc, deadline: float, timeout: float) -> tuple[bytes, bytes]:
+def _drain(proc: subprocess.Popen[bytes], deadline: float, timeout: float) -> tuple[bytes, bytes]:
+    assert proc.stdout is not None and proc.stderr is not None
     found = {proc.stdout.fileno(): bytearray(), proc.stderr.fileno(): bytearray()}
     pending = list(found)
     while pending:

@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 from ensemble.session.clients import replies as shared
 from ensemble.session.clients.claude.common import read, size, texts, tracked
@@ -63,7 +64,7 @@ def _valid(state) -> bool:
     )
 
 
-def _load(path: str) -> dict:
+def _load(path: str) -> dict[str, Any]:
     return shared.load(path, _fresh, _valid)
 
 
@@ -95,7 +96,7 @@ def _record(found: dict, at: int, record: dict) -> None:
             found["steers"] = []
 
 
-def scan(state: dict, home: HomeStore) -> dict:
+def scan(state: dict[str, Any], home: HomeStore) -> dict[str, Any]:
     """The turn's fields after its next SCAN_MAX bytes, and `answers`: [(offset, text)]."""
     turn = state["turn"]
     found = {key: turn[key] for key in ("cursor", "skip", "spoke", "queued", "steers")}
@@ -138,7 +139,7 @@ def settle(
     sleep: Sleep,
     home: HomeStore,
     final: str = "",
-    close=False,
+    close: bool = False,
 ) -> int:
     """Applies an unlocked scan to the same open turn unless another went further; `close`: the
     rest answered with `final`, the turn closed. The answers and messages still awaited.

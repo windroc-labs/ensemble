@@ -27,11 +27,11 @@ def _names(value, keys) -> bool:
     )
 
 
-def strings(value) -> bool:
+def strings(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(s, str) for s in value)
 
 
-def question(titles) -> str:
+def question(titles: object) -> str:
     """A question dialog's blocked reason: `question: ` and its titles, the empty ones left out."""
     found = [t for t in titles if isinstance(t, str) and t] if isinstance(titles, list) else []
     return f"question: {'; '.join(found)}" if found else "question"

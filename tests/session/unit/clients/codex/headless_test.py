@@ -266,8 +266,8 @@ class ContainerLaunch(Base):
         )
 
     def test_both_modes_request_the_same_history_only_client_home(self):
-        home = self.client.tui()._home()
-        self.assertEqual(self.client.headless()._home(), home)
+        home = self.client.tui().home()
+        self.assertEqual(self.client.headless().home(), home)
         self.assertEqual(
             (home.field, home.dir, home.env, home.credential, home.persistent),
             ("codex_dir", "codex", "CODEX_HOME", "codex-access-token", ("sessions", "config")),
@@ -362,10 +362,10 @@ class ContainerLaunch(Base):
     def test_the_docker_config_is_the_codex_home_file_verbatim(self):
         text = '# mine\nservice_tier = "fast"\n'
         self.docker_config(text)
-        self.assertEqual(self.client.headless()._home().files(), {"config/config.toml": text})
+        self.assertEqual(self.client.headless().home().files(), {"config/config.toml": text})
 
     def test_the_packaged_docker_config_sets_the_model_and_effort_a_run_leaves_unset(self):
-        ((name, text),) = self.client.headless()._home().files().items()
+        ((name, text),) = self.client.headless().home().files().items()
         config = tomllib.loads(text)
         self.assertEqual(name, "config/config.toml")
         self.assertEqual(
@@ -375,12 +375,12 @@ class ContainerLaunch(Base):
     def test_an_invalid_docker_config_fails_naming_it(self):
         path = self.docker_config("a = " + "[" * 5000 + "]" * 5000)
         with self.assertRaisesRegex(ConfigError, f"^Docker config {re.escape(path)}: invalid TOML"):
-            self.client.headless()._home().files()
+            self.client.headless().home().files()
         path = self.docker_config("a = = 1")
         with self.assertRaisesRegex(
             ConfigError, f"^Docker config {re.escape(path)}: invalid TOML: "
         ):
-            self.client.headless()._home().files()
+            self.client.headless().home().files()
 
     def test_headless_native_events_resume_in_a_terminal_and_back(self):
         run = homed(self.client.headless())

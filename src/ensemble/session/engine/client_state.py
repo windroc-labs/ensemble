@@ -21,7 +21,8 @@ import tarfile
 import tempfile
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
+from typing import TypedDict, TypeGuard, cast
 
 from ensemble.session.engine import daemon
 from ensemble.session.engine.types import (
@@ -46,6 +47,15 @@ OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
 ARCHIVE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE)
+
+
+class _Header(TypedDict):
+    errno: int | None
+    message: str
+    size: int
+    mtime: float
+    entries: list[object]
+    length: int
 
 
 LOCAL_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
@@ -82,7 +92,7 @@ class LocalHome:
         fd = _open_local(path, directory=True)
         if fd is None:
             return None
-        listed = []
+        listed: list[StateEntry] = []
         try:
             with os.scandir(fd) as found:
                 for entry in found:
@@ -102,7 +112,7 @@ class LocalHome:
     @contextlib.contextmanager
     def snapshot(
         self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
-    ) -> Iterator[str | None]:
+    ) -> Generator[str | None]:
         """The file itself: its siblings beside it."""
         fd = _open_local(path)
         if fd is not None:
@@ -126,7 +136,7 @@ class VolumeHome:
     ) -> bytes | None:
         """At most READ_MAX bytes from `offset`; `tail`: the last `limit`."""
         cap = READ_MAX if limit is None else min(limit, READ_MAX)
-        request = {"op": "read", "offset": offset, "limit": cap, "tail": tail}
+        request: dict[str, object] = {"op": "read", "offset": offset, "limit": cap, "tail": tail}
         found = _ask(self._file(path), request, cap, self.image)
         return None if found is None else found[1]
 
@@ -140,19 +150,19 @@ class VolumeHome:
         found = _ask(file, {"op": "entries", "limit": limit}, 0, self.image)
         if found is None:
             return None
-        listed = []
+        listed: list[StateEntry] = []
         for item in found[0]["entries"]:
+            entry = cast("list[object]", item) if isinstance(item, list) else []
             if not (
-                isinstance(item, list)
-                and len(item) == 4
-                and isinstance(item[0], str)
-                and _part(item[0])
-                and item[1] in {kind.value for kind in StateKind}
-                and _count(item[2])
-                and isinstance(item[3], (int, float))
+                len(entry) == 4
+                and isinstance(entry[0], str)
+                and _part(entry[0])
+                and entry[1] in {kind.value for kind in StateKind}
+                and _count(entry[2])
+                and isinstance(entry[3], (int, float))
             ):
                 raise _broken(file, "bad entry")
-            listed.append(StateEntry(item[0], StateKind(item[1]), item[2], item[3]))
+            listed.append(StateEntry(entry[0], StateKind(entry[1]), entry[2], entry[3]))
         if len(listed) > limit:
             raise _broken(file, "too many entries")
         return tuple(sorted(listed))
@@ -163,7 +173,7 @@ class VolumeHome:
     @contextlib.contextmanager
     def snapshot(
         self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
-    ) -> Iterator[str | None]:
+    ) -> Generator[str | None]:
         """A private copy of the file and its present siblings, `limit` bytes in all, unchanged
         while copied, removed on exit.
         """
@@ -204,19 +214,21 @@ def home_path(root: str, path: str) -> HomePath:
     return HomePath(root, found[len(prefix) :].replace(os.sep, "/"))
 
 
-def home_store(fields) -> HomeStore:
+def home_store(fields: object) -> HomeStore:
     """persisted()'s inverse; ValueError: anything else."""
     if fields == {"kind": "local"}:
         return LocalHome()
-    if (
-        isinstance(fields, Mapping)
-        and set(fields) == {"kind", "session", "client"}
-        and fields["kind"] == "volume"
-        and all(
-            isinstance(fields[key], str) and _part(fields[key]) for key in ("session", "client")
-        )
-    ):
-        return VolumeHome(fields["session"], fields["client"])
+    if isinstance(fields, Mapping):
+        found = cast("Mapping[object, object]", fields)
+        if set(found) == {"kind", "session", "client"} and found["kind"] == "volume":
+            session, client = found["session"], found["client"]
+            if (
+                isinstance(session, str)
+                and isinstance(client, str)
+                and _part(session)
+                and _part(client)
+            ):
+                return VolumeHome(session, client)
     raise ValueError("not a client home store")
 
 
@@ -276,7 +288,7 @@ def _kind(mode: int) -> StateKind:
 
 def _unpack(file: StateFile, payload: bytes, bases: list[str], limit: int, folder: str) -> None:
     """Writes into `folder` each member, once checked: a regular file named by `bases`, once."""
-    total, seen = 0, set()
+    total, seen = 0, set[str]()
     try:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
             for member in archive:
@@ -302,8 +314,8 @@ def _unpack(file: StateFile, payload: bytes, bases: list[str], limit: int, folde
 
 
 def _ask(
-    file: StateFile, request: dict, bound: int, image: str | None
-) -> tuple[dict, bytes] | None:
+    file: StateFile, request: dict[str, object], bound: int, image: str | None
+) -> tuple[_Header, bytes] | None:
     """The reply to `request`, payload at most `bound` bytes; None: absent."""
     if request["op"] != "snapshot":
         request = {**request, "path": _path(file)}
@@ -331,7 +343,7 @@ def _part(part: str) -> bool:
     return part not in {"", os.curdir, os.pardir} and "/" not in part and "\0" not in part
 
 
-def _count(value) -> bool:
+def _count(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
@@ -371,10 +383,10 @@ class _Reader:
     def __init__(self, session: str, image: str | None):
         self.session, self.image = session, image
         self.lock = threading.Lock()
-        self.proc: subprocess.Popen | None = None
+        self.proc: subprocess.Popen[bytes] | None = None
         self.buffer = bytearray()
 
-    def ask(self, request: dict, bound: int) -> tuple[dict, bytes]:
+    def ask(self, request: dict[str, object], bound: int) -> tuple[_Header, bytes]:
         line = json.dumps(request).encode() + b"\n"
         with self.lock:
             for attempt in (1, 2):
@@ -404,7 +416,7 @@ class _Reader:
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             proc.wait(1)
 
-    def _start(self) -> subprocess.Popen:
+    def _start(self) -> subprocess.Popen[bytes]:
         recorded = daemon.load_record(self.session)
         if recorded is None:
             raise FileNotFoundError(errno.ENOENT, "no Docker daemon record", self.session)
@@ -415,11 +427,7 @@ class _Reader:
         if volume not in listed.split():
             raise FileNotFoundError(errno.ENOENT, "no state volume", volume)
         labels = self._run(recorded, "volume", "inspect", "--format", "{{json .Labels}}", volume)
-        try:
-            found = json.loads(labels)
-        except ValueError:
-            found = None
-        found = found if isinstance(found, dict) else {}
+        found = _json_object(labels)
         if found.get(daemon.STATE_LABEL) != self.session:
             raise FileNotFoundError(errno.ENOENT, "not this session's state volume", volume)
         user = found.get(daemon.STATE_OWNER_LABEL)
@@ -459,13 +467,15 @@ class _Reader:
         lines = done.stderr.strip().splitlines()
         raise OSError(errno.EIO, f"docker {args[0]} {args[1]}: {lines[-1] if lines else 'failed'}")
 
-    def _reply(self, proc: subprocess.Popen, bound: int) -> tuple[dict, bytes]:
+    def _reply(self, proc: subprocess.Popen[bytes], bound: int) -> tuple[_Header, bytes]:
         header = _header(self._take(proc, until_newline=HEADER_MAX))
         if header["length"] > bound:
             raise OSError(errno.EPROTO, "state reader reply: over its bound")
         return header, self._take(proc, size=header["length"])
 
-    def _take(self, proc: subprocess.Popen, *, until_newline: int = 0, size: int = 0) -> bytes:
+    def _take(
+        self, proc: subprocess.Popen[bytes], *, until_newline: int = 0, size: int = 0
+    ) -> bytes:
         """The next line or `size` bytes; ETIMEDOUT after REPLY_TIMEOUT with no byte."""
         fd = proc.stdout.fileno() if proc.stdout else -1
         while True:
@@ -491,24 +501,30 @@ class _Reader:
             self.buffer += chunk
 
 
-def _send(proc: subprocess.Popen, line: bytes) -> None:
+def _send(proc: subprocess.Popen[bytes], line: bytes) -> None:
     if proc.stdin is None:
         raise OSError(errno.EPIPE, "state reader has no stdin")
     proc.stdin.write(line)
     proc.stdin.flush()
 
 
-def _header(line: bytes) -> dict:
+def _json_object(text: str | bytes) -> dict[str, object]:
+    """`text`'s JSON object; {}: anything else."""
     try:
-        header = json.loads(line)
+        found: object = json.loads(text)
     except ValueError:
-        header = None
-    if not isinstance(header, dict) or not _well_formed(header):
+        return {}
+    return cast("dict[str, object]", found) if isinstance(found, dict) else {}
+
+
+def _header(line: bytes) -> _Header:
+    header = _json_object(line)
+    if not _well_formed(header):
         raise OSError(errno.EPROTO, "state reader reply: bad header")
     return header
 
 
-def _well_formed(header: dict) -> bool:
+def _well_formed(header: dict[str, object]) -> TypeGuard[_Header]:
     return (
         set(header) == HEADER_KEYS
         and (header["errno"] is None or (_count(header["errno"]) and header["errno"] > 0))

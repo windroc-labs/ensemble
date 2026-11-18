@@ -15,11 +15,15 @@ import os
 import stat
 import sys
 import tarfile
+from typing import TypeAlias
 
 SNAPSHOT_ATTEMPTS = 3
 CHUNK = 1 << 20
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+
+Json: TypeAlias = "dict[str, Json] | list[Json] | str | float | None"
+Copied: TypeAlias = "list[tuple[tuple[int, int] | None, bytes]]"
 
 
 def main(argv: list[str]) -> int:
@@ -35,12 +39,18 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def answer(root: str, line: bytes) -> tuple[dict, bytes]:
-    reply: dict = {"errno": None, "message": "", "size": 0, "mtime": 0.0, "entries": []}
+def answer(root: str, line: bytes) -> tuple[dict[str, object], bytes]:
+    reply: dict[str, object] = {
+        "errno": None,
+        "message": "",
+        "size": 0,
+        "mtime": 0.0,
+        "entries": [],
+    }
     try:
-        request = json.loads(line)
+        request: Json = json.loads(line)
         if not isinstance(request, dict):
-            raise ValueError
+            raise TypeError
         payload = _serve(root, request, reply)
     except OSError as error:
         reply.update(errno=error.errno or errno.EIO, message=error.strerror or str(error))
@@ -51,7 +61,7 @@ def answer(root: str, line: bytes) -> tuple[dict, bytes]:
     return reply, payload
 
 
-def _serve(root: str, request: dict, reply: dict) -> bytes:
+def _serve(root: str, request: dict[str, Json], reply: dict[str, object]) -> bytes:
     op = request["op"]
     if op == "snapshot":
         return _snapshot(root, request["paths"], _count(request["limit"]))
@@ -74,15 +84,15 @@ def _serve(root: str, request: dict, reply: dict) -> bytes:
         return f.read(cap)
 
 
-def _count(value) -> int:
+def _count(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError
     return value
 
 
-def _entries(root: str, path: str, limit: int) -> list:
+def _entries(root: str, path: Json, limit: int) -> list[list[str | float]]:
     fd, _ = _open(root, path, directory=True)
-    found = []
+    found: list[list[str | float]] = []
     try:
         with os.scandir(fd) as listing:
             for entry in listing:
@@ -104,7 +114,7 @@ def _kind(mode: int) -> str:
     return "file" if stat.S_ISREG(mode) else "other"
 
 
-def _snapshot(root: str, paths: list, limit: int) -> bytes:
+def _snapshot(root: str, paths: Json, limit: int) -> bytes:
     if not isinstance(paths, list) or not paths:
         raise ValueError
     for _ in range(SNAPSHOT_ATTEMPTS):
@@ -114,8 +124,8 @@ def _snapshot(root: str, paths: list, limit: int) -> bytes:
     raise OSError(errno.EAGAIN, "client state changed while copied")
 
 
-def _copy(root: str, paths: list, limit: int) -> list[tuple[tuple[int, int] | None, bytes]]:
-    copied: list[tuple[tuple[int, int] | None, bytes]] = []
+def _copy(root: str, paths: list[Json], limit: int) -> Copied:
+    copied: Copied = []
     total = 0
     for index, path in enumerate(paths):
         try:
@@ -125,7 +135,7 @@ def _copy(root: str, paths: list, limit: int) -> list[tuple[tuple[int, int] | No
                 raise
             copied.append((None, b""))
             continue
-        chunks = []
+        chunks: list[bytes] = []
         with os.fdopen(fd, "rb") as f:
             while chunk := f.read(min(CHUNK, limit - total + 1)):
                 total += len(chunk)
@@ -136,7 +146,7 @@ def _copy(root: str, paths: list, limit: int) -> list[tuple[tuple[int, int] | No
     return copied
 
 
-def _identity(root: str, path: str) -> tuple[int, int] | None:
+def _identity(root: str, path: Json) -> tuple[int, int] | None:
     try:
         fd, info = _open(root, path)
     except FileNotFoundError:
@@ -145,19 +155,19 @@ def _identity(root: str, path: str) -> tuple[int, int] | None:
     return info.st_size, info.st_mtime_ns
 
 
-def _archive(paths: list, copied: list) -> bytes:
+def _archive(paths: list[Json], copied: Copied) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         for path, (identity, data) in zip(paths, copied, strict=True):
             if identity is None:
                 continue
-            member = tarfile.TarInfo(path.rsplit("/", 1)[-1])
+            member = tarfile.TarInfo(_parts(path)[-1])
             member.size, member.mode = len(data), 0o600
             archive.addfile(member, io.BytesIO(data))
     return buffer.getvalue()
 
 
-def _open(root: str, path: str, *, directory: bool = False) -> tuple[int, os.stat_result]:
+def _open(root: str, path: Json, *, directory: bool = False) -> tuple[int, os.stat_result]:
     parts = _parts(path)
     fd = os.open(root, DIR_FLAGS)
     try:
@@ -192,7 +202,7 @@ def _check(mode: int, *, directory: bool) -> None:
         raise OSError(errno.EINVAL, "not a regular file")
 
 
-def _parts(path) -> list[str]:
+def _parts(path: Json) -> list[str]:
     parts = path.split("/") if isinstance(path, str) else []
     if len(parts) < 2 or not all(
         part not in {"", ".", ".."} and "\0" not in part for part in parts

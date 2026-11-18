@@ -420,7 +420,7 @@ class TerminalEvents(Base):
 class HomedRun(StubRun):
     reads: ClassVar[list[str]] = []
 
-    def _home(self):
+    def home(self) -> ClientHome:
         return ClientHome("f", "d", "HOME_DIR", "c", self._files, persistent=self.persistent)
 
     persistent = None

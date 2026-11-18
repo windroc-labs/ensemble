@@ -10,9 +10,10 @@ import posixpath
 import re
 import stat
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
+from typing import TypedDict, cast
 
 from ensemble.session.clients import common
 from ensemble.session.clients.claude import usage
@@ -49,22 +50,24 @@ from ensemble.utils import (
 TABLE = "[clients.claude]"
 NOT_LITERAL = "*?[]{}()\\,"
 STORE = f"{STATE}/sessions/claude"  # under HOME, resolved per call
-STATE_KEYS = frozenset(
-    {
-        "version",
-        "cwd",
-        "sid",
-        "dirs",
-        "env",
-        "flags",
-        "project",
-        "commands",
-        "reads",
-        "model",
-        "effort",
-        "name",
-    }
-)
+
+
+class _ResumeState(TypedDict):
+    version: int
+    cwd: str
+    sid: str
+    dirs: list[str]
+    env: dict[str, str]
+    flags: list[str]
+    project: bool
+    commands: list[str]
+    reads: list[str]
+    model: str | None
+    effort: str | None
+    name: str | None
+
+
+STATE_KEYS = _ResumeState.__required_keys__
 STATE_MAX = 1 << 20
 SETTINGS_MAX = 2 * 1024 * 1024
 TAIL = 4 << 20
@@ -208,7 +211,7 @@ def _state_path(store: str, cwd: str, sid: str) -> str:
     return os.path.join(store, f"{key}.json")
 
 
-def _load(store: str, cwd: str, sid: str) -> dict:
+def _load(store: str, cwd: str, sid: str) -> _ResumeState:
     if not os.path.isabs(store):
         raise ConfigError("the store must be an absolute path")
     path = _state_path(store, cwd, sid)
@@ -244,7 +247,7 @@ def _load(store: str, cwd: str, sid: str) -> dict:
         os.utime(path, follow_symlinks=False)
     except OSError as error:
         print(f"claude resume: cannot renew {path}: {error}", file=sys.stderr)
-    return state
+    return cast("_ResumeState", state)
 
 
 CHECKS = (
@@ -319,7 +322,7 @@ def size(home: HomeStore, path: HomePath) -> int:
     return found.size if found is not None else 0
 
 
-def texts(content) -> list[str]:
+def texts(content: object) -> list[str]:
     if not isinstance(content, list):
         return []
     return [
@@ -381,7 +384,7 @@ def _resumable(home: HomeStore, path: HomePath) -> Resumable:
 
 def _activity(home: HomeStore, path: HomePath) -> float | None:
     """The newest mtime of `path` and the files below its folder."""
-    times = []
+    times: list[float] = []
     with contextlib.suppress(OSError):
         if (found := home.stat(path)) is not None:
             times.append(found.mtime)
@@ -496,7 +499,7 @@ class ClaudeCommon:
 
     @staticmethod
     def continuation(
-        record: dict, sid: str, home: HomeStore, root: str
+        record: dict[str, object], sid: str, home: HomeStore, root: str
     ) -> tuple[str, HomePath | None, str | None] | None:
         """A matching continuation's native id, existing target and copy cutoff."""
         target = record.get("continuedInSessionId")
@@ -573,7 +576,7 @@ class ClaudeCommon:
         for error in drop_stale(self.store):
             print(f"claude resume: {error}", file=sys.stderr)
 
-    def resume_main(self, argv) -> int:
+    def resume_main(self, argv: Sequence[str]) -> int:
         """Execs claude resuming SID in CWD as launch() would. It runs here, not on the Host:
         auto mode, current config, the TUI without hooks.
         """
@@ -618,7 +621,7 @@ class ClaudeCommon:
     def launch(
         self,
         spec: Spec,
-        hooks: Mapping = MappingProxyType({}),
+        hooks: Mapping[str, object] = MappingProxyType({}),
         *,
         head: tuple[str, ...] = (),
         output: tuple[str, ...] = (),
@@ -687,7 +690,7 @@ class ClaudeCommon:
         name: str | None,
         head: tuple[str, ...] = (),
         output: tuple[str, ...] = (),
-        hooks: Mapping = MappingProxyType({}),
+        hooks: Mapping[str, object] = MappingProxyType({}),
         tail: tuple[str, ...] = (),
     ) -> tuple[str, ...]:
         """One merged --settings (config, mode, `flags`, `hooks`): a repeated one is undefined.

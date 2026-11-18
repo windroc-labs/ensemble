@@ -96,7 +96,7 @@ class HostDefaults(Case):
         home = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
         for client_home in (home, None):
             with self.subTest(home=client_home):
-                store = MinimalHost("m")._home_store("w", client_home)
+                store = MinimalHost("m").home_store("w", client_home)
                 self.assertEqual(store.persisted(), {"kind": "local"})
 
     def test_a_host_without_workspaces_removes_none(self):

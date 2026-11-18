@@ -19,7 +19,7 @@ DIGEST = "sha256:" + "ab" * 32
 
 def pinned(name):
     """The script's pin assignment `name=<value>`, so a pin update is one edit, in the script."""
-    (value,) = re.findall(rf"^{name}=(.*)$", Path(SCRIPT).read_text(), re.M)
+    (value,) = re.findall(rf"^{name}=(.*)$", Path(SCRIPT).read_text(), re.MULTILINE)
     return value
 
 

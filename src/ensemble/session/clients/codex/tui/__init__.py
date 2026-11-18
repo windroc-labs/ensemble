@@ -11,7 +11,7 @@ import shlex
 import shutil
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 
@@ -155,7 +155,7 @@ class CodexTui(Tui):
     _remote_owned = True
     _interrupt = Key("Escape")
 
-    def _home(self) -> ClientHome:
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def __init__(self, common: CodexCommon):
@@ -560,7 +560,7 @@ def passed(flags) -> list[str]:
     ]
 
 
-def _mcp_off(flags, plan: LaunchPlan, snapshot: Snapshot) -> list[str]:
+def _mcp_off(flags: Sequence[str], plan: LaunchPlan, snapshot: Snapshot) -> list[str]:
     """mcp_off where this start runs: in the Docker worker an unattended plan names, else here."""
     return mcp_off(flags, snapshot, home=client_state.LocalHome(), container=plan.unattended)
 

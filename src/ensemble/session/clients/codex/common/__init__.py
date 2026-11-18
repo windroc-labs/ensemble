@@ -20,7 +20,7 @@ from dataclasses import replace
 from datetime import datetime
 from functools import cached_property, wraps
 from types import MappingProxyType
-from typing import Literal, overload
+from typing import Literal, TypeGuard, cast, overload
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ensemble.session.clients.codex.common import app_server
@@ -221,24 +221,23 @@ def read_metadata(home: HomeStore, path: HomePath) -> SessionFile:
     named = os.path.join(path.root, path.rel)
     line, mtime = _first_line(home, path)
     try:
-        metadata = json.loads(line)
+        found = json.loads(line)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise RecoveryError(f"malformed Codex session metadata: {named}") from exc
-    if (
-        not isinstance(metadata, dict)
-        or metadata.get("type") != "session_meta"
-        or not isinstance(metadata.get("payload"), dict)
-    ):
+    metadata = cast("dict[str, object]", found) if isinstance(found, dict) else {}
+    payload = metadata.get("payload")
+    if metadata.get("type") != "session_meta" or not isinstance(payload, dict):
         raise RecoveryError(f"malformed Codex session metadata: {named}")
-    payload = metadata["payload"]
+    payload = cast("dict[str, object]", payload)
+    identifier, cwd = payload.get("id"), payload.get("cwd")
     if (
-        not native_id(payload.get("id"))
-        or not path.rel.endswith("-" + payload["id"] + ".jsonl")
-        or absolute_path(payload.get("cwd"), "session cwd") != payload["cwd"]
+        not native_id(identifier)
+        or not path.rel.endswith("-" + identifier + ".jsonl")
+        or (checked := absolute_path(cwd, "session cwd")) != cwd
     ):
         raise RecoveryError(f"mismatched Codex session metadata: {named}")
     return SessionFile(
-        named, mtime, NativeMetadata(payload["id"], payload["cwd"], _parent_identifier(payload))
+        named, mtime, NativeMetadata(identifier, checked, _parent_identifier(payload))
     )
 
 
@@ -333,7 +332,7 @@ def session_file(
     return found
 
 
-def native_id(value) -> bool:
+def native_id(value: object) -> TypeGuard[str]:
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value
     except (ValueError, TypeError, AttributeError):
@@ -841,7 +840,7 @@ def _config_layers(snapshot: Snapshot, *, container: bool, resume: bool = False)
     return layers
 
 
-def _read_layer(path: str, root: str, home: HomeStore) -> dict:
+def _read_layer(path: str, root: str, home: HomeStore) -> dict[str, object]:
     """`path`'s TOML; the worker's own copy, which its agent can write, through `home`, at most
     DOCKER_CONFIG_MAX bytes. FileNotFoundError: no such layer.
     """
@@ -1021,6 +1020,7 @@ class CodexCommon:
             "GH_PAGER": "cat",
         }
     )
+    flags: tuple[str, ...]
 
     def __init__(self, config, *, selector):
         self.selector = selector

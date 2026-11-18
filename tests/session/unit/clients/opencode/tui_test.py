@@ -196,13 +196,13 @@ class LaunchTest(Base):
             replace(home, files=ClientHome.files),
             ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
         )
-        self.assertEqual(self.run_tui()._home(), home)
+        self.assertEqual(self.run_tui().home(), home)
         headless = self.client.headless()
         assert headless is not None
-        self.assertEqual(headless._home(), home)
+        self.assertEqual(headless.home(), home)
         for adapter in (tui.OpenCodeTui, type(headless)):
             with self.subTest(adapter=adapter.__name__):
-                self.assertNotIn("_home", vars(adapter))
+                self.assertNotIn("home", vars(adapter))
 
 
 class RefusalTest(Base):

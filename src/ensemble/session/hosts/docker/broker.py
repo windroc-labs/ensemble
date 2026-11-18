@@ -11,9 +11,10 @@ import select
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
+from typing import Any, TypeAlias, TypeGuard
 
 from ensemble.session.engine.daemon import DAEMON, TEXT, ssh_agent
 from ensemble.session.engine.types import ConfigError, Daemon, DaemonName, SessionError, Target
@@ -111,6 +112,9 @@ class _Bad(Exception):
     pass
 
 
+_Json: TypeAlias = "dict[str, _Json] | list[_Json] | str | int | float | bool | None"
+
+
 def _unique(pairs):
     found = dict(pairs)
     if len(found) != len(pairs):
@@ -122,7 +126,7 @@ def _constant(name):
     raise _Bad(f"constant {name}")
 
 
-def _object(text: str) -> dict:
+def _object(text: str) -> dict[str, Any]:
     try:
         found = json.loads(text, object_pairs_hook=_unique, parse_constant=_constant)
     except (ValueError, RecursionError) as error:
@@ -282,7 +286,7 @@ class Broker:
         self.runner = runner
         self.warning = warning or LOG.warning
 
-    def _run(self, command: str, *args: str) -> dict:
+    def _run(self, command: str, *args: str) -> dict[str, Any]:
         try:
             res = self.runner(
                 [BROKER, command, *args],
@@ -468,27 +472,33 @@ class Broker:
         )
         return found["removed"]
 
-    def _parsed(self, command: str, valid, *args: str) -> dict:
+    def _parsed(
+        self, command: str, valid: Callable[[dict[str, Any]], bool], *args: str
+    ) -> dict[str, Any]:
         found = self._run(command, *args)
         if not valid(found):
             raise SessionError(f"broker: bad response to {command}: fields")
         return found
 
 
-def _target_ok(found) -> bool:
-    daemons = found.get("daemons") if isinstance(found, dict) else None
+def _target_ok(found: Mapping[str, _Json]) -> bool:
+    daemons = found.get("daemons")
     if not (
         set(found) == {"default", "daemons"}
         and isinstance(daemons, list)
         and 1 <= len(daemons) <= len(DaemonName)
-        and all(_daemon_ok(d) for d in daemons)
     ):
         return False
-    names = [d["name"] for d in daemons]
-    return len(set(names)) == len(names) and DaemonName.LOCAL in names and found["default"] in names
+    names = [d["name"] for d in daemons if _daemon_ok(d)]
+    return (
+        len(names) == len(daemons)
+        and len(set(names)) == len(names)
+        and DaemonName.LOCAL in names
+        and found["default"] in names
+    )
 
 
-def _daemon_ok(found) -> bool:
+def _daemon_ok(found: _Json) -> TypeGuard[dict[str, _Json]]:
     if not isinstance(found, dict):
         return False
     status = set(found) - {"name", "endpoint", "remote", "path"}
