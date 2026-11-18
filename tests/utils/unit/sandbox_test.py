@@ -354,3 +354,28 @@ class Supervise(Case):
         code, stderr, _ = self.run_child(3, leaked=[(400, 1, 400, "sleep 60 /ws/marker")])
         self.assertEqual(code, 3)
         self.assertIn("leaked after the run: pid 400", stderr)
+
+
+class RunnerSandbox(unittest.TestCase):
+    def test_the_runner_gives_each_test_the_sandbox(self):
+        env = os.environ
+        tmp, workspace = env["ENSEMBLE_TEST_SANDBOX"], env["ENSEMBLE_TEST_WORKSPACE"]
+        repo = str(Path(__file__).resolve().parents[3])
+        self.assertEqual((env["HOME"], env["ENSEMBLE_TEST_TMP"]), (workspace, workspace))
+        self.assertEqual(
+            (env["TMPDIR"], env["ENSEMBLE_CONTROL_ROOT"], tempfile.gettempdir()), (tmp, tmp, tmp)
+        )
+        self.assertTrue(os.path.isdir(tmp) and os.path.isdir(workspace))
+        self.assertEqual(os.path.dirname(workspace), repo)
+        self.assertTrue(os.path.basename(workspace).startswith(".test-sandbox-"))
+        self.assertTrue(Path(env["TMUX_TMPDIR"]).is_relative_to(tmp))
+        self.assertEqual(
+            [key for key in env if key.startswith("GIT_") or key in sandbox.CALLER_SESSION]
+            + [key for key in ("ENSEMBLE_CLIENT", "ENSEMBLE_GUARD_HOOK_SOCKET") if key in env],
+            ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CEILING_DIRECTORIES"],
+        )
+        self.assertEqual((env["GIT_CONFIG_GLOBAL"], env["GIT_CONFIG_NOSYSTEM"]), (os.devnull, "1"))
+        roots = env["PYTHONPATH"].split(os.pathsep)
+        self.assertEqual(
+            roots[:3], [repo, os.path.join(repo, ".github"), os.path.join(repo, "src")]
+        )

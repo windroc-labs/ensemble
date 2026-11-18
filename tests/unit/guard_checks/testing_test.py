@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from unittest import mock
 
 from tests import guards
@@ -323,6 +324,23 @@ class UnitIsolation(Sample):
                 self.assertTrue(found, text)
                 self.assertTrue(all(line.startswith(path + ":") for line in found), found)
 
+    def test_tests_cannot_reach_the_gate_through_the_pytest_conftest(self):
+        samples = (
+            "from tests import conftest\nconftest.GATE.unit = False\n",
+            "import tests.conftest\ntests.conftest.GATE.unit = False\n",
+            "from tests.conftest import GATE as gate\ngate.unit = False\n",
+            "import sys\nsys.modules['tests.conftest'].GATE.unit = False\n",
+            "from unittest import mock\nmock.patch('tests.conftest.GATE')\n",
+        )
+        for text in samples:
+            with self.subTest(text=text):
+                path = "tests/session/unit/sample_test.py"
+                found = testing.test_gate_mutation(self.tree({path: text}))
+                self.assertTrue(found, text)
+                self.assertTrue(all(line.startswith(path + ":") for line in found), found)
+        conftest = Path(REPO, "tests/conftest.py").read_text()
+        self.assertEqual(testing.test_gate_mutation(self.tree({"tests/conftest.py": conftest})), [])
+
     def test_no_migration_exemption_can_be_reintroduced(self):
         root = self.tree({"tests/session/unit/present_test.py": ""})
         self.assertEqual(testing.unit_isolation_allowlist(root), [])
@@ -333,3 +351,48 @@ class UnitIsolation(Sample):
                 testing.unit_isolation_allowlist(root),
                 [f"{root}/tests/guards.py: unit isolation allowlist must remain empty"],
             )
+
+
+class PytestSurface(Sample):
+    def test_only_the_root_pyproject_and_the_tests_conftest_may_configure_pytest(self):
+        self.assertEqual(
+            testing.pytest_surface(self.tree({"pyproject.toml": "", "tests/conftest.py": ""})), []
+        )
+        for name in testing.PYTEST_FILES:
+            for rel in (name, f"tests/{name}", f"tests/session/unit/{name}"):
+                with self.subTest(rel=rel):
+                    expected = (
+                        []
+                        if rel in testing.PYTEST_ALLOWED
+                        else [
+                            f"{rel}: pytest reads it; only {' and '.join(testing.PYTEST_ALLOWED)} may"
+                        ]
+                    )
+                    self.assertEqual(testing.pytest_surface(self.tree({rel: ""})), expected)
+
+    def test_the_nearest_config_file_cases_are_named(self):
+        self.assertIn("pytest.ini", testing.PYTEST_FILES)
+        root = self.tree({"pytest.ini": "", "tests/session/unit/pytest.ini": ""})
+        self.assertEqual(
+            [line.split(":")[0] for line in testing.pytest_surface(root)],
+            ["pytest.ini", "tests/session/unit/pytest.ini"],
+        )
+
+    def test_a_test_module_cannot_load_pytest_plugins(self):
+        root = self.tree(
+            {
+                "tests/session/unit/a_test.py": "import os\npytest_plugins = ['tests.plugin']\n",
+                "tests/session/b.py": "pytest_plugins: list[str] = []\n",
+                "tests/session/c.py": "plugins = ['pytest_plugins']\n",
+            }
+        )
+        self.assertEqual(
+            testing.pytest_surface(root),
+            [
+                "tests/session/b.py:1: pytest_plugins loads pytest hooks",
+                "tests/session/unit/a_test.py:2: pytest_plugins loads pytest hooks",
+            ],
+        )
+
+    def test_this_repo_keeps_the_surface_closed(self):
+        self.assertEqual(testing.pytest_surface(REPO), [])
