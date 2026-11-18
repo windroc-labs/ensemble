@@ -17,7 +17,6 @@ permissions:
 
 env:
   IMPORT_LINTER_VERSION: "2.15"
-  COVERAGE_VERSION: "7.10.7"
   PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/.github:${{ github.workspace }}/src
   PYTHONDONTWRITEBYTECODE: "1"
 
@@ -158,7 +157,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned test dependencies
-        run: python3 -m pip install coverage=="$COVERAGE_VERSION" import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
+        run: python3 -m pip install import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
       - name: Install zsh
         run: |
           if ! command -v zsh >/dev/null; then
@@ -207,8 +206,6 @@ jobs:
           python-version: "3.11"
       - name: Protect shipped source
         run: chmod -R a-w src
-      - name: Install pinned coverage
-        run: python3 -m pip install coverage=="$COVERAGE_VERSION"
       - name: GitHub tooling tests
         run: python3 -X faulthandler .github/run_tests.py 'GitHub tooling' .github
       - name: Require unchanged checkout

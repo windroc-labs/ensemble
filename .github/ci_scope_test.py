@@ -741,10 +741,13 @@ class Workflow(unittest.TestCase):
             "run: pylint --disable=all --enable=duplicate-code src/ensemble\n", job("lint")
         )
 
-    def test_github_tooling_tests_keep_their_coverage_dependency(self):
+    def test_test_jobs_install_no_coverage(self):
+        self.assertNotIn("COVERAGE_VERSION", WORKFLOW.read_text())
+        for name in ("repository", "github"):
+            with self.subTest(job=name):
+                self.assertNotRegex(job(name), r"pip install [^\n]*coverage")
         github = job("github")
         self.assertIn("    name: GitHub tooling tests\n", github)
-        self.assertIn('python3 -m pip install coverage=="$COVERAGE_VERSION"', github)
         self.assertIn(
             "run: python3 -X faulthandler .github/run_tests.py 'GitHub tooling' .github\n", github
         )
