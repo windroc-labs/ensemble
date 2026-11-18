@@ -1,6 +1,5 @@
 """Test supervision in isolated child interpreters."""
 
-import os
 import re
 import shutil
 import subprocess
@@ -100,7 +99,7 @@ class Supervise(Case):
         env = {
             k: v
             for k, v in clean_env(None, str(HERE.parent), str(HERE)).items()
-            if k not in ("RUN_TESTS_STATE", "GITHUB_STEP_SUMMARY", "RUN_TESTS_COVERAGE")
+            if k not in ("RUN_TESTS_STATE", "GITHUB_STEP_SUMMARY")
         }
         env["RUN_TESTS_DURATIONS"] = str(tmp / "durations.jsonl")
         proc = subprocess.run(
@@ -118,34 +117,6 @@ class Supervise(Case):
         )
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout, "::error title=pkg.x_test.X.test_x::AssertionError: no\n")
-
-    def test_run_tests_coverage_saves_the_child_process_src_arcs_outside_the_checkout(self):
-        import coverage
-
-        source = (
-            "import unittest\n\nfrom ensemble.utils.text import sid_error\n\n\n"
-            "class X(unittest.TestCase):\n    def test_x(self):\n"
-            "        self.assertIsNone(sid_error('ok'))\n"
-        )
-        out = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        tmp, proc = self.main(source, RUN_TESTS_COVERAGE=str(out / "data"))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        data = coverage.CoverageData(basename=str(out / "data"))
-        data.read()
-        text = str(HERE.parent / "src/ensemble/utils/text.py")
-        self.assertIn(text, data.measured_files())
-        self.assertIn((10, 11), data.arcs(text))
-        self.assertFalse(any(name.startswith(".coverage") for name in os.listdir(tmp)))
-        self.assertFalse(any(name.startswith(".coverage") for name in os.listdir(HERE.parent)))
-
-    def test_without_run_tests_coverage_the_child_never_imports_coverage(self):
-        source = (
-            "import sys, unittest\n\n\nclass X(unittest.TestCase):\n    def test_x(self):\n"
-            "        self.assertNotIn('coverage', sys.modules)\n"
-        )
-        tmp, proc = self.main(source)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(sorted(os.listdir(tmp)), ["durations.jsonl", "pkg"])
 
     def test_the_child_sees_only_the_runners_own_ensemble_variables(self):
         source = (

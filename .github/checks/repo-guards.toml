@@ -33,14 +33,6 @@ count = 2
 reason = "Needs node and a non-root user to test unreadable files; CI runners have node and run as a non-root user."
 
 [["ci-checks/inline-exemptions/settings.toml".exemption]]
-tool = "unittest"
-file = ".github/run_tests_test.py"
-rule = "skipTest"
-function = "Coverage.start"
-count = 1
-reason = "Needs coverage.py; CI's GitHub tooling tests job installs it, so the test runs there."
-
-[["ci-checks/inline-exemptions/settings.toml".exemption]]
 tool = "coverage"
 file = "src/ensemble/manager/engine/holder.py"
 rule = "no cover"
@@ -351,3 +343,6 @@ rule = "skipIf"
 function = "RemoveTree.test_an_unreadable_directory_is_skipped_and_the_retry_raises"
 count = 1
 reason = "Root ignores permissions; CI runs as a non-root user, so the test runs there."
+
+["ci-checks/dependency-allowlist/allowlist.toml"]
+allow = ["github.com/BurntSushi/toml@v1.6.0"]
