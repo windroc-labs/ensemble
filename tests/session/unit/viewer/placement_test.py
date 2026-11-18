@@ -362,9 +362,18 @@ class RecordTest(Case):
                 self.assertEqual(self.stderr.getvalue(), f"tui: show: after-kill-pane: {why}\n")
 
     def test_a_failure_to_record_is_printed(self):
-        fake = FakeTmux(fail=("set-option",))
-        self.assertEqual(len(self.record(fake=fake)), 2)
+        fake = FakeTmux(fail=("set-option",), results={"list-panes": (0, "%3\n%20\n")})
+        calls = self.record(fake=fake)
+        self.assertEqual(calls[-1], ["tmux", "list-panes", "-a", "-F", "#{pane_id}"])
         self.assertEqual(self.stderr.getvalue(), "tui: show: @worker: tmux: boom\n")
+
+    def test_a_pane_that_closed_before_its_tagging_prints_nothing(self):
+        """A client that exits at once can close its pane first: nothing is left to tag."""
+        for listed in ((0, "%3\n%201\n"), (1, "", "no server running\n")):
+            with self.subTest(listed=listed):
+                fake = FakeTmux(fail=("set-option",), results={"list-panes": listed})
+                self.assertEqual(len(self.record(fake=fake)), 3)
+                self.assertEqual(self.stderr.getvalue(), "")
 
     def test_label_sets_the_border_only_when_asked(self):
         """A label goes in @worker-label; unlabeled, no border option."""
