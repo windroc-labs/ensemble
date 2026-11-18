@@ -448,29 +448,3 @@ def _lower_files(repo, suffixes, skip=None, projects=LOWER):
         for rel, text in _project_files(repo, project, suffixes):
             if not (skip and rel.startswith(skip)):
                 yield rel, text
-
-
-TARGET_OWNER = "src/broker/internal/docker/"
-DOCKER_STDERR = ("no such volume", "cannot connect to the docker daemon")
-
-
-def docker_target_owner(repo: str) -> list[str]:
-    """The broker alone reads the Docker target setting and classifies a daemon's answers: no
-    other source names target.json, no Python holds an ssh:// address or matches Docker's error
-    text, and no client code names the Mac's docker-state directory.
-    """
-    found = []
-    for rel, text in _files(os.path.join(repo, "src"), "", errors="replace"):
-        path = f"src/{rel}"
-        if path.endswith(".md"):
-            continue
-        if "target.json" in text and not path.startswith(TARGET_OWNER):
-            found.append(f"{path}: target.json outside {TARGET_OWNER}")
-        if path.endswith(".py"):
-            if "ssh://" in text:
-                found.append(f"{path}: ssh:// address in Python")
-            if any(words in text.lower() for words in DOCKER_STDERR):
-                found.append(f"{path}: Docker stderr text match in Python")
-        if path.startswith(f"src/{PKG}/session/clients/") and "docker-state" in text:
-            found.append(f"{path}: docker-state path in client code")
-    return found

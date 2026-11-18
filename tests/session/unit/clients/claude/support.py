@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from unittest import mock
@@ -12,9 +13,9 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
 from ensemble.session.clients.common import select
 from ensemble.session.engine.types import (
+    LOCAL_CONTEXT,
     Access,
     ConfigError,
-    HomeStore,
     HookKind,
     Launch,
     Permission,
@@ -22,7 +23,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.engine.types import Spec as BaseSpec
 from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import SID, Case
-from tests.session.unit.clients.support import homed
 from tests.utils.sandbox import scratch
 
 
@@ -131,15 +131,7 @@ class Base(Case):
 
 
 def _launch(
-    mode,
-    work,
-    prompt="hi",
-    config=CONFIG,
-    *,
-    resume=False,
-    permission=Permission.AUTO,
-    home: HomeStore | None = None,
-    **spec,
+    mode, work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
 ) -> Launch:
     spec = Spec(
         **{
@@ -152,7 +144,8 @@ def _launch(
         }
     )
     client = ClaudeClient(config)
-    run = homed(client.tui() if mode == "tui" else client.headless(), home, permission)
+    run = client.tui() if mode == "tui" else client.headless()
+    run._context = replace(LOCAL_CONTEXT, permission=permission)
     return run.launch(spec, HOOK) if mode == "tui" else run.launch(spec)
 
 

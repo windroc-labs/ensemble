@@ -8,7 +8,6 @@ from unittest import mock
 
 from ensemble.session.clients.opencode import OpenCodeClient, tui
 from ensemble.session.clients.opencode.common import Bindings
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
@@ -58,7 +57,7 @@ class Base(Case):
     def run_tui(self, client=None, context: ClientContext = LOCAL_CONTEXT) -> tui.OpenCodeTui:
         run = (client or self.client).tui()
         assert isinstance(run, tui.OpenCodeTui)
-        run._context = replace(context, home=LocalHome())
+        run._context = context
         return run
 
     def launch(self, spec: Spec, client=None, context=LOCAL_CONTEXT) -> Launch:

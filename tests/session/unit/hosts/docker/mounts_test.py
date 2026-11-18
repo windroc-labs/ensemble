@@ -1,22 +1,12 @@
-"""hosts/docker/mounts.py: the workspace volume name and state dir; daemon.py: the docker command line
-to a daemon.
-"""
+"""hosts/docker/mounts.py: the workspace volume name; daemon.py: the account home, endpoint and docker command line."""
 
 import os
 from unittest import mock
 
-from ensemble.session.engine import daemon
-from ensemble.session.engine.types import Daemon
-from ensemble.session.hosts.docker import mounts
+from ensemble.session.hosts.docker import daemon, mounts
 from tests.session.case import Case
 
-LOCAL = Daemon(
-    "local",
-    "unix:///Users/acct/.docker/run/docker.sock",
-    remote=False,
-    path="/usr/bin:/bin:/usr/sbin:/sbin",
-    id="8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
-)
+HOME = "/Users/example"
 
 
 class VolumeTest(Case):
@@ -25,15 +15,17 @@ class VolumeTest(Case):
 
 
 class PathsTest(Case):
-    def test_state_dir_and_docker_call(self):
-        env = {"DOCKER_HOST": "tcp://x", "DOCKER_CONTEXT": "c", "DOCKER_CONFIG": "/c", "K": "v"}
-        with mock.patch.dict(os.environ, {**env, "PATH": "/caller/bin"}):
-            argv, called = daemon.docker_call("/bin/docker", "ps", "-a", daemon=LOCAL)
+    def test_account_home_state_dir_endpoint_and_docker_call(self):
+        with mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_dir="/Users/acct")):
+            self.assertEqual(daemon.account_home(), "/Users/acct")
+            self.assertEqual(daemon.endpoint(), "unix:///Users/acct/.docker/run/docker.sock")
+            env = {"DOCKER_HOST": "tcp://x", "DOCKER_CONTEXT": "c", "DOCKER_CONFIG": "/c", "K": "v"}
+            with mock.patch.dict(os.environ, env):
+                argv, called = daemon.docker_call("/bin/docker", "ps", "-a")
         self.assertEqual(
             argv,
             ["/bin/docker", "--host", "unix:///Users/acct/.docker/run/docker.sock", "ps", "-a"],
         )
         self.assertEqual(called["K"], "v")
-        self.assertEqual(called["PATH"], f"{LOCAL.path}{os.pathsep}/caller/bin")
         self.assertFalse({"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"} & set(called))
         self.assertEqual(mounts.state_dir("w"), os.path.join(self.ensemble, "docker-state", "w"))

@@ -12,10 +12,8 @@ from unittest import mock
 from ensemble.session import Session
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.common import SessionStore
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
-    LOCAL_CONTEXT,
     Access,
     Activity,
     ConfigError,
@@ -178,7 +176,6 @@ class HeadlessSessions(Case):
             },
         )
         run = client.headless()
-        run._context = dataclasses.replace(LOCAL_CONTEXT, home=LocalHome())
         launch = run.launch(
             dataclasses.replace(self.spec, sid=self.sid, prompt=prompt, resume=resume)
         )

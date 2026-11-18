@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -91,7 +92,7 @@ func TestPrefetchRevokesOnceOnSuccessAndFailure(t *testing.T) {
 	}{
 		"success":            {"main", nil, nil, "", 1},
 		"helper fails":       {"main", errors.New("exit status 128: fatal: could not read Password for " + tok(2, 1)), nil, protocol.StartFailed, 1},
-		"docker unreachable": {"main", unreachableErr, nil, protocol.DockerUnreachable, 1},
+		"docker unreachable": {"main", docker.ErrUnreachable, nil, protocol.DockerUnreachable, 1},
 		"ref check fails":    {"gone", nil, nil, protocol.ManifestRejected, 0},
 		"ref lookup fails":   {"main", nil, func(f *fakeRepo) { f.refStatus = 502 }, protocol.GitHubFailed, 0},
 	} {

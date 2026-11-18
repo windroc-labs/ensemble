@@ -13,7 +13,6 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.tui import CodexTui
 from ensemble.session.engine import types as engine_types
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -195,17 +194,14 @@ class ClientTest(Refusals):
                 self.assertIsNone(client.usage(output))
         self.assertEqual(
             client.session_status(
-                engine_types.SessionInfo(
-                    sid="s", cwd="/c", project=False, transcript="", resume=""
-                ),
-                home=LocalHome(),
+                engine_types.SessionInfo(sid="s", cwd="/c", project=False, transcript="", resume="")
             ),
             SessionStatus("unknown", None, ""),
         )
 
     def test_session_metadata_preserves_info_by_default(self):
         info = engine_types.SessionInfo("s", "/c", project=False, transcript="/t", resume="r")
-        self.assertIs(StubClient({}).session_metadata(info, home=LocalHome()), info)
+        self.assertIs(StubClient({}).session_metadata(info), info)
 
     def test_writable_dirs_are_none_unless_overridden(self):
         for resume in (False, True):
@@ -247,10 +243,7 @@ class NoProcessTest(Case):
             client.usage_probe()
             client.usage("output")
             client.session_status(
-                engine_types.SessionInfo(
-                    sid="s", cwd="/c", project=False, transcript="", resume=""
-                ),
-                home=LocalHome(),
+                engine_types.SessionInfo(sid="s", cwd="/c", project=False, transcript="", resume="")
             )
             client.in_process()
             StubInProcess().check(Spec(workdir="/w", access=Access(cwd="/w")))

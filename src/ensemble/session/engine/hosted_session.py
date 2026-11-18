@@ -29,7 +29,7 @@ from typing import Any, ClassVar, NamedTuple, cast
 import ensemble.utils
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry, settings
-from ensemble.session.engine import accounts, client_state
+from ensemble.session.engine import accounts
 from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
@@ -37,11 +37,9 @@ from ensemble.session.engine.types import (
     ACCOUNT_REJECTED,
     Access,
     ClientBound,
-    ClientHome,
     ConfigError,
     EnvironmentSpec,
     Exited,
-    HomeStore,
     HookCallback,
     Hosts,
     IdleTimeout,
@@ -180,12 +178,7 @@ def _session_line(workdir: str) -> Callable[[SessionInfo], None]:
     return record
 
 
-def _resumable(
-    client: Callable[[], Client],
-    info: SessionInfo,
-    spec: Spec,
-    home: Callable[[ClientHome | None], HomeStore],
-) -> SessionStatus:
+def _resumable(client: Callable[[], Client], info: SessionInfo, spec: Spec) -> SessionStatus:
     if error := sid_error(info.sid):
         raise ConfigError(error)
     if not printable_abs(info.cwd):
@@ -195,23 +188,9 @@ def _resumable(
     if account := found._account_of(info.transcript):
         env.update(found._account_env(account))
     try:
-        return found.session_status(info, env=env, home=home(_client_home(found)))
+        return found.session_status(info, env=env)
     except OSError:
         return SessionStatus(Resumable.UNKNOWN, None, "")
-
-
-def _client_home(client: Client) -> ClientHome | None:
-    """The home its adapters name; None: it keeps none."""
-    adapters = (client.tui(), client.headless())
-    homes = (adapter._home() for adapter in adapters if adapter is not None)
-    return next((home for home in homes if home is not None), None)
-
-
-def _recorded_home(name: str | None, home: ClientHome | None) -> HomeStore:
-    """Session `name`'s Host's pick, as recorded at its start."""
-    if home is None:
-        return client_state.LocalHome()
-    return client_state.recorded_home(name, home.dir)
 
 
 def _probe_dir() -> str | None:
@@ -467,8 +446,7 @@ def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
     except OSError:
         recorded = None
     info = recorded or SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
-    found = _resumable(lambda: client, info, spec, lambda home: on._home_store(name, home))
-    if found.resumable == Resumable.NO:
+    if _resumable(lambda: client, info, spec).resumable == Resumable.NO:
         raise ConfigError(f"session {name}: conversation {spec.sid} has no transcript to resume")
 
 
@@ -1284,12 +1262,7 @@ class HostedSession(Session):
             raise SessionError(f"inspect session {sid}: {error}") from error
         if info is None:
             raise NoRecordedSession(f"no recorded session {sid} in {spec.workdir}")
-        return _resumable(
-            lambda: setup.registry.client(client),
-            info,
-            spec,
-            lambda home: _recorded_home(spec.name, home),
-        )
+        return _resumable(lambda: setup.registry.client(client), info, spec)
 
     def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
         last = self._clock()
@@ -1426,8 +1399,7 @@ class HostedSession(Session):
         if not self._bound:
             return
         try:
-            home = self._host._home_store(self.name or "", _client_home(self._client))
-            resolved = self._client.session_metadata(self._info, home=home)
+            resolved = self._client.session_metadata(self._info)
             resume = self._host_resume(self._info.cwd) or resolved.resume
             info = replace(self._info, transcript=resolved.transcript, resume=resume)
         except OSError:
@@ -1467,12 +1439,7 @@ class HostedSession(Session):
 
     def session_status(self) -> SessionStatus:
         info = self.info()
-        found = _resumable(
-            lambda: self._client,
-            info,
-            self._running.prepared.spec,
-            lambda home: self._host._home_store(self.name or "", home),
-        )
+        found = _resumable(lambda: self._client, info, self._running.prepared.spec)
         resume = self._host_resume(info.cwd)
         return found if resume is None else replace(found, resume_command=resume)
 

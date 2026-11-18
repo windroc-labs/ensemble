@@ -82,7 +82,7 @@ class ProbeClient(fake_client.FakeClient):
     def usage(self, output):
         return engine_types.Usage(engine_types.Window(float(output), None), None)
 
-    def session_status(self, info, *, env=types.MappingProxyType({}), home):
+    def session_status(self, info, *, env=types.MappingProxyType({})):
         return engine_types.SessionStatus("yes", 1.5, f"probe {info.sid} {info.cwd}")
 
 

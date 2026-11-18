@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +24,7 @@ const (
 	// Guard is the container's main process; the harness hands it its client over docker attach.
 	Guard   = "/opt/ensemble/src/ensemble/session/harness/guard.py"
 	checker = "/opt/ensemble/lib/workspace-check"
+	sharing = "Docker Desktop file sharing must include ~/.ensemble/docker-state (Settings > Resources > File sharing)."
 	cache   = ".ensemble-cache"
 )
 
@@ -73,18 +73,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
-	d, r, err := h.find(ctx, m.Daemon, protocol.StartFailed)
+	px, err := h.checkProxy(ctx, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
-	if err := h.localOnly(d, m); err != nil {
-		return StartResult{}, err
-	}
-	px, err := h.checkProxy(ctx, d, m.Gateway)
-	if err != nil {
-		return StartResult{}, err
-	}
-	route, err := h.caller(ctx, d, px, m.Gateway)
+	route, err := h.caller(ctx, px, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -125,7 +118,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	if len(m.Secrets) > 0 {
-		if err := h.Env.Ready(secretItems(m.Secrets)); err != nil {
+		items := make([]string, len(m.Secrets))
+		for i, s := range m.Secrets {
+			items[i] = s.Item
+		}
+		if err := h.Env.Ready(items); err != nil {
 			return StartResult{}, err
 		}
 	}
@@ -135,47 +132,33 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	lap("preflight")
-	info, err := h.checkImage(ctx, d, m.Image)
+	info, err := h.checkImage(ctx, m.Image)
 	if err != nil {
 		return StartResult{}, err
 	}
 	lap("image")
 	facts.ImageDigest = info.ID
-	if _, err := d.Runner.Run(ctx, []string{"container", "inspect", c}, nil); !docker.Absent(err) {
+	if _, err := h.Docker.Run(ctx, []string{"container", "inspect", c}, nil); !docker.Absent(err) {
 		if err != nil {
 			return StartResult{}, failure(err, protocol.StartFailed, "Cannot check for container "+c+".")
 		}
 		return StartResult{}, taken(c)
 	}
 	lostName := false
-	created, err := h.ensureVolume(ctx, d, m, info)
+	created, err := h.ensureVolume(ctx, m, info)
 	if err != nil {
 		return StartResult{}, err
-	}
-	// A start that lost the container name to another leaves its volumes to that one.
-	if created && m.Prefetch != nil {
-		defer func() {
-			var e *protocol.Error
-			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, d, m.Workspace, e)
-			}
-		}()
-	}
-	stateCreated, err := h.ensureStateVolume(ctx, d, m, info)
-	if err != nil {
-		return StartResult{}, err
-	}
-	if stateCreated {
-		defer func() {
-			var e *protocol.Error
-			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, d, volumesOf(m.Name).State, e)
-			}
-		}()
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		if err := h.prefetch(ctx, launch{d, c, m, info}, r, px); err != nil {
+		// A start that lost the container name to another leaves the workspace to that one.
+		defer func() {
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, m.Workspace, e)
+			}
+		}()
+		if err := h.prefetch(ctx, c, m, info, px); err != nil {
 			return StartResult{}, err
 		}
 		lap("prefetch")
@@ -187,11 +170,15 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 		defer lock.Close()
-		if err := h.lockBusy(ctx, d, m.Lock, ""); err != nil {
+		holder, err := h.lockHolder(ctx, m.Lock, "")
+		if err != nil {
 			return StartResult{}, err
 		}
+		if holder != nil {
+			return StartResult{}, busy(holder)
+		}
 	}
-	result, held, err = h.create(ctx, launch{d, c, m, info}, route, facts, lap)
+	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
 		lostName = true
 		return StartResult{}, taken(c)
@@ -202,7 +189,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		held.revokeTokens()
-		h.rollback(ctx, d, c, e)
+		h.rollback(ctx, c, e)
 		h.dropTokens(m)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
 			e.Code, e.Holder = protocol.StartFailed, nil
@@ -211,13 +198,16 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
-	result.Env, result.Daemon = env, d.ID
+	result.Env = env
 	return result, nil
 }
 
-// codexKept outlive the container on its state volume; the session's Codex ClientHome.persistent names the same dirs.
+// codexKept are the dirs of a Codex home's tmpfs that are bind-mounted from its state dir, so they outlive the
+// container: its history and its own config copy, which CODEX_HOME/config.toml links to. The session's Codex
+// ClientHome.persistent names the same dirs.
 var codexKept = []string{"sessions", "config"}
 
+// mounts are create's --mount and --tmpfs flags and, for the audit, what each one mounts.
 func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	var flags []string
 	var list []audit.Mount
@@ -227,9 +217,8 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	tmpfs := func(target, options string) {
 		add("--tmpfs", target+":"+options, audit.Mount{Type: "tmpfs", Target: target, Mode: "rw"})
 	}
-	state := volumesOf(m.Name).State
-	kept := func(subpath, target string) {
-		add("--mount", stateMount(state, subpath, target), audit.Mount{Type: "volume", Source: state, Target: target, Mode: "rw"})
+	bind := func(path string) {
+		add("--mount", bindMount(path, path), audit.Mount{Type: "bind", Source: path, Target: path, Mode: "rw"})
 	}
 	spec, mount := workspaceMount(m.Workspace, m.CWD, false)
 	add("--mount", spec, mount)
@@ -239,11 +228,11 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 		// and no setting disables or caps it.
 		tmpfs(m.CodexDir, "rw,noexec,nosuid,nodev,size=1073741824"+owner)
 		tmpfs(docker.RunDir, "rw,noexec,nosuid,nodev,size=1048576"+owner)
-		for _, dir := range codexKept {
-			kept(m.Client+"/"+dir, filepath.Join(m.CodexDir, dir))
+		for _, kept := range codexKept {
+			bind(filepath.Join(m.CodexDir, kept))
 		}
 	} else {
-		kept(m.Client, m.StateDir())
+		bind(m.StateDir())
 	}
 	size := 65536
 	if n := len(m.Secrets); n > 0 {
@@ -253,7 +242,8 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	return flags, list
 }
 
-// holding's github revokes the GitHub tokens issued (nil: none).
+// holding is the credentials a container being started holds: its client's, the environment secrets written, and
+// github, the revocation of the GitHub tokens issued (nil: none).
 type holding struct {
 	client  bool
 	secrets []string
@@ -284,18 +274,13 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 	}
 }
 
-// launch is one container's start on its daemon, from the absence check on.
-type launch struct {
-	d    Daemon
-	c    string
-	m    Manifest
-	info imageInfo
-}
-
-func (l launch) runArgs(route egress, mountFlags []string) []string {
-	m := l.m
+// create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
+// container so far.
+func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
+	lap func(phase string)) (_ StartResult, held holding, retErr error) {
+	labels := info.Config.Labels
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
-	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", l.c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
+	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
 		route.args()...)
 	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
@@ -313,178 +298,156 @@ func (l launch) runArgs(route egress, mountFlags []string) []string {
 	args = append(args,
 		"--label", "ensemble.session="+m.Name, "--label", "ensemble.generation="+m.Generation, "--label", clientLabel+"="+m.Client)
 	if len(m.Secrets) > 0 {
-		args = append(args, "--label", secretsLabel+"="+strings.Join(secretItems(m.Secrets), ","))
+		items := make([]string, len(m.Secrets))
+		for i, s := range m.Secrets {
+			items[i] = s.Item
+		}
+		args = append(args, "--label", secretsLabel+"="+strings.Join(items, ","))
 	}
 	if m.Lock != "" {
 		args = append(args, "--restart", "no", "--label", lockLabel+"="+m.Lock, "--label", ownerLabel+"="+m.LockOwner)
 	}
-	for _, k := range slices.Sorted(maps.Keys(m.Labels)) {
+	keys := make([]string, 0, len(m.Labels))
+	for k := range m.Labels {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
 		args = append(args, "--label", k+"="+m.Labels[k])
 	}
-	return append(append(args, mountFlags...), "--entrypoint", "/usr/bin/tini", l.info.ID, "--", Python, "-I", Guard, "--serve")
-}
-
-// boot creates l's container and readies it for its credentials; errTaken: another start made it first.
-func (h Host) boot(ctx context.Context, l launch, args []string, lap func(phase string)) (ClientVersions, error) {
-	if _, err := l.d.Runner.Run(ctx, args, nil); err != nil {
+	flags, list := mounts(m, labels)
+	facts.Mounts = list
+	args = append(append(args, flags...), "--entrypoint", "/usr/bin/tini", info.ID, "--", Python, "-I", Guard, "--serve")
+	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
 		if docker.Conflict(err) {
-			return ClientVersions{}, errTaken
+			return StartResult{}, held, errTaken
 		}
-		return ClientVersions{}, diagnosed(err, protocol.StartFailed, "Creating the container failed.")
+		e := diagnosed(err, protocol.StartFailed, "Creating the container failed.")
+		if text := err.Error(); strings.Contains(text, "mounts denied") || strings.Contains(text, "not shared from the host") {
+			e.Message = sharing
+		}
+		return StartResult{}, held, e
 	}
 	lap("create")
-	if l.m.Lock != "" {
-		if err := h.lockBusy(ctx, l.d, l.m.Lock, l.c); err != nil {
-			return ClientVersions{}, err
+	if m.Lock != "" {
+		holder, err := h.lockHolder(ctx, m.Lock, c)
+		if err != nil {
+			return StartResult{}, held, err
+		}
+		if holder != nil {
+			return StartResult{}, held, busy(holder)
 		}
 	}
-	if err := h.bootstrap(ctx, l.d, l.c, l.m); err != nil {
-		return ClientVersions{}, err
+	if err := h.bootstrap(ctx, c, m); err != nil {
+		return StartResult{}, held, err
 	}
 	lap("bootstrap")
-	clients, err := startClients(l.info.Config.Labels)
+	clients, err := startClients(labels)
 	if err != nil {
-		return ClientVersions{}, err
+		return StartResult{}, held, err
 	}
 	lap("clients")
-	switch l.m.Client {
+	switch m.Client {
 	case "codex":
 		err = checkCodex(clients.Codex)
 	case "opencode":
 		err = checkOpencode(clients.Opencode)
 	}
-	return clients, err
-}
-
-// clientLogin is the client's own credential, prepared: finish (nil: nothing held) releases what preparing it holds.
-type clientLogin struct {
-	message  string
-	commands []credential.Command
-	expiry   *string // Codex's
-	finish   func() error
-}
-
-func (h Host) clientLogin(ctx context.Context, m Manifest) (clientLogin, error) {
-	switch m.Client {
-	case "codex":
-		login := clientLogin{message: "Injecting Codex credentials failed."}
-		injection, err := h.Codex.Inject(ctx)
-		if err != nil {
-			return login, err
-		}
-		login.commands, login.expiry, login.finish = []credential.Command{injection.Command}, &injection.Expiry, injection.Finish
-		return login, nil
-	case "claude":
-		command, err := h.Creds.Inject(m.ClaudeAccount)
-		return clientLogin{message: "Injecting the Claude token failed.", commands: []credential.Command{command}}, err
-	case "opencode":
-		login := clientLogin{message: "Injecting the OpenCode provider API keys failed."}
-		if len(m.OpencodeProviders) == 0 {
-			return login, nil
-		}
-		var err error
-		login.commands, err = h.Opencode.Inject(m.OpencodeProviders)
-		return login, err
-	}
-	return clientLogin{}, nil
-}
-
-func (h Host) secretWrites(l launch, batch *startDelivery, held *holding) error {
-	for _, s := range l.m.Secrets {
-		message := "Writing " + s.Item + " into the container failed."
-		command, err := h.Env.Inject(s)
-		if err != nil {
-			return injected(err, protocol.StartFailed, message)
-		}
-		batch.commands = append(batch.commands, command)
-		batch.step(message, func() {
-			held.secrets = append(held.secrets, s.Item)
-			h.Audit.Add(l.c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
-		})
-	}
-	return nil
-}
-
-func (h Host) tokenWrites(ctx context.Context, l launch, batch *startDelivery, held *holding, lap func(phase string)) (github []protocol.Expiry, linear string, err error) {
-	github = []protocol.Expiry{}
-	if l.m.GitHubApp != "" {
-		const message = "Injecting the GitHub tokens failed."
-		var commands []credential.Command
-		if commands, held.github, github, err = h.GitHub.Issue(ctx, l.m.GitHubApp, l.m.GitHubPermissions, l.c); err != nil {
-			return nil, "", injected(err, protocol.StartFailed, message)
-		}
-		batch.commands = append(batch.commands, commands...)
-		batch.step(message, nil)
-		lap("github")
-	}
-	if l.m.Linear != nil {
-		const message = "Injecting the Linear credentials failed."
-		var writes []credential.Command
-		if writes, held.linear, linear, err = h.Linear.Issue(ctx, *l.m.Linear, l.c); err != nil {
-			return nil, "", injected(err, protocol.StartFailed, message)
-		}
-		batch.commands = append(batch.commands, writes...)
-		batch.step(message, nil)
-	}
-	return github, linear, nil
-}
-
-// create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
-// container so far.
-func (h Host) create(ctx context.Context, l launch, route egress, facts *audit.StartFacts, lap func(phase string)) (_ StartResult, held holding, retErr error) {
-	flags, list := mounts(l.m, l.info.Config.Labels)
-	facts.Mounts = list
-	clients, err := h.boot(ctx, l, l.runArgs(route, flags), lap)
 	if err != nil {
 		return StartResult{}, held, err
 	}
 	var batch startDelivery
 	defer batch.erase()
-	login, err := h.clientLogin(ctx, l.m)
+	var codexExpiry *string
+	var commands []credential.Command
+	var message string
+	switch m.Client {
+	case "codex":
+		message = "Injecting Codex credentials failed."
+		var login CodexInjection
+		login, err = h.Codex.Inject(ctx)
+		if err == nil {
+			commands, codexExpiry = []credential.Command{login.Command}, &login.Expiry
+			defer func() {
+				if endErr := login.Finish(); endErr != nil && retErr == nil {
+					retErr = injected(endErr, protocol.StartFailed, message)
+				}
+			}()
+		}
+	case "claude":
+		message = "Injecting the Claude token failed."
+		var command credential.Command
+		command, err = h.Creds.Inject(m.ClaudeAccount)
+		commands = []credential.Command{command}
+	case "opencode":
+		message = "Injecting the OpenCode provider API keys failed."
+		if len(m.OpencodeProviders) > 0 {
+			commands, err = h.Opencode.Inject(m.OpencodeProviders)
+		}
+	}
 	if err != nil {
-		return StartResult{}, held, injected(err, protocol.StartFailed, login.message)
+		return StartResult{}, held, injected(err, protocol.StartFailed, message)
 	}
-	if login.finish != nil {
-		defer func() {
-			if endErr := login.finish(); endErr != nil && retErr == nil {
-				retErr = injected(endErr, protocol.StartFailed, login.message)
-			}
-		}()
-	}
-	batch.commands = append(batch.commands, login.commands...)
-	batch.step(login.message, func() {
-		if kind := clientKind(l.m.Client); kind != "" {
+	batch.commands = append(batch.commands, commands...)
+	batch.step(message, func() {
+		if kind := clientKind(m.Client); kind != "" {
 			held.client = true
-			h.Audit.Add(l.c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: login.expiry})
+			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
 		}
 	})
-	if err := h.secretWrites(l, &batch, &held); err != nil {
-		return StartResult{}, held, err
+	for _, s := range m.Secrets {
+		message := "Writing " + s.Item + " into the container failed."
+		command, err := h.Env.Inject(s)
+		if err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
+		}
+		batch.commands = append(batch.commands, command)
+		batch.step(message, func() {
+			held.secrets = append(held.secrets, s.Item)
+			h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
+		})
 	}
-	expiries, linearExpiry, err := h.tokenWrites(ctx, l, &batch, &held, lap)
-	if err != nil {
-		return StartResult{}, held, err
+	expiries := []protocol.Expiry{}
+	if m.GitHubApp != "" {
+		message := "Injecting the GitHub tokens failed."
+		if commands, held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubPermissions, c); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
+		}
+		batch.commands = append(batch.commands, commands...)
+		batch.step(message, nil)
+		lap("github")
 	}
-	if err := h.deliverStart(ctx, l.d, l.c, &batch); err != nil {
+	var linearExpiry string
+	if m.Linear != nil {
+		var writes []credential.Command
+		writes, held.linear, linearExpiry, err = h.Linear.Issue(ctx, *m.Linear, c)
+		if err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Linear credentials failed.")
+		}
+		batch.commands = append(batch.commands, writes...)
+		batch.step("Injecting the Linear credentials failed.", nil)
+	}
+	if err := h.deliverStart(ctx, c, &batch); err != nil {
 		return StartResult{}, held, err
 	}
 	lap("credentials")
-	if err := h.startTokens(l.m, login.expiry, expiries, linearExpiry); err != nil {
+	if err := h.startTokens(m, codexExpiry, expiries, linearExpiry); err != nil {
 		return StartResult{}, held, err
 	}
 	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
 	if linearExpiry != "" {
 		delivered.Expires[credential.Linear] = []string{linearExpiry}
 	}
-	if login.expiry != nil {
-		delivered.Expires[credential.Codex] = []string{*login.expiry}
+	if codexExpiry != nil {
+		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: l.c, Endpoint: l.d.Endpoint, ImageDigest: l.info.ID,
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID,
 			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
-			Deadline: deadlineOf(delivered, heldKinds(l.m))},
+			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil
 }
 
+// startTokens records the expiries a start delivered.
 func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry, linearExpiry string) error {
 	var err error
 	if codexExpiry != nil {
@@ -514,26 +477,27 @@ func injected(err error, code protocol.Code, message string) *protocol.Error {
 	return protocol.New(code, message)
 }
 
-func (h Host) agentExec(ctx context.Context, d Daemon, c string) func(argv []string, stdin []byte) error {
+// agentExec runs argv as agent in container c with stdin, for secret injection.
+func (h Host) agentExec(ctx context.Context, c string) func(argv []string, stdin []byte) error {
 	return func(argv []string, stdin []byte) error {
-		_, err := d.Runner.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)
+		_, err := h.Docker.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)
 		return err
 	}
 }
 
 // agentRead runs argv as agent in container c on the context it is given, returning its stdout: close's read of the
 // token files.
-func (h Host) agentRead(d Daemon, c string) func(ctx context.Context, argv []string) ([]byte, error) {
+func (h Host) agentRead(c string) func(ctx context.Context, argv []string) ([]byte, error) {
 	return func(ctx context.Context, argv []string) ([]byte, error) {
-		return d.Runner.Run(ctx, asAgent(c, argv...), nil)
+		return h.Docker.Run(ctx, asAgent(c, argv...), nil)
 	}
 }
 
 // rollback deletes c on a fresh context so a signal or cancelled caller still cleans up.
-func (h Host) rollback(ctx context.Context, d Daemon, c string, e *protocol.Error) {
+func (h Host) rollback(ctx context.Context, c string, e *protocol.Error) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	removed, err := h.remove(rctx, d, c)
+	removed, err := h.remove(rctx, c)
 	switch {
 	case err != nil:
 		e.Cleanup, e.CleanupError, e.Container = protocol.Failed, docker.Diagnostic(err), c

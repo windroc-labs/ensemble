@@ -3,15 +3,15 @@
 import dataclasses
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.common import SessionStore
-from ensemble.session.engine.client_state import LocalHome
-from ensemble.session.engine.types import Access, Launch, Permission, Spec
+from ensemble.session.engine.types import LOCAL_CONTEXT, Access, Launch, Permission, Spec
 from tests.session.case import REPO, Case
-from tests.session.unit.clients.support import homed, packaged_table
+from tests.session.unit.clients.support import packaged_table
 from tests.utils.sandbox import scratch
 
 PLUGIN_OFF = ("-c", "plugins.ensemble@windroc.enabled=false")
@@ -60,7 +60,8 @@ def said(role, *texts):
 def committed_headless(
     client: CodexClient, spec: Spec, permission: Permission = Permission.AUTO
 ) -> Launch:
-    run = homed(client.headless(), permission=permission)
+    run = client.headless()
+    run._context = replace(LOCAL_CONTEXT, permission=permission)
     launch = run.launch(spec)
     run.commit()
     return launch
@@ -69,7 +70,8 @@ def committed_headless(
 def committed_tui(
     client: CodexClient, spec: Spec, hook, permission: Permission = Permission.AUTO
 ) -> Launch:
-    run = homed(client.tui(), permission=permission)
+    run = client.tui()
+    run._context = replace(LOCAL_CONTEXT, permission=permission)
     launch = run.launch(spec, hook)
     run.commit()
     return launch
@@ -111,7 +113,7 @@ class Base(Case):
         )
 
     def prepare(self):
-        return self.common.save(self.common.prepare(self.spec, LocalHome()))
+        return self.common.save(self.common.prepare(self.spec))
 
     def rollout(self, native=NATIVE, *, cwd=None, parent=None, stamp=100):
         path = self.codex_home / "sessions" / "2026" / "10" / "11" / f"rollout-test-{native}.jsonl"

@@ -24,9 +24,6 @@ from tests.session.fakes.terminal import ScreenHost
 from tests.session.hosted_support import SID, HostedTuiBase
 from tests.utils.cli_help import check_examples, help_text, parse_only
 
-# The packaged Docker Host, as a Host listing nothing: no docker process.
-NO_DOCKER = '[session.hosts.docker]\nimplementation = "tests.session.unit.cli_test:ElsewhereHost"\n'
-
 
 class CliHost(ScreenHost):
     current: ScreenHost
@@ -193,7 +190,6 @@ class ControlBase(HostedTuiBase):
         Path(self.ensemble).mkdir(exist_ok=True)
         Path(self.ensemble, "config.local.toml").write_text(
             '[session.hosts.tmux]\nimplementation = "tests.session.unit.cli_test:CliHost"\n'
-            f"{NO_DOCKER}"
             '[session.clients.fake]\nimplementation = "tests.session.fake_client:FakeClient"\n'
             "tui = true\n"
             f"scenario = {json.dumps(self.scenario)}\nlog = {json.dumps(self.log)}\n"
@@ -663,7 +659,6 @@ class Ls(HostedTuiBase):
         Path(self.ensemble).mkdir(exist_ok=True)
         Path(self.ensemble, "config.local.toml").write_text(
             '[session.hosts.tmux]\nimplementation = "tests.session.unit.cli_test:CliHost"\n'
-            f"{NO_DOCKER}"
         )
 
     def invoke(self, *argv):

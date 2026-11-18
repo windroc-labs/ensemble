@@ -1,6 +1,5 @@
 """Codex account usage and session inspection queries."""
 
-import dataclasses
 import json
 import os
 import sys
@@ -8,7 +7,6 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import CodexClient
-from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     ConfigError,
     Launch,
@@ -38,8 +36,7 @@ class SessionStatusTest(Base):
         info = self.client.session_status(
             SessionInfo(
                 sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-            ),
-            home=LocalHome(),
+            )
         )
         self.assertIsInstance(info, SessionStatus)
         self.assertEqual((info.resumable, info.last_active), ("yes", 300))
@@ -52,8 +49,7 @@ class SessionStatusTest(Base):
         self.prepare()
         state = self.common.bind(str(self.work), self.spec.sid, NATIVE)
         original = self.rollout()
-        recorded = Path(state.snapshot.codex_home, "archived", original.name)
-        recorded.parent.mkdir()
+        recorded = Path(self.work, original.name)
         original.rename(recorded)
         info = SessionInfo(
             sid=self.spec.sid,
@@ -62,31 +58,18 @@ class SessionStatusTest(Base):
             transcript=str(recorded),
             resume="rm -rf ~",
         )
-        resume = self.common.resume_command(state)
         self.assertEqual(
-            self.client.session_status(info, home=LocalHome()),
-            SessionStatus("yes", recorded.stat().st_mtime, resume),
-        )
-        outside = Path(self.work, original.name)
-        recorded.rename(outside)
-        self.assertEqual(
-            self.client.session_status(
-                dataclasses.replace(info, transcript=str(outside)), home=LocalHome()
-            ),
-            SessionStatus("unknown", None, resume),
+            self.client.session_status(info),
+            SessionStatus("yes", recorded.stat().st_mtime, self.common.resume_command(state)),
         )
 
     def test_an_unrecorded_or_unbound_run_is_no(self):
         info = SessionInfo(
             sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
         )
-        self.assertEqual(
-            self.client.session_status(info, home=LocalHome()), SessionStatus("no", None, "")
-        )
+        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
         self.prepare()
-        self.assertEqual(
-            self.client.session_status(info, home=LocalHome()), SessionStatus("no", None, "")
-        )
+        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
 
 
 class UsageTest(Case):

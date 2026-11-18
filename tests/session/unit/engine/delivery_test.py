@@ -158,17 +158,14 @@ class Deliver(Case):
         self.assertLess(took, 0.5 + 2)
 
     def test_wait_is_bounded_while_other_events_keep_coming(self):
-        # Waits on the stream's stop, not time.sleep: once deliver returns it ends, so no thread outlives the test.
-        def busy(stop):
+        def busy():
             for _ in range(200):  # 5 s, then the stream waits
-                if stop.wait(delivery.POLL / 4):
-                    return
+                time.sleep(delivery.POLL / 4)
                 yield Activity()
 
         for open_turn, want in ((False, Delivery.UNDELIVERED), (True, Delivery.QUEUED)):
             with self.subTest(open_turn=open_turn):
-                session = FakeSession(state=StatusState.WORKING)
-                session._events = busy(session._stop)
+                session = FakeSession(state=StatusState.WORKING, events=busy())
                 found, took = self.deliver(session, open_turn=open_turn, wait=0.5)
                 self.assertEqual(found[0], want)
                 self.assertLess(took, 0.5 + 2)

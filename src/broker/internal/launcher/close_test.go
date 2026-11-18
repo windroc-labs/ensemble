@@ -19,12 +19,12 @@ func TestClose(t *testing.T) {
 		"removed":       {container + "\n", nil, true, ""},
 		"absent":        {"", &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}, false, ""},
 		"absent exit 0": {"", nil, false, ""},
-		"unreachable":   {"", unreachableErr, false, protocol.DockerUnreachable},
+		"unreachable":   {"", docker.ErrUnreachable, false, protocol.DockerUnreachable},
 		"failed":        {"", &docker.CommandError{Exit: 1, Stderr: "removal of container in progress"}, false, protocol.CloseFailed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(tc.out), tc.err }}
-			got, err := closeOn(Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, container)
+			got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: &fakeTokens{}}.Close(context.Background(), container)
 			if len(d.calls) != 1 || !slices.Equal(d.calls[0], []string{"rm", "--force", container}) {
 				t.Fatalf("%q", d.calls)
 			}
@@ -49,8 +49,8 @@ func TestCloseMakesNoCodexCall(t *testing.T) {
 			log = append(log, args[0])
 			return []byte(container + "\n"), removal
 		}}
-		h := Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: &fakeTokens{}, Codex: &fakeCodexCreds{log: &log}}
-		got, err := closeOn(h, container)
+		h := Host{Docker: d, Linear: &fakeLinear{}, GitHub: &fakeTokens{}, Codex: &fakeCodexCreds{log: &log}}
+		got, err := h.Close(context.Background(), container)
 		if !slices.Equal(log, []string{"rm"}) {
 			t.Fatalf("calls %q", log)
 		}
@@ -70,7 +70,7 @@ func TestCloseRevokesBeforeRemove(t *testing.T) {
 		return []byte(container + "\n"), nil
 	}}
 	tokens := &fakeTokens{readFiles: true}
-	got, err := closeOn(Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: tokens}, container)
+	got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || got != (CloseResult{Container: container, Removed: true}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -91,7 +91,7 @@ func TestCloseAbsentContainer(t *testing.T) {
 	absent := &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}
 	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, absent }}
 	tokens := &fakeTokens{readFiles: true}
-	got, err := closeOn(Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: tokens}, container)
+	got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || got != (CloseResult{Container: container, Removed: false}) || !docker.Absent(tokens.readErr) {
 		t.Fatalf("%+v %v read %v", got, err, tokens.readErr)
 	}
@@ -107,51 +107,9 @@ func TestCloseRemovesWhenReadFails(t *testing.T) {
 			return []byte(container + "\n"), nil
 		}}
 		tokens := &fakeTokens{readFiles: true}
-		got, err := closeOn(Host{Daemons: one(d), Linear: &fakeLinear{}, GitHub: tokens}, container)
+		got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 		if err != nil || got != (CloseResult{Container: container, Removed: true}) || tokens.readErr == nil || !hasCall(d, "rm") {
 			t.Fatalf("%v: %+v %v", readErr, got, err)
 		}
-	}
-}
-
-// closeOn closes container on h's default daemon, which answers its ID query as testDaemon.
-func closeOn(h Host, container string) (CloseResult, error) {
-	h.Daemons = slices.Clone(h.Daemons)
-	h.Daemons[0].Runner = identifiedRunner{testDaemon, h.Daemons[0].Runner}
-	return h.Close(context.Background(), h.Daemons[0], container)
-}
-
-// identifiedRunner answers the daemon ID query with id and passes every other call to r.
-type identifiedRunner struct {
-	id string
-	r  docker.Runner
-}
-
-func (i identifiedRunner) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
-	if slices.Equal(args, docker.InfoID) {
-		return []byte(`"` + i.id + `"` + "\n"), nil
-	}
-	return i.r.Run(ctx, args, stdin)
-}
-
-func TestCloseOnLocalDaemon(t *testing.T) {
-	remote := &fakeDocker{}
-	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(container + "\n"), nil }}
-	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
-	got, err := h.Close(context.Background(), h.Daemons[1], container)
-	if err != nil || !got.Removed || len(remote.calls) != 0 || !slices.ContainsFunc(local.calls, func(c []string) bool { return c[0] == "rm" }) {
-		t.Fatalf("%+v %v; remote %q local %q", got, err, remote.calls, local.calls)
-	}
-}
-
-func TestCloseOnUnreachableDaemon(t *testing.T) {
-	remote := &fakeDocker{}
-	local := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-	h := onTwo(Host{Linear: &fakeLinear{}, GitHub: &fakeTokens{}}, identifiedRunner{testDaemon, remote}, local)
-	if _, err := h.Close(context.Background(), h.Daemons[1], container); protoErr(t, err).Code != protocol.DockerUnreachable {
-		t.Fatal(err)
-	}
-	if len(remote.calls) != 0 {
-		t.Fatalf("closed on the other daemon: %q", remote.calls)
 	}
 }

@@ -528,7 +528,6 @@ ENVIRONMENT = {
     "plugins": ["dummy-plugin", SOURCE],
     "lock": "dummy-lock",
     "prefetch": {"repo": "o/r", "ref": "main"},
-    "daemon": "local",
 }
 
 
@@ -566,9 +565,7 @@ class EnvironmentSpecTest(Case):
         self.assertEqual(found.plugins, ("dummy-plugin", SOURCE))
         self.assertEqual(found.lock, "dummy-lock")
         self.assertEqual(dict(found.prefetch), {"repo": "o/r", "ref": "main"})
-        self.assertEqual(found.daemon, "local")
         for changes in (
-            {"daemon": None},
             {"image": session.EnvironmentSpec.WORKER},
             {"image": "sha256:" + "b" * 64},
             {"image": "registry/team/mini-op"},
@@ -608,10 +605,6 @@ class EnvironmentSpecTest(Case):
             ("prefetch", {"ref": "main"}),
             ("prefetch", {"repo": "o/r", "branch": "main"}),
             ("prefetch", "o/r"),
-            ("daemon", "remote"),
-            ("daemon", "Local"),
-            ("daemon", ""),
-            ("daemon", 1),
         ):
             with self.subTest(key=key, value=value), self.assertRaisesRegex(ConfigError, key):
                 environment(**{key: value})
@@ -628,7 +621,7 @@ class EnvironmentSpecTest(Case):
     def test_persisted_round_trips(self):
         for found in (
             environment(),
-            environment(lock=None, prefetch=None, daemon=None),
+            environment(lock=None, prefetch=None),
         ):
             with self.subTest(found):
                 data = found.persisted()

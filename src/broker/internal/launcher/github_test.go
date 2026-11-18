@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ensemble/broker/internal/credential"
+	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -152,7 +153,7 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 		code protocol.Code
 	}{
 		"github":      {protocol.New(protocol.GitHubFailed, "GitHub request failed: GitHub answered HTTP 500."), protocol.GitHubFailed},
-		"unreachable": {errors.Join(errors.New("x"), unreachableErr), protocol.DockerUnreachable},
+		"unreachable": {errors.Join(errors.New("x"), docker.ErrUnreachable), protocol.DockerUnreachable},
 		"opaque":      {errors.New("writing a GitHub token into the container failed"), protocol.StartFailed},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -173,8 +174,7 @@ func TestMaintainGitHub(t *testing.T) {
 	tokens := &fakeTokens{}
 	d := &fakeDocker{}
 	h := mountHost()
-	h = withRunner(h, identifiedRunner{testDaemon, d})
-	h.GitHub = tokens
+	h.Docker, h.GitHub = d, tokens
 	got, err := h.Maintain(context.Background(), container, githubManifest(t), false)
 	if err != nil || got.Container != container || len(got.Results) != 1 || got.Results[0].Credential != "github" ||
 		*got.Results[0].ExpiresAt != expiry[0].ExpiresAt || got.Deadline != nil {
@@ -190,8 +190,7 @@ func TestMaintainGitHub(t *testing.T) {
 		t.Fatalf("refreshed with %v, want the manifest's set", tokens.permissions)
 	}
 	host := mountHost()
-	host = withRunner(host, identifiedRunner{testDaemon, &fakeDocker{}})
-	host.GitHub = &fakeTokens{refresh: unreachableErr}
+	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{refresh: docker.ErrUnreachable}
 	got, err = host.Maintain(context.Background(), container, githubManifest(t), false)
 	if e := results(got)["github"].Error; err != nil || len(got.Results) != 1 || e == nil || e.Code != protocol.DockerUnreachable {
 		t.Errorf("unreachable: %+v %v", got, err)

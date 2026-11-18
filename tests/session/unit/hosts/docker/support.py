@@ -107,13 +107,3 @@ class FakePopen:
         self.calls.append((argv, kw, stdin.read() if hasattr(stdin, "read") else stdin))
         self.procs.append(FakeProc(argv, *self.results.pop(0)))
         return self.procs[-1]
-
-
-def ssh_dir(root):
-    directory = os.path.join(root, "broker-ssh")
-    os.makedirs(directory, exist_ok=True)
-    wrapper = os.path.join(directory, "ssh")
-    with open(wrapper, "w"):
-        pass
-    os.chmod(wrapper, 0o755)
-    return directory

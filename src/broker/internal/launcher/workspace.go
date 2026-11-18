@@ -15,42 +15,11 @@ import (
 
 const checkTimeout = 120 * time.Second
 
-// WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work.
-func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string) (WorkspaceResult, error) {
-	return h.workspaceRm(ctx, d, volume, func(path string) error {
-		dirty, err := h.checkWorkspace(ctx, d, volume, path)
-		if err != nil {
-			return err
-		}
-		if len(dirty) > 0 {
-			return protocol.Newf(protocol.WorkspaceDirty,
-				"Workspace %s has uncommitted or unpushed work in: %s. Delete it anyway with ensemble-broker workspace-rm --volume %s --force.",
-				volume, strings.Join(dirty, ", "), volume)
-		}
-		return nil
-	})
-}
-
-// WorkspaceRmForce deletes a workspace volume unchecked.
-func (h Host) WorkspaceRmForce(ctx context.Context, d Daemon, volume string) (WorkspaceResult, error) {
-	return h.workspaceRm(ctx, d, volume, func(string) error { return nil })
-}
-
-// workspaceRm: an absent volume is success. A session's workspace takes its state volume with it, first, so a failed
-// state removal keeps the workspace that reclaim finds the session by. saved checks the workspace at its path.
-func (h Host) workspaceRm(ctx context.Context, d Daemon, volume string, saved func(path string) error) (WorkspaceResult, error) {
-	session, isSession := sessionOf(volume)
-	removeState := func() error {
-		if !isSession {
-			return nil
-		}
-		return h.removeStateVolume(ctx, d, session, protocol.WorkspaceFailed)
-	}
-	labels, err := h.volumeLabels(ctx, d, volume)
+// WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work, or at once with force;
+// an absent volume is success.
+func (h Host) WorkspaceRm(ctx context.Context, volume string, force bool) (WorkspaceResult, error) {
+	labels, err := h.volumeLabels(ctx, volume)
 	if docker.Absent(err) {
-		if err := removeState(); err != nil {
-			return WorkspaceResult{}, err
-		}
 		return WorkspaceResult{Volume: volume}, nil
 	}
 	if err != nil {
@@ -59,27 +28,32 @@ func (h Host) workspaceRm(ctx context.Context, d Daemon, volume string, saved fu
 	if labels[kindLabel] == "" {
 		return WorkspaceResult{}, protocol.Newf(protocol.WorkspaceRejected, "Volume %s is not an ensemble workspace (no %s label).", volume, kindLabel)
 	}
-	if err := saved(labels[workspaceLabel]); err != nil {
-		return WorkspaceResult{}, err
+	if !force {
+		dirty, err := h.checkWorkspace(ctx, volume, labels[workspaceLabel])
+		if err != nil {
+			return WorkspaceResult{}, err
+		}
+		if len(dirty) > 0 {
+			return WorkspaceResult{}, protocol.Newf(protocol.WorkspaceDirty,
+				"Workspace %s has uncommitted or unpushed work in: %s. Delete it anyway with ensemble-broker workspace-rm --volume %s --force.",
+				volume, strings.Join(dirty, ", "), volume)
+		}
 	}
-	if err := removeState(); err != nil {
-		return WorkspaceResult{}, err
-	}
-	if _, err := d.Runner.Run(ctx, []string{"volume", "rm", volume}, nil); err != nil {
+	if _, err := h.Docker.Run(ctx, []string{"volume", "rm", volume}, nil); err != nil {
 		return WorkspaceResult{}, diagnosed(err, protocol.WorkspaceFailed, "Deleting volume "+volume+" failed.")
 	}
 	return WorkspaceResult{Volume: volume, Removed: true}, nil
 }
 
 // checkWorkspace runs the newest worker image's workspace-check on the volume, read-only and offline, mounted where the worker saw it.
-func (h Host) checkWorkspace(ctx context.Context, d Daemon, volume, path string) ([]string, error) {
+func (h Host) checkWorkspace(ctx context.Context, volume, path string) ([]string, error) {
 	if !strings.HasPrefix(path, "/") || filepath.Clean(path) != path || hasControl(path) {
 		return nil, protocol.Newf(protocol.WorkspaceRejected, "Volume %s has no clean absolute %s path.", volume, workspaceLabel)
 	}
 	if err := checkTree(path, protocol.WorkspaceRejected); err != nil {
 		return nil, err
 	}
-	out, err := d.Runner.Run(ctx, []string{"image", "ls", "--filter", "reference=ensemble-worker", "--format", "{{.Repository}}:{{.Tag}}"}, nil)
+	out, err := h.Docker.Run(ctx, []string{"image", "ls", "--filter", "reference=ensemble-worker", "--format", "{{.Repository}}:{{.Tag}}"}, nil)
 	if err != nil {
 		return nil, failure(err, protocol.WorkspaceFailed, "Cannot list worker images.")
 	}
@@ -93,7 +67,7 @@ func (h Host) checkWorkspace(ctx context.Context, d Daemon, volume, path string)
 	if image == "" {
 		return nil, protocol.New(protocol.WorkspaceFailed, "No worker image to check the workspace with; run ensemble-broker build.")
 	}
-	info, err := h.checkImage(ctx, d, image)
+	info, err := h.checkImage(ctx, image)
 	if err != nil {
 		return nil, failure(err, protocol.WorkspaceFailed, "Worker image "+image+" cannot check the workspace.")
 	}
@@ -102,13 +76,12 @@ func (h Host) checkWorkspace(ctx context.Context, d Daemon, volume, path string)
 	name := "ensemble-check-" + hex.EncodeToString(id)
 	cctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	out, err = d.Runner.Run(cctx, []string{"run", "--rm", "--name", name, "--label", "ensemble.check=1", "--cap-drop", "ALL",
+	out, err = h.Docker.Run(cctx, []string{"run", "--rm", "--name", name, "--label", "ensemble.check=1", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges", "--user", "agent", "--network", "none", "--mount", volumeMount(volume, path, true),
 		"--entrypoint", Python, info.ID, "-I", checker, path, cache}, nil)
 	if err != nil {
-		e := diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
-		e.Message += removeHelper(ctx, d, name)
-		return nil, e
+		_, _ = h.Docker.Run(context.WithoutCancel(ctx), []string{"rm", "--force", name}, nil)
+		return nil, diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
 	}
 	var found struct{ Dirty *[]string }
 	if json.Unmarshal(out, &found) != nil || found.Dirty == nil {

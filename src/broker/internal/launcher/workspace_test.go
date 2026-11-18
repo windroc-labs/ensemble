@@ -19,14 +19,12 @@ var image = "ensemble-worker:" + imageKey
 
 // check is a scripted Docker for workspace-rm: each field steers one kind of call.
 type check struct {
-	labels     string // volume inspect output; "" absent
-	images     string // image ls output
-	out        string // check container stdout
-	runErr     error
-	rmErr      error
-	inspect    error
-	readers    string // the state readers' ps output
-	stateRmErr error  // the state volume's rm
+	labels  string // volume inspect output; "" absent
+	images  string // image ls output
+	out     string // check container stdout
+	runErr  error
+	rmErr   error
+	inspect error
 }
 
 func (c *check) docker() *fakeDocker {
@@ -45,14 +43,9 @@ func (c *check) docker() *fakeDocker {
 		case "image inspect":
 			return inspectJSON(digest, goodLabels(), time.Time{}), nil
 		case "volume rm":
-			if args[2] == stateVol {
-				return []byte(stateVol + "\n"), c.stateRmErr
-			}
 			return []byte(volume + "\n"), c.rmErr
-		case "ps --all":
-			return []byte(c.readers), nil
 		case "rm --force":
-			return []byte(strings.Join(args[2:], "\n") + "\n"), nil
+			return []byte(args[2] + "\n"), nil
 		}
 		if args[0] == "run" {
 			return []byte(c.out), c.runErr
@@ -72,11 +65,7 @@ func clean() *check {
 
 func workspaceRm(c *check, force bool) (WorkspaceResult, *fakeDocker, error) {
 	d := c.docker()
-	rm := Host{}.WorkspaceRm
-	if force {
-		rm = Host{}.WorkspaceRmForce
-	}
-	got, err := rm(context.Background(), Daemon{Runner: d}, volume)
+	got, err := Host{Docker: d}.WorkspaceRm(context.Background(), volume, force)
 	return got, d, err
 }
 
@@ -85,12 +74,8 @@ func TestWorkspaceRmClean(t *testing.T) {
 	if err != nil || got != (WorkspaceResult{Volume: volume, Removed: true}) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if want := []string{"volume inspect", "image ls", "image inspect", "run --rm", "ps --all", "volume rm", "volume rm"}; !slices.Equal(d.verbs(), want) {
+	if want := []string{"volume inspect", "image ls", "image inspect", "run --rm", "volume rm"}; !slices.Equal(d.verbs(), want) {
 		t.Fatalf("%q", d.calls)
-	}
-	readers := []string{"ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=worker_1"}
-	if !slices.Equal(d.calls[4], readers) || !slices.Equal(d.calls[5], []string{"volume", "rm", stateVol}) || !slices.Equal(d.calls[6], []string{"volume", "rm", volume}) {
-		t.Fatalf("state before workspace: %q", d.calls[4:])
 	}
 	if want := []string{"image", "ls", "--filter", "reference=ensemble-worker", "--format", "{{.Repository}}:{{.Tag}}"}; !slices.Equal(d.calls[1], want) {
 		t.Fatalf("%q", d.calls[1])
@@ -108,59 +93,23 @@ func TestWorkspaceRmClean(t *testing.T) {
 	if !slices.Equal(run, want) {
 		t.Fatalf("check run\n got %q\nwant %q", run, want)
 	}
+	if !slices.Equal(d.calls[4], []string{"volume", "rm", volume}) {
+		t.Fatalf("%q", d.calls[4])
+	}
 }
 
 func TestWorkspaceRmAbsentAndForce(t *testing.T) {
 	for _, force := range []bool{false, true} {
 		got, d, err := workspaceRm(&check{}, force)
-		if err != nil || got != (WorkspaceResult{Volume: volume}) || !slices.Equal(d.verbs(), []string{"volume inspect", "ps --all", "volume rm"}) ||
-			d.calls[2][2] != stateVol {
+		if err != nil || got != (WorkspaceResult{Volume: volume}) || len(d.calls) != 1 {
 			t.Fatalf("absent force=%v: %+v %v %q", force, got, err, d.calls)
 		}
 	}
 	c := clean()
 	c.out = `{"dirty": ["src/o/a"]}`
 	got, d, err := workspaceRm(c, true)
-	if err != nil || !got.Removed || !slices.Equal(d.verbs(), []string{"volume inspect", "ps --all", "volume rm", "volume rm"}) {
+	if err != nil || !got.Removed || !slices.Equal(d.verbs(), []string{"volume inspect", "volume rm"}) {
 		t.Fatalf("%+v %v %q", got, err, d.calls)
-	}
-}
-
-func TestWorkspaceRmStopsReadersThenRemovesState(t *testing.T) {
-	c := clean()
-	c.readers = "r1\nr2\n"
-	_, d, err := workspaceRm(c, true)
-	if err != nil || !slices.Equal(d.verbs(), []string{"volume inspect", "ps --all", "rm --force", "volume rm", "volume rm"}) ||
-		!slices.Equal(d.calls[2], []string{"rm", "--force", "r1", "r2"}) {
-		t.Fatalf("%v %q", err, d.calls)
-	}
-}
-
-func TestWorkspaceRmAbsentStateIsSuccess(t *testing.T) {
-	c := clean()
-	c.stateRmErr = &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: get " + stateVol + ": no such volume"}
-	got, _, err := workspaceRm(c, true)
-	if err != nil || !got.Removed {
-		t.Fatalf("%+v %v", got, err)
-	}
-}
-
-func TestWorkspaceRmKeepsTheWorkspaceWhenStateRemovalFails(t *testing.T) {
-	c := clean()
-	c.stateRmErr = &docker.CommandError{Exit: 1, Stderr: "volume is in use"}
-	_, d, err := workspaceRm(c, true)
-	e := protoErr(t, err)
-	if e.Code != protocol.WorkspaceFailed || !strings.Contains(e.Message, stateVol) ||
-		!slices.Equal(d.verbs(), []string{"volume inspect", "ps --all", "volume rm"}) {
-		t.Fatalf("%+v %q", e, d.calls)
-	}
-}
-
-func TestWorkspaceRmOfAnotherVolumeLeavesStateAlone(t *testing.T) {
-	d := clean().docker()
-	if _, err := (Host{}).WorkspaceRmForce(context.Background(), Daemon{Runner: d}, "custom"); err != nil ||
-		!slices.Equal(d.verbs(), []string{"volume inspect", "volume rm"}) {
-		t.Fatalf("%v %q", err, d.calls)
 	}
 }
 
@@ -213,7 +162,7 @@ func TestWorkspaceRmFailed(t *testing.T) {
 		"run fails":   {func(c *check) { c.runErr = failRun }, []string{"volume inspect", "image ls", "image inspect", "run --rm", "rm --force"}},
 		"bad output":  {func(c *check) { c.out = "Traceback\n" }, []string{"volume inspect", "image ls", "image inspect", "run --rm"}},
 		"null dirty":  {func(c *check) { c.out = `{"dirty": null}` }, []string{"volume inspect", "image ls", "image inspect", "run --rm"}},
-		"rm fails":    {func(c *check) { c.rmErr = &docker.CommandError{Exit: 1, Stderr: "volume is in use"} }, []string{"volume inspect", "image ls", "image inspect", "run --rm", "ps --all", "volume rm", "volume rm"}},
+		"rm fails":    {func(c *check) { c.rmErr = &docker.CommandError{Exit: 1, Stderr: "volume is in use"} }, []string{"volume inspect", "image ls", "image inspect", "run --rm", "volume rm"}},
 		"inspect err": {func(c *check) { c.inspect = &docker.CommandError{Exit: 1, Stderr: "boom"} }, []string{"volume inspect"}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -233,21 +182,8 @@ func TestWorkspaceRmFailed(t *testing.T) {
 		})
 	}
 	k := clean()
-	k.inspect = unreachableErr
+	k.inspect = docker.ErrUnreachable
 	if _, _, err := workspaceRm(k, false); protoErr(t, err).Code != protocol.DockerUnreachable {
 		t.Fatal(err)
-	}
-}
-
-func TestWorkspaceRmSameNameOnBothDaemons(t *testing.T) {
-	remote, local := clean().docker(), clean().docker()
-	h := onTwo(Host{}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
-	got, err := h.WorkspaceRmForce(context.Background(), h.Daemons[1], volume)
-	if err != nil || !got.Removed || len(remote.calls) != 0 {
-		t.Fatalf("%+v %v; remote %q", got, err, remote.calls)
-	}
-	got, err = h.WorkspaceRmForce(context.Background(), h.Daemons[0], volume)
-	if err != nil || !got.Removed || len(remote.calls) == 0 {
-		t.Fatalf("target: %+v %v", got, err)
 	}
 }

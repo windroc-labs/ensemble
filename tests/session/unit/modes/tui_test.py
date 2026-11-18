@@ -829,8 +829,7 @@ class StartTest(Base):
         ):
             self.start(run=Projected(self.client))
         self.assertEqual(len(seen), 1)
-        self.assertEqual(replace(seen[0], home=None), context)
-        self.assertEqual(seen[0].home.persisted(), {"kind": "local"})
+        self.assertIs(seen[0], context)
         metadata = self.host.calls.worker.call_args.kwargs["metadata"]
         self.assertEqual(json.loads(metadata["runtime_files"]), projection)
         self.assertEqual(json.loads(metadata["home_persistent"]), ["sessions"])

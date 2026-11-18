@@ -174,7 +174,7 @@ class _Broker:
     def maintain(self, container, manifest):
         return SimpleNamespace(next_check=None, deadline=None, results=[])
 
-    def close(self, container, *, host):
+    def close(self, container):
         return None
 
 

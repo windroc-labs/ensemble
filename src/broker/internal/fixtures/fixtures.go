@@ -11,13 +11,14 @@ import (
 )
 
 type Context struct {
-	Home      string `json:"home"`
-	CWDExists bool   `json:"cwd_exists"`
-	Volume    string `json:"volume"`
-	Login     string `json:"login"`
-	Image     string `json:"image"`
-	Docker    string `json:"docker"`
-	Egress    string `json:"egress"` // the egress proxy's state; "": healthy
+	Home                string `json:"home"`
+	CWDExists           bool   `json:"cwd_exists"`
+	Volume              string `json:"volume"`
+	ClaudeDirHasSymlink bool   `json:"claude_dir_has_symlink"`
+	Login               string `json:"login"`
+	Image               string `json:"image"`
+	Docker              string `json:"docker"`
+	Egress              string `json:"egress"` // the egress proxy's state; "": healthy
 }
 
 // Case is one entry of a definition's table, <definition>.json.

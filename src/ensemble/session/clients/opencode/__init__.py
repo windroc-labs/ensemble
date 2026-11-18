@@ -10,7 +10,7 @@ from ensemble.session.clients.base import Client
 from ensemble.session.clients.opencode.common import IDENTITY, SELECTORS, VALUED, OpenCodeCommon
 from ensemble.session.clients.opencode.headless import OpenCodeHeadless
 from ensemble.session.clients.opencode.tui import OpenCodeTui
-from ensemble.session.engine.types import HomeStore, SessionInfo, Spec
+from ensemble.session.engine.types import SessionInfo, Spec
 
 
 class OpenCodeClient(Client):
@@ -57,16 +57,8 @@ class OpenCodeClient(Client):
     def usage(self, output):
         return self.common.parse_usage(output)
 
-    def session_status(
-        self,
-        info: SessionInfo,
-        *,
-        env: Mapping[str, str] = MappingProxyType({}),
-        home: HomeStore,
-    ):
-        return self.common.session_status(
-            info.cwd, info.sid, env, transcript=info.transcript, home=home
-        )
+    def session_status(self, info: SessionInfo, *, env: Mapping[str, str] = MappingProxyType({})):
+        return self.common.session_status(info.cwd, info.sid, env, transcript=info.transcript)
 
     def writable_dirs(self, spec: Spec):
         dirs = (spec.access.cwd, *spec.access.dirs)

@@ -62,7 +62,7 @@ def inspect(**changes):
         "NetworkSettings": {"Networks": {NETWORK: {}}},
         "Mounts": [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
-            {"Type": "volume", "Name": "ensemble-state-live", "Destination": CLAUDE_DIR},
+            {"Type": "bind", "Source": CLAUDE_DIR, "Destination": CLAUDE_DIR},
             {"Type": "tmpfs", "Destination": "/run/ensemble/secrets"},
         ],
     }
@@ -377,8 +377,11 @@ class BaselineTest(Case):
         return gate.baseline(found, "live", CWD, list(plan), NETWORK)
 
     def test_compliant_containers_pass(self):
+        volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
+        desktop = {"Type": "bind", "Source": "/host_mnt" + CLAUDE_DIR, "Destination": CLAUDE_DIR}
         cases = {
             "claude": inspect(),
+            "docker desktop shared folder": inspect(Mounts=[volume, desktop]),
             "extra hosts None": inspect(HostConfig__ExtraHosts=None),
             "extra hosts []": inspect(HostConfig__ExtraHosts=[]),
             "no-new-privileges:true": inspect(HostConfig__SecurityOpt=["no-new-privileges:true"]),
@@ -386,18 +389,13 @@ class BaselineTest(Case):
         for label, found in cases.items():
             with self.subTest(label):
                 self.assertEqual(self.check(found), [])
-        volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
-        codex = "/Users/u/.ensemble/docker-state/live/codex"
-        kept = [
-            {"Type": "volume", "Name": "ensemble-state-live", "Destination": f"{codex}/{d}"}
-            for d in ("sessions", "config")
-        ]
-        plan = (f"{codex}/sessions", f"{codex}/config")
-        self.assertEqual(self.check(inspect(Mounts=[volume, *kept]), plan), [])
+        sessions = "/Users/u/.ensemble/docker-state/live/codex/sessions"
+        codex = {"Type": "bind", "Source": sessions, "Destination": sessions}
+        self.assertEqual(self.check(inspect(Mounts=[volume, codex]), (sessions,)), [])
 
     def test_each_violation_alone(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
-        state = {"Type": "volume", "Name": "ensemble-state-live", "Destination": CLAUDE_DIR}
+        bind = {"Type": "bind", "Source": CLAUDE_DIR, "Destination": CLAUDE_DIR}
         cases = {
             "cap": inspect(HostConfig__CapDrop=["NET_RAW"]),
             "no-new-privileges": inspect(HostConfig__SecurityOpt=[]),
@@ -411,24 +409,30 @@ class BaselineTest(Case):
             "pid": inspect(HostConfig__PidMode="host"),
             "ipc": inspect(HostConfig__IpcMode="host"),
             "extra volume": inspect(
-                Mounts=[volume, state, {"Type": "volume", "Name": "x", "Destination": "/x"}]
+                Mounts=[volume, bind, {"Type": "volume", "Name": "x", "Destination": "/x"}]
             ),
-            "wrong volume target": inspect(Mounts=[{**volume, "Destination": "/elsewhere"}, state]),
-            "no state volume": inspect(Mounts=[volume]),
-            "state volume elsewhere": inspect(Mounts=[volume, {**state, "Destination": "/x"}]),
+            "wrong volume target": inspect(Mounts=[{**volume, "Destination": "/elsewhere"}, bind]),
+            "bind not in plan": inspect(
+                Mounts=[volume, bind, {"Type": "bind", "Source": "/opt/x", "Destination": "/opt/x"}]
+            ),
         }
         for label, found in cases.items():
             with self.subTest(label):
                 self.assertEqual(len(self.check(found)), 1, self.check(found))
 
-    def test_every_bind_mount_is_a_problem(self):
+    def test_a_cwd_or_docker_socket_bind_is_one_problem(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
-        state = {"Type": "volume", "Name": "ensemble-state-live", "Destination": CLAUDE_DIR}
-        for source in (CLAUDE_DIR, CWD, "/var/run/docker.sock", "/host_mnt" + CLAUDE_DIR):
+        sock = "/var/run/docker.sock"
+        for source, destination, plan, problem in (
+            ("/host_mnt" + CWD + "/src", "/w", CWD + "/src", "cwd"),
+            *((source, "/w", source, "cwd") for source in (CWD, "/Users/u/work", CWD + "/src")),
+            (sock, sock, sock, "docker.sock"),
+        ):
             with self.subTest(source):
-                bind = {"Type": "bind", "Source": source, "Destination": source}
-                problems = self.check(inspect(Mounts=[volume, state, bind]))
-                self.assertEqual(problems, [f"bind mount {source} at {source}"])
+                bind = {"Type": "bind", "Source": source, "Destination": destination}
+                problems = self.check(inspect(Mounts=[volume, bind]), (plan,))
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn(problem, problems[0])
 
 
 class EgressProxyTest(Case):

@@ -15,8 +15,7 @@ from unittest import mock
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon
 from ensemble.session.clients.claude.tui import ClaudeTui
-from ensemble.session.engine.client_state import LocalHome
-from ensemble.session.engine.types import LOCAL_CONTEXT, Access, Spec
+from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.jsonl import read_jsonl
@@ -491,7 +490,6 @@ class ClaudeTuiLaunch(Case):
                 "efforts": {"high": "h"},
             },
         ).tui()
-        tui._context = dataclasses.replace(LOCAL_CONTEXT, home=LocalHome())
         spec = Spec(
             workdir=self.proj,
             flags=("--permission-mode", "auto", "--strict-mcp-config"),
