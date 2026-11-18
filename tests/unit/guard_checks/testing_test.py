@@ -5,7 +5,7 @@ from unittest import mock
 from tests import guards
 from tests.case import REPO
 from tests.guard_checks import testing
-from tests.guard_samples import Sample, fixtures, test_suites
+from tests.guard_samples import Sample, fixtures, suite_starts
 
 
 class EveryTest(Sample):
@@ -19,7 +19,7 @@ class EveryTest(Sample):
             }
         )
         self.assertEqual(
-            test_suites(root, "tests"),
+            suite_starts(root, "tests"),
             [
                 (os.path.join(root, "tests/unit"), root),
                 (

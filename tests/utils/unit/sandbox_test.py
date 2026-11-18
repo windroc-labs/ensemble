@@ -356,7 +356,10 @@ class Supervise(Case):
         self.assertIn("leaked after the run: pid 400", stderr)
 
 
-class RunnerSandbox(unittest.TestCase):
+class RunnerSandbox(Case):
+    def _case_env(self):
+        return {}
+
     def test_the_runner_gives_each_test_the_sandbox(self):
         env = os.environ
         tmp, workspace = env["ENSEMBLE_TEST_SANDBOX"], env["ENSEMBLE_TEST_WORKSPACE"]
