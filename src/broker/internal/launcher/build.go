@@ -278,9 +278,10 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 	return meta.Version, dirs, nil
 }
 
+// prepared is a build context staged in tmp.
 type prepared struct {
-	key, version, dirs, baseID string
-	spec                       BuildSpec
+	tmp, key, version, dirs, baseID string
+	spec                            BuildSpec
 }
 
 // prepare is shared by Build and CheckClients so a key is derived one way.
@@ -303,38 +304,37 @@ func (h Host) prepare(ctx context.Context, d Daemon, pkg string, spec BuildSpec,
 	if err != nil {
 		return prepared{}, protocol.New(protocol.BuildFailed, "Cannot hash the build context.")
 	}
-	return prepared{key: key, version: version, dirs: dirs, baseID: base.ID, spec: spec}, nil
+	return prepared{tmp: tmp, key: key, version: version, dirs: dirs, baseID: base.ID, spec: spec}, nil
 }
 
 // Build reuses a matching image built within maxAge (<0: any age; 0: never); a rebuild installs each client's
 // latest release, without cache to refresh plugins.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
 	d, r, err := h.find(ctx, spec.Daemon, protocol.BuildFailed)
-	spec.Daemon = ""
 	if err != nil {
 		return BuildResult{}, err
 	}
-	return h.build(ctx, d, r, pkg, spec, maxAge)
+	return h.build(ctx, d, r, variant{pkg, spec.BaseImage, spec.Plugins, spec.ImagePlugins}, maxAge)
 }
 
-func (h Host) build(ctx context.Context, d Daemon, r records, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
+func (h Host) build(ctx context.Context, d Daemon, r records, v variant, maxAge time.Duration) (BuildResult, error) {
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")
 	if err != nil {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
 	}
 	defer os.RemoveAll(tmp)
-	p, err := h.prepare(ctx, d, pkg, spec, tmp)
+	p, err := h.prepare(ctx, d, v.Package, v.spec(), tmp)
 	if err != nil {
 		return BuildResult{}, err
 	}
-	key, version, dirs, spec := p.key, p.version, p.dirs, p.spec
+	key, version := p.key, p.version
 	image := "ensemble-worker:" + key
 	info, found, err := h.leaseImage(ctx, d, r, key)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	built := func(result BuildResult) (BuildResult, error) {
-		h.record(r, key, pkg, spec)
+		h.record(r, key, v.Package, p.spec)
 		h.afterBuild(r)
 		return result, nil
 	}
@@ -356,7 +356,7 @@ func (h Host) build(ctx context.Context, d Daemon, r records, pkg string, spec B
 		}
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases; check the network and retry.")
 	}
-	result, err := h.rebuild(ctx, d, r, tmp, key, version, dirs, spec, p.baseID, latest)
+	result, err := h.rebuild(ctx, d, r, p, latest)
 	var e *protocol.Error
 	if keep && errors.As(err, &e) && e.Code == protocol.BuildFailed {
 		why := e.Message
@@ -423,7 +423,8 @@ func (h Host) inUse(r records, key string) bool {
 	return err == nil && h.now().Sub(info.ModTime()) < variantLease
 }
 
-func (h Host) rebuild(ctx context.Context, d Daemon, r records, tmp, key, version, plugins string, spec BuildSpec, baseID string, v ClientVersions) (BuildResult, error) {
+func (h Host) rebuild(ctx context.Context, d Daemon, r records, p prepared, v ClientVersions) (BuildResult, error) {
+	tmp, key, version, plugins, spec, baseID := p.tmp, p.key, p.version, p.dirs, p.spec, p.baseID
 	image, userImage := "ensemble-worker:"+key, "ensemble-user:"+key
 	var uid, gid string
 	var err error
@@ -584,25 +585,24 @@ func (h Host) baseImage(ctx context.Context, d Daemon, ref string) (imageInfo, e
 
 func (h Host) useBase(ctx context.Context, d Daemon, ref, baseID, userImage string) (string, string, error) {
 	unexpected := protocol.New(protocol.BuildFailed, "Checking base image "+ref+" gave unexpected output.")
-	lines, err := h.baseCheck(ctx, d, ref, baseID, "65534:65534", "agent", "/usr/bin:/bin")
+	lines, err := h.baseCheck(ctx, d, ref, baseID, baseProbe{"65534:65534", "agent", "/usr/bin:/bin"})
 	if err != nil {
 		return "", "", err
 	}
-	missing := map[string]bool{}
-	var ids []string
-	if fields := strings.Fields(strings.Join(lines, " ")); len(lines) == 1 && lines[0] == "missing agent" {
-		missing["agent"] = true
-	} else if len(lines) == 1 && len(fields) == 3 && fields[0] == "agent" && numeric(fields[1]) && numeric(fields[2]) {
-		ids = fields[1:]
-	} else {
+	ids, ok := agentLine(lines)
+	if !ok {
 		return "", "", unexpected
+	}
+	missing := map[string]bool{}
+	if ids == nil {
+		missing["agent"] = true
 	}
 	// Commands are found as agent, who runs them (its home may be private); without agent, as nobody.
 	user := "65534:65534"
 	if ids != nil {
 		user = ids[0] + ":" + ids[1]
 	}
-	if lines, err = h.baseCheck(ctx, d, ref, baseID, user, "tools", checkPath); err != nil {
+	if lines, err = h.baseCheck(ctx, d, ref, baseID, baseProbe{user, "tools", checkPath}); err != nil {
 		return "", "", err
 	}
 	for _, line := range lines {
@@ -631,14 +631,32 @@ func (h Host) useBase(ctx context.Context, d Daemon, ref, baseID, userImage stri
 	return ids[0], ids[1], nil
 }
 
+// agentLine reads the agent check's output: agent's uid and gid, nil when the image has no agent.
+func agentLine(lines []string) (ids []string, ok bool) {
+	if len(lines) != 1 {
+		return nil, false
+	}
+	if lines[0] == "missing agent" {
+		return nil, true
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) != 3 || fields[0] != "agent" || !numeric(fields[1]) || !numeric(fields[2]) {
+		return nil, false
+	}
+	return fields[1:], true
+}
+
+// baseProbe is one run of the base-check script: as user, in mode, finding commands on path.
+type baseProbe struct{ user, mode, path string }
+
 // baseCheck runs offline and without capabilities.
-func (h Host) baseCheck(ctx context.Context, d Daemon, ref, baseID, user, mode, path string) ([]string, error) {
+func (h Host) baseCheck(ctx context.Context, d Daemon, ref, baseID string, p baseProbe) ([]string, error) {
 	script, err := checks.ReadFile("checks/base-check")
 	if err != nil {
 		return nil, protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
 	}
 	out, err := d.Runner.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--user", user, "--entrypoint", "/bin/sh", baseID, "-s", mode, path}, script)
+		"--user", p.user, "--entrypoint", "/bin/sh", baseID, "-s", p.mode, p.path}, script)
 	if err != nil {
 		return nil, diagnosed(err, protocol.BuildFailed, "Checking base image "+ref+" failed.")
 	}
@@ -721,20 +739,17 @@ func (h Host) prune(ctx context.Context, d Daemon, r records, key string) {
 		} else {
 			h.note("removed " + ref)
 			// A stale lease and none are alike: the lease goes with the first of its key's images.
-			_ = os.Remove(r.leasePath(refKey))
+			h.forget(r.leasePath(refKey))
 			if strings.HasPrefix(ref, "ensemble-worker:") {
-				_ = os.Remove(r.recordPath(refKey))
-				_ = os.Remove(r.replacedPath(refKey))
+				h.forget(r.recordPath(refKey))
+				h.forget(r.replacedPath(refKey))
 			}
 		}
 	}
 	replaced := map[string]bool{}
-	entries, _ := os.ReadDir(r.dir)
-	for _, entry := range entries {
-		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "replaced" {
-			for _, e := range h.readReplaced(r, m[1]) {
-				replaced[e.ID] = true
-			}
+	for _, f := range r.files("replaced") {
+		for _, e := range h.readReplaced(r, f.key) {
+			replaced[e.ID] = true
 		}
 	}
 	out, err = d.Runner.Run(ctx, []string{"image", "ls", "--quiet", "--no-trunc", "--filter", "dangling=true", "--filter", "label=ensemble.key"}, nil)

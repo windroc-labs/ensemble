@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -107,6 +108,10 @@ type variant struct {
 	ImagePlugins []string `json:"image_plugins"`
 }
 
+func (v variant) spec() BuildSpec {
+	return BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}
+}
+
 var variantFile = regexp.MustCompile(`^([0-9a-f]{64})\.(json|replaced)$`)
 
 // daemonPattern is a usable Docker daemon ID: docker info prints untrusted text, and the ID names a Mac directory.
@@ -133,14 +138,16 @@ type variantRecord struct {
 	entry os.DirEntry
 }
 
-func (r records) variants() []variantRecord {
+func (r records) variants() []variantRecord { return r.files("json") }
+
+func (r records) files(kind string) []variantRecord {
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		return nil
 	}
 	var found []variantRecord
 	for _, entry := range entries {
-		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "json" {
+		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == kind {
 			found = append(found, variantRecord{m[1], entry})
 		}
 	}
@@ -235,6 +242,13 @@ func writeCheckState(r records, state checkState) error {
 		return err
 	}
 	return writePrivate(r.path("clients-check.json"), data)
+}
+
+// forget only notes a failed removal.
+func (h Host) forget(path string) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		h.note("cannot " + err.Error())
+	}
 }
 
 // afterBuild never fails the build.
@@ -348,7 +362,7 @@ func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
 func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string, latest ClientVersions) (rebuilt bool, failed string) {
 	image := "ensemble-worker:" + key
 	drop := func(why string) (bool, string) {
-		_ = os.Remove(r.recordPath(key))
+		h.forget(r.recordPath(key))
 		h.note("dropped the variant record of " + image + ": " + why)
 		return false, ""
 	}
@@ -374,14 +388,14 @@ func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string,
 		return false, "Cannot create a build directory."
 	}
 	defer os.RemoveAll(tmp)
-	p, err := h.prepare(ctx, d, v.Package, BuildSpec{BaseImage: v.BaseImage, Plugins: v.Plugins, ImagePlugins: v.ImagePlugins}, tmp)
+	p, err := h.prepare(ctx, d, v.Package, v.spec(), tmp)
 	if err != nil {
 		return drop(message(err))
 	}
 	if p.key != key {
 		return drop("its inputs now make another key")
 	}
-	if _, err := h.rebuild(ctx, d, r, tmp, key, p.version, p.dirs, p.spec, p.baseID, latest); err != nil {
+	if _, err := h.rebuild(ctx, d, r, p, latest); err != nil {
 		return false, message(err)
 	}
 	return true, ""

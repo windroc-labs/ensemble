@@ -47,7 +47,7 @@ type MaintainResult struct {
 // tokenProvider's deadline, when set, is why a caller closes the container once the kind's material expires.
 type tokenProvider struct {
 	kind     credential.Kind
-	renew    func(ctx context.Context, h Host, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error)
+	renew    func(h Host, ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error)
 	failed   string
 	deadline string
 }
@@ -55,15 +55,15 @@ type tokenProvider struct {
 var tokenProviders = []tokenProvider{
 	{
 		kind:     credential.Codex,
-		renew:    renewCodex,
+		renew:    Host.renewCodex,
 		failed:   "Writing Codex credentials into %s failed.",
 		deadline: "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume.",
 	},
-	{kind: credential.GitHub, renew: renewGitHub, failed: "Writing a GitHub token into %s failed."},
-	{kind: credential.Linear, renew: renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
+	{kind: credential.GitHub, renew: Host.renewGitHub, failed: "Writing a GitHub token into %s failed."},
+	{kind: credential.Linear, renew: Host.renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
 }
 
-func renewLinear(ctx context.Context, h Host, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
+func (h Host) renewLinear(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
 	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, d, container))
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func renewLinear(ctx context.Context, h Host, d Daemon, m Manifest, container st
 }
 
 // renewCodex records the expiry as Codex's publication, so a retry after a failed record delivers the renewed login.
-func renewCodex(ctx context.Context, h Host, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
+func (h Host) renewCodex(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
 	exec := h.agentExec(ctx, d, container)
 	inject := func(argv []string, data []byte) error { return exec(append(argv, m.CodexDir), data) }
 	expiry, err := h.Codex.Refresh(ctx, inject, func(expiry string) error { return record([]string{expiry}) })
@@ -85,7 +85,7 @@ func renewCodex(ctx context.Context, h Host, d Daemon, m Manifest, container str
 }
 
 // renewGitHub leaves the replaced tokens to expire.
-func renewGitHub(ctx context.Context, h Host, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
+func (h Host) renewGitHub(ctx context.Context, d Daemon, m Manifest, container string, record func([]string) error) ([]string, error) {
 	if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 		return nil, injected(err, protocol.RefreshFailed, "GitHub renewal for "+container+" failed.")
 	}
@@ -140,7 +140,7 @@ func (h Host) Maintain(ctx context.Context, container, path string, renew bool) 
 			consider(at)
 			continue
 		}
-		expires, err := p.renew(ctx, h, d, m, container, func(expires []string) error {
+		expires, err := p.renew(h, ctx, d, m, container, func(expires []string) error {
 			if earliest(expires) == nil {
 				return tokensFailed(m)
 			}

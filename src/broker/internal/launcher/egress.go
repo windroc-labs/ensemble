@@ -15,8 +15,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// The egress proxy's label contract, version 1: the broker finds the proxy and each caller network it serves only
-// through these labels and Docker health, and never probes the proxy.
+// Label contract version 1: the broker reads only these labels and Docker health, and never probes the proxy.
 const (
 	egressPrefix    = "windroc.egress."
 	contractLabel   = egressPrefix + "contract"
@@ -31,11 +30,9 @@ const (
 // networkPattern is a Docker network name; never a flag.
 var networkPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
-// egress is a caller network check's result: the network a client container joins and the proxy URL it uses there.
 type egress struct{ Network, Proxy string }
 
-// egressProxy is one start's snapshot of the healthy egress proxy: its name, labels and attached networks. Every caller network
-// a start uses is checked against the same snapshot.
+// egressProxy is one start's snapshot: every caller network it uses is checked against the same one.
 type egressProxy struct {
 	name     string
 	labels   map[string]string
@@ -61,8 +58,7 @@ type networkInfo struct {
 	Internal bool
 }
 
-// egressHint ends every egress refusal: how to bring up the proxy on the Docker target this start uses. A remote
-// target's proxy is installed from this Mac, as nothing on the target can fetch its image.
+// A remote target's proxy is installed from this Mac: nothing on the target can fetch its image.
 func egressHint(d Daemon) string {
 	if d.Remote {
 		return " Install it on the Docker target " + d.Endpoint +
@@ -75,7 +71,7 @@ func refuse(d Daemon, format string, args ...any) *protocol.Error {
 	return protocol.New(protocol.EgressUnavailable, fmt.Sprintf(format, args...)+egressHint(d))
 }
 
-// clip bounds a label value quoted in a message, on a rune boundary.
+// clip cuts on a rune boundary.
 func clip(s string) string {
 	if r := []rune(s); len(r) > 32 {
 		return string(r[:32])
@@ -83,7 +79,6 @@ func clip(s string) string {
 	return s
 }
 
-// validProxy is whether s is an http://host:port proxy URL, as the contract defines it.
 func validProxy(s string) bool {
 	u, err := url.Parse(s)
 	if len(s) > 256 || err != nil || u.Scheme != "http" || u.User != nil || u.Opaque != "" || u.Hostname() == "" ||
@@ -94,7 +89,6 @@ func validProxy(s string) bool {
 	return err == nil && port > 0 && port <= 65535
 }
 
-// callerLabels is the network and proxy the proxy's labels name for caller network key, if listed and valid.
 func callerLabels(labels map[string]string, key string) (egress, bool) {
 	keys := strings.Split(labels[networksLabel], ",")
 	for i := range keys {
@@ -113,9 +107,8 @@ func inspectOne[T any](out []byte) (T, error) {
 	return found[0], nil
 }
 
-// checkProxy applies the contract's consumer rules to the egress proxy itself: exactly one, its contract version, running
-// and healthy. Start runs it before any credential or Docker object is touched, so a refusal leaves nothing to
-// withdraw or remove; there is no fallback network. A refusal names caller network key, the one start needs.
+// checkProxy runs before any credential or Docker object is touched, so a refusal leaves nothing to withdraw or
+// remove; there is no fallback network.
 func (h Host) checkProxy(ctx context.Context, d Daemon, key string) (egressProxy, error) {
 	px, err := h.inspectProxy(ctx, d)
 	var e *protocol.Error
@@ -170,8 +163,7 @@ func (h Host) inspectProxy(ctx context.Context, d Daemon) (egressProxy, error) {
 	return egressProxy{name: name, labels: labels, attached: attached}, nil
 }
 
-// caller applies the contract's consumer rules for caller network key on px: listed with a valid network and proxy,
-// that network internal and px attached to it.
+// caller requires key listed with a valid network and proxy, that network internal and px attached to it.
 func (h Host) caller(ctx context.Context, d Daemon, px egressProxy, key string) (egress, error) {
 	name := px.name
 	e, ok := callerLabels(px.labels, key)

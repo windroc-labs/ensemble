@@ -443,7 +443,7 @@ type knownHost struct {
 }
 
 func (k knownHost) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
-	return k.build(ctx, k.d, k.r, pkg, spec, maxAge)
+	return k.build(ctx, k.d, k.r, variant{pkg, spec.BaseImage, spec.Plugins, spec.ImagePlugins}, maxAge)
 }
 
 func (k knownHost) prune(ctx context.Context, key string) { k.Host.prune(ctx, k.d, k.r, key) }

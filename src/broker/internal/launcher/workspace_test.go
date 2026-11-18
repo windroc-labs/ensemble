@@ -72,7 +72,11 @@ func clean() *check {
 
 func workspaceRm(c *check, force bool) (WorkspaceResult, *fakeDocker, error) {
 	d := c.docker()
-	got, err := Host{}.WorkspaceRm(context.Background(), Daemon{Runner: d}, volume, force)
+	rm := Host{}.WorkspaceRm
+	if force {
+		rm = Host{}.WorkspaceRmForce
+	}
+	got, err := rm(context.Background(), Daemon{Runner: d}, volume)
 	return got, d, err
 }
 
@@ -154,7 +158,7 @@ func TestWorkspaceRmKeepsTheWorkspaceWhenStateRemovalFails(t *testing.T) {
 
 func TestWorkspaceRmOfAnotherVolumeLeavesStateAlone(t *testing.T) {
 	d := clean().docker()
-	if _, err := (Host{}).WorkspaceRm(context.Background(), Daemon{Runner: d}, "custom", true); err != nil ||
+	if _, err := (Host{}).WorkspaceRmForce(context.Background(), Daemon{Runner: d}, "custom"); err != nil ||
 		!slices.Equal(d.verbs(), []string{"volume inspect", "volume rm"}) {
 		t.Fatalf("%v %q", err, d.calls)
 	}
@@ -238,11 +242,11 @@ func TestWorkspaceRmFailed(t *testing.T) {
 func TestWorkspaceRmSameNameOnBothDaemons(t *testing.T) {
 	remote, local := clean().docker(), clean().docker()
 	h := onTwo(Host{}, identifiedRunner{testDaemon, remote}, identifiedRunner{localDaemon, local})
-	got, err := h.WorkspaceRm(context.Background(), h.Daemons[1], volume, true)
+	got, err := h.WorkspaceRmForce(context.Background(), h.Daemons[1], volume)
 	if err != nil || !got.Removed || len(remote.calls) != 0 {
 		t.Fatalf("%+v %v; remote %q", got, err, remote.calls)
 	}
-	got, err = h.WorkspaceRm(context.Background(), h.Daemons[0], volume, true)
+	got, err = h.WorkspaceRmForce(context.Background(), h.Daemons[0], volume)
 	if err != nil || !got.Removed || len(remote.calls) == 0 {
 		t.Fatalf("target: %+v %v", got, err)
 	}

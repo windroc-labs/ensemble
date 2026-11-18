@@ -192,28 +192,30 @@ func TestPrefetchOrder(t *testing.T) {
 func TestPrefetchFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(*world, Host)
+		setup func(*testing.T, *world, Host)
 		code  protocol.Code
 		want  string
 	}{
-		{"helper fails", func(w *world, _ Host) {
+		{"helper fails", func(_ *testing.T, w *world, _ Host) {
 			w.prefetchErr = &docker.CommandError{Exit: 128, Stderr: "fatal: Remote branch main not found"}
 		}, protocol.StartFailed, "Prefetching acme/app at main failed."},
-		{"github refuses", func(_ *world, h Host) {
+		{"github refuses", func(_ *testing.T, _ *world, h Host) {
 			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-broker-bot is not installed on acme/app")
 		}, protocol.GitHubFailed, "not installed on acme/app"},
-		{"no default image or run record", func(_ *world, h Host) {
-			_ = os.Remove(testRecords(h.Home).recordPath(imageKey))
-			_ = os.WriteFile(testRecords(h.Home).recordPath(strings.Repeat("c", 64)), []byte(`{"package":"/p","base_image":"dummy-env:test"}`), 0o600)
+		{"no default image or run record", func(t *testing.T, _ *world, h Host) {
+			if err := os.Remove(testRecords(h.Home).recordPath(imageKey)); err != nil {
+				t.Fatal(err)
+			}
+			putFile(t, testRecords(h.Home).recordPath(strings.Repeat("c", 64)), `{"package":"/p","base_image":"dummy-env:test"}`)
 		}, protocol.StartFailed, "No default worker image to prefetch with, and no build record of ensemble-worker:" + imageKey + " to build one from; run ensemble-broker build without a base image."},
-		{"workers network missing", func(w *world, _ Host) {
+		{"workers network missing", func(_ *testing.T, w *world, _ Host) {
 			w.proxy = labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })
 		}, protocol.EgressUnavailable, "has no valid workers network labels"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &world{labels: goodLabels()}
 			h, d, tokens := prefetchHost(t, w)
-			tc.setup(w, h)
+			tc.setup(t, w, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["gateway"] = "mini-op" })
 			_, err := h.Start(context.Background(), path)
 			e := protoErr(t, err)
@@ -453,7 +455,7 @@ func TestDefaultImageNewest(t *testing.T) {
 	}
 	// A newer variant on a base image never counts.
 	putFile(t, testRecords(h.Home).recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
-	h = withRunner(h, &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+	h = withRunner(h, &fakeDocker{respond: func(args []string, _ []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
 		labels := goodLabels()

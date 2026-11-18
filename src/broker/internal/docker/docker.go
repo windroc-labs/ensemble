@@ -213,7 +213,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	if err == nil {
 		return out, nil
 	}
-	if u := c.unreachable(stderr, false); u != nil {
+	if u := c.unreachable(stderr); u != nil {
 		return nil, u
 	}
 	var exit *exec.ExitError
@@ -233,10 +233,11 @@ func (c *CLI) probe(ctx context.Context) error {
 	c.probed = true
 	out, stderr, err := c.exec(ctx, probeArgs, nil)
 	if err != nil {
-		u := c.unreachable(stderr, true)
+		u := c.unreachable(stderr)
 		if u == nil {
-			u = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (" + connectDetail(stderr) + ")"}
+			u = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed"}
 		}
+		u.Reason += " (" + connectDetail(stderr) + ")"
 		c.probeErr = u
 		return c.probeErr
 	}
@@ -256,7 +257,7 @@ func (c *CLI) probe(ctx context.Context) error {
 	return nil
 }
 
-func (c *CLI) unreachable(stderr string, detailed bool) *Unreachable {
+func (c *CLI) unreachable(stderr string) *Unreachable {
 	if !c.target.Remote() {
 		if strings.Contains(stderr, "Cannot connect to the Docker daemon") || strings.Contains(stderr, "docker.sock: connect:") {
 			return &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker daemon not running" + startDesktop}
@@ -266,11 +267,7 @@ func (c *CLI) unreachable(stderr string, detailed bool) *Unreachable {
 	if !strings.Contains(stderr, "error during connect") && !strings.Contains(stderr, "Cannot connect to the Docker daemon") {
 		return nil
 	}
-	reason := remoteReason(stderr)
-	if detailed {
-		reason += " (" + connectDetail(stderr) + ")"
-	}
-	return &Unreachable{Endpoint: c.Endpoint(), Reason: reason}
+	return &Unreachable{Endpoint: c.Endpoint(), Reason: remoteReason(stderr)}
 }
 
 func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, string, error) {

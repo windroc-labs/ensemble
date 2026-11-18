@@ -15,10 +15,30 @@ import (
 
 const checkTimeout = 120 * time.Second
 
-// WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work, or at once with force;
-// an absent volume is success. A session's workspace takes its state volume with it, first, so a failed state removal
-// keeps the workspace that reclaim finds the session by.
-func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string, force bool) (WorkspaceResult, error) {
+// WorkspaceRm deletes a workspace volume once an offline check of its repos finds no unsaved work.
+func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string) (WorkspaceResult, error) {
+	return h.workspaceRm(ctx, d, volume, func(path string) error {
+		dirty, err := h.checkWorkspace(ctx, d, volume, path)
+		if err != nil {
+			return err
+		}
+		if len(dirty) > 0 {
+			return protocol.Newf(protocol.WorkspaceDirty,
+				"Workspace %s has uncommitted or unpushed work in: %s. Delete it anyway with ensemble-broker workspace-rm --volume %s --force.",
+				volume, strings.Join(dirty, ", "), volume)
+		}
+		return nil
+	})
+}
+
+// WorkspaceRmForce deletes a workspace volume unchecked.
+func (h Host) WorkspaceRmForce(ctx context.Context, d Daemon, volume string) (WorkspaceResult, error) {
+	return h.workspaceRm(ctx, d, volume, func(string) error { return nil })
+}
+
+// workspaceRm: an absent volume is success. A session's workspace takes its state volume with it, first, so a failed
+// state removal keeps the workspace that reclaim finds the session by. saved checks the workspace at its path.
+func (h Host) workspaceRm(ctx context.Context, d Daemon, volume string, saved func(path string) error) (WorkspaceResult, error) {
 	session, isSession := sessionOf(volume)
 	removeState := func() error {
 		if !isSession {
@@ -39,16 +59,8 @@ func (h Host) WorkspaceRm(ctx context.Context, d Daemon, volume string, force bo
 	if labels[kindLabel] == "" {
 		return WorkspaceResult{}, protocol.Newf(protocol.WorkspaceRejected, "Volume %s is not an ensemble workspace (no %s label).", volume, kindLabel)
 	}
-	if !force {
-		dirty, err := h.checkWorkspace(ctx, d, volume, labels[workspaceLabel])
-		if err != nil {
-			return WorkspaceResult{}, err
-		}
-		if len(dirty) > 0 {
-			return WorkspaceResult{}, protocol.Newf(protocol.WorkspaceDirty,
-				"Workspace %s has uncommitted or unpushed work in: %s. Delete it anyway with ensemble-broker workspace-rm --volume %s --force.",
-				volume, strings.Join(dirty, ", "), volume)
-		}
+	if err := saved(labels[workspaceLabel]); err != nil {
+		return WorkspaceResult{}, err
 	}
 	if err := removeState(); err != nil {
 		return WorkspaceResult{}, err
@@ -94,8 +106,9 @@ func (h Host) checkWorkspace(ctx context.Context, d Daemon, volume, path string)
 		"--security-opt", "no-new-privileges", "--user", "agent", "--network", "none", "--mount", volumeMount(volume, path, true),
 		"--entrypoint", Python, info.ID, "-I", checker, path, cache}, nil)
 	if err != nil {
-		_, _ = d.Runner.Run(context.WithoutCancel(ctx), []string{"rm", "--force", name}, nil)
-		return nil, diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
+		e := diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
+		e.Message += removeHelper(ctx, d, name)
+		return nil, e
 	}
 	var found struct{ Dirty *[]string }
 	if json.Unmarshal(out, &found) != nil || found.Dirty == nil {

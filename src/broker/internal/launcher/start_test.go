@@ -81,7 +81,7 @@ type world struct {
 	volumeRmErr     error
 	prefetchErr     error  // the prefetch helper's run
 	state           string // the state volume: "" absent, "matching" or "foreign"
-	readers         string // reader container IDs
+	readers         string
 	readersErr      error
 	stateHelperErr  error // the state volume's chown or mkdir helper
 }
@@ -902,34 +902,5 @@ func TestStartRollbackRevokesIssuedGitHubTokens(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(parent, tokensGeneration+".tokens.json")); !os.IsNotExist(err) {
 		t.Fatalf("record left behind: %v", err)
-	}
-}
-
-func TestStartDaemonLookupFailureCreatesNoVolume(t *testing.T) {
-	for _, tc := range []struct {
-		name, out string
-		err       error
-		code      protocol.Code
-	}{
-		{"unreachable", "", unreachableErr, protocol.DockerUnreachable},
-		{"unusable", `"../x"`, nil, protocol.StartFailed},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := &world{labels: goodLabels(), daemon: tc.out, daemonErr: tc.err}
-			if tc.out == "" {
-				w.daemon = " "
-			}
-			h, d := startHost(w, &fakeCreds{})
-			_, err := h.Start(context.Background(), validManifest(t))
-			var pe *protocol.Error
-			if !errors.As(err, &pe) || pe.Code != tc.code {
-				t.Fatalf("%v, want %s", err, tc.code)
-			}
-			for _, c := range d.calls {
-				if c[0] == "volume" || c[0] == "run" {
-					t.Fatalf("%q after a failed daemon lookup", c)
-				}
-			}
-		})
 	}
 }

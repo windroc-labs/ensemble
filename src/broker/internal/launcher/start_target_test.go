@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,6 +56,57 @@ func TestNoWorkerMountReachesTheTargetFileOrSSHDir(t *testing.T) {
 					t.Fatalf("%s %s: mount %s", fixture, cwd, spec)
 				}
 			}
+		}
+	}
+}
+
+func TestStartDaemonLookupFailureCreatesNoVolume(t *testing.T) {
+	for _, tc := range []struct {
+		name, out string
+		err       error
+		code      protocol.Code
+	}{
+		{"unreachable", "", unreachableErr, protocol.DockerUnreachable},
+		{"unusable", `"../x"`, nil, protocol.StartFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &world{labels: goodLabels(), daemon: tc.out, daemonErr: tc.err}
+			if tc.out == "" {
+				w.daemon = " "
+			}
+			h, d := startHost(w, &fakeCreds{})
+			_, err := h.Start(context.Background(), validManifest(t))
+			var pe *protocol.Error
+			if !errors.As(err, &pe) || pe.Code != tc.code {
+				t.Fatalf("%v, want %s", err, tc.code)
+			}
+			for _, c := range d.calls {
+				if c[0] == "volume" || c[0] == "run" {
+					t.Fatalf("%q after a failed daemon lookup", c)
+				}
+			}
+		})
+	}
+}
+
+// The refusal hint follows whether the daemon is remote, never the shape of its endpoint.
+func TestEgressHintFollowsDaemonRemote(t *testing.T) {
+	const notSSH = "tcp://pc:2376"
+	for _, tc := range []struct {
+		endpoint string
+		remote   bool
+		hint     string
+	}{
+		{notSSH, true, " Install it on the Docker target " + notSSH + " by running bash <ensemble plugin directory>/scripts/install-target-egress.sh on this Mac, wait until it is healthy, then retry."},
+		{remoteTarget, false, localHint},
+	} {
+		none := ""
+		w := world{proxies: &none, labels: goodLabels()}
+		h, _, _, _, _, _, _ := credentialHost(&w)
+		h.Daemons = []Daemon{{Name: DaemonRemote, Endpoint: tc.endpoint, Remote: tc.remote, Runner: h.Daemons[0].Runner}}
+		_, err := h.Start(context.Background(), validManifest(t))
+		if e := protoErr(t, err); e.Code != protocol.EgressUnavailable || !strings.HasSuffix(e.Message, tc.hint) {
+			t.Errorf("%s remote %v: %+v", tc.endpoint, tc.remote, e)
 		}
 	}
 }

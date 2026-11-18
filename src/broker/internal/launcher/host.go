@@ -301,8 +301,7 @@ func clientKind(client string) string {
 }
 
 func failure(err error, code protocol.Code, message string) *protocol.Error {
-	var u *docker.Unreachable
-	if errors.As(err, &u) {
+	if u, ok := errors.AsType[*docker.Unreachable](err); ok {
 		return protocol.New(protocol.DockerUnreachable, u.Error())
 	}
 	return protocol.New(code, message)
