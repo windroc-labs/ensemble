@@ -38,7 +38,7 @@ file = ".github/coverage_gate_test.py"
 rule = "skipTest"
 function = "Report.data"
 count = 1
-reason = "Needs coverage.py; CI's Unit job installs it, so the test runs there."
+reason = "Needs coverage.py; CI's GitHub tooling tests job installs it, so the test runs there."
 
 [["ci-checks/inline-exemptions/settings.toml".exemption]]
 tool = "unittest"
@@ -46,7 +46,7 @@ file = ".github/run_tests_test.py"
 rule = "skipTest"
 function = "Coverage.start"
 count = 1
-reason = "Needs coverage.py; CI's Unit job installs it, so the test runs there."
+reason = "Needs coverage.py; CI's GitHub tooling tests job installs it, so the test runs there."
 
 [["ci-checks/inline-exemptions/settings.toml".exemption]]
 tool = "coverage"
