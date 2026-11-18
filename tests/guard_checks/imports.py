@@ -28,7 +28,8 @@ from tests.guard_data.orchestrator import (
 )
 from tests.guard_data.session import SESSION
 from tests.guards import PKG, PROJECTS
-from tests.import_policy import contracts, violation
+from tests.import_contracts import contracts
+from tests.import_policy import violation
 
 READS = {"copy", "count", "get", "index", "items", "keys", "values"}
 

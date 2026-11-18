@@ -92,7 +92,7 @@ def _boundary_calls(node, aliases, own, modules):
     return [reason for reason, violated in rules.items() if violated]
 
 
-GATE_HOLDERS = ("run_tests.GATE", "run_tests.isolation", "tests.conftest")
+GATE_HOLDERS = ("run_tests.GATE", "run_tests.isolation", "conftest")
 # Every name pytest reads configuration or hooks from, and the two paths that may carry one.
 PYTEST_FILES = (
     "conftest.py",
@@ -104,7 +104,7 @@ PYTEST_FILES = (
     "setup.cfg",
     "pyproject.toml",
 )
-PYTEST_ALLOWED = ("pyproject.toml", "tests/conftest.py")
+PYTEST_ALLOWED = ("pyproject.toml", "conftest.py")
 
 
 def unit_test_modules(repo: str) -> list[str]:

@@ -95,7 +95,7 @@ allow_indirect_imports = true
 name = "manager tests respect layer ownership"
 type = "forbidden"
 source_modules = ["tests.manager"]
-forbidden_modules = ["tests.case", "tests.checks", "tests.conftest", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports"]
+forbidden_modules = ["tests.case", "tests.checks", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports"]
 
 [[tool.importlinter.contracts]]
 name = "orchestrator uses lower public packages"
@@ -164,7 +164,7 @@ forbidden_modules = [
 name = "orchestrator tests respect layer ownership"
 type = "forbidden"
 source_modules = ["tests.orchestrator"]
-forbidden_modules = ["tests.case", "tests.checks", "tests.conftest", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "tests.manager"]
+forbidden_modules = ["tests.case", "tests.checks", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "tests.manager"]
 
 [[tool.importlinter.contracts]]
 name = "delegate uses lower public packages"
@@ -185,7 +185,7 @@ ignore_imports = [
 name = "delegate tests respect layer ownership"
 type = "forbidden"
 source_modules = ["tests.delegate"]
-forbidden_modules = ["tests.case", "tests.checks", "tests.conftest", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "tests.manager", "tests.orchestrator"]
+forbidden_modules = ["tests.case", "tests.checks", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "tests.manager", "tests.orchestrator"]
 
 [[tool.importlinter.contracts]]
 name = "session uses lower public packages"
@@ -198,13 +198,13 @@ allow_indirect_imports = true
 name = "session tests respect layer ownership"
 type = "forbidden"
 source_modules = ["tests.session"]
-forbidden_modules = ["tests.case", "tests.checks", "tests.conftest", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "tests.manager", "tests.orchestrator", "tests.delegate"]
+forbidden_modules = ["tests.case", "tests.checks", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "tests.manager", "tests.orchestrator", "tests.delegate"]
 
 [[tool.importlinter.contracts]]
 name = "utils tests respect layer ownership"
 type = "forbidden"
 source_modules = ["tests.utils"]
-forbidden_modules = ["tests.case", "tests.checks", "tests.conftest", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "ensemble.session", "tests.manager", "tests.orchestrator", "tests.delegate", "tests.session"]
+forbidden_modules = ["tests.case", "tests.checks", "tests.guard_checks", "tests.guard_data", "tests.guard_samples", "tests.guards", "tests.help_probe", "tests.import_contracts", "tests.import_policy", "tests.integration", "tests.unit", "tests.unit_imports", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "ensemble.session", "tests.manager", "tests.orchestrator", "tests.delegate", "tests.session"]
 
 [[tool.importlinter.contracts]]
 name = "Modes do not import the session API"

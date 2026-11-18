@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`; unit tests also run as `uv run pytest [path]` (`tests/conftest.py` gives them the same sandbox and isolation gate).
+Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`; unit tests also run as `uv run pytest [path]` (`conftest.py` gives them the same sandbox and isolation gate).
 
 ## Gotchas
 

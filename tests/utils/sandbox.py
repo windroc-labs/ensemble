@@ -188,15 +188,16 @@ def sandbox_env(caller, tmp, workspace, *import_roots):
     return env
 
 
-def supervise(argv, repo, *, extra_env, prepare, collect, grace=CONTROL_GRACE):
-    """argv's exit code (128 + signal) as a sandboxed child; 1 if it passed but leaked."""
+def supervise(run, repo, *, prepare, collect, grace=CONTROL_GRACE):
+    """(run(env, tmp)'s exit code, 128 + signal for a signal; what it left) in a sandbox."""
     repo = Path(repo)
     with (
         tempfile.TemporaryDirectory(
             dir=os.environ.get("ENSEMBLE_TEST_SANDBOX") or os.path.realpath("/tmp")
-        ) as tmp,
+        ) as directory,
         tempfile.TemporaryDirectory(prefix=".test-sandbox-", dir=repo) as workspace,
     ):
+        tmp = Path(directory)
         roots = [
             repo,
             repo / ".github",
@@ -204,20 +205,18 @@ def supervise(argv, repo, *, extra_env, prepare, collect, grace=CONTROL_GRACE):
             sysconfig.get_path("purelib"),
             sysconfig.get_path("platlib"),
         ]
-        env = sandbox_env(os.environ, tmp, workspace, *roots)
-        prepare(Path(tmp))
+        env = sandbox_env(os.environ, directory, workspace, *roots)
+        prepare(tmp)
         try:
-            code = subprocess.run(argv, env={**env, **extra_env(tmp)}, check=False).returncode
+            code = run(env, tmp)
         finally:
-            servers = stop_tmux_servers(tmp, env)
-        processes = leaked_processes((tmp, workspace), grace=grace)
+            servers = stop_tmux_servers(directory, env)
+        processes = leaked_processes((directory, workspace), grace=grace)
         kill_processes(processes)
         collect(tmp)
     leaks = [f"tmux server {socket}" for socket in servers]
     leaks += [f"pid {pid}: {args[:200]}" for pid, _, _, args in processes]
-    if leaks:
-        print("leaked after the run: " + "; ".join(leaks), file=sys.stderr)
-    return (128 - code if code < 0 else code) or int(bool(leaks))
+    return 128 - code if code < 0 else code, leaks
 
 
 def git_run(*argv, cwd=None, env=None, **kwargs):

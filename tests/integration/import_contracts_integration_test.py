@@ -3,8 +3,7 @@
 import grimp
 
 from tests.case import REPO, Case
-from tests.import_contracts import broken
-from tests.import_policy import contracts
+from tests.import_contracts import broken, contracts
 
 
 class Units(Case):

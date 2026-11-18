@@ -4,7 +4,8 @@ from pathlib import Path
 
 from tests.case import REPO, Case
 from tests.guard_samples import Sample
-from tests.import_policy import contracts, violation
+from tests.import_contracts import contracts
+from tests.import_policy import violation
 
 
 class Contracts(Sample):

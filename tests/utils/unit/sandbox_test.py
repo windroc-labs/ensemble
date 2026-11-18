@@ -3,8 +3,6 @@ a supervised run leaves behind, the sandbox environment and supervised child, an
 import roots.
 """
 
-import contextlib
-import io
 import os
 import signal
 import tempfile
@@ -282,78 +280,76 @@ class SandboxEnv(Case):
 
 
 class Supervise(Case):
-    def run_child(self, code, *, servers=(), leaked=()):
-        """(exit code, stderr, what the hooks and the child saw) of one supervised run."""
+    def supervised(self, code, *, servers=(), leaked=()):
+        """((exit code, leaks), what the callbacks saw) of one supervised run."""
         seen = {}
 
-        def child(argv, *, env, check):
-            seen.update(argv=argv, env=env, check=check)
-            seen["dirs_during"] = all(
-                os.path.isdir(env[key]) for key in ("TMPDIR", "ENSEMBLE_TEST_WORKSPACE")
-            )
-            return mock.Mock(returncode=code)
+        def run(env, tmp):
+            seen.update(env=env, tmp=tmp, during=tmp.is_dir() and os.path.isdir(env["HOME"]))
+            return code
 
-        def collect(tmp):
-            seen.update(collected=tmp, collected_exists=os.path.isdir(tmp))
-
-        stderr = io.StringIO()
         with (
-            mock.patch("subprocess.run", side_effect=child),
             mock.patch.object(sandbox, "stop_tmux_servers", return_value=list(servers)) as stop,
             mock.patch.object(sandbox, "leaked_processes", return_value=list(leaked)) as leaks,
             mock.patch.object(sandbox, "kill_processes") as kill,
-            contextlib.redirect_stderr(stderr),
         ):
             result = sandbox.supervise(
-                ["python3", "-m", "pytest"],
+                run,
                 Path(self.home),
-                extra_env=lambda tmp: {"EXTRA": tmp},
                 prepare=lambda tmp: seen.update(prepared=tmp, prepared_exists=tmp.is_dir()),
-                collect=collect,
+                collect=lambda tmp: seen.update(collected=tmp, collected_exists=tmp.is_dir()),
                 grace=3,
             )
         seen.update(stop=stop, leaks=leaks, kill=kill)
-        return result, stderr.getvalue(), seen
+        return result, seen
 
     def test_the_child_runs_in_the_sandbox_and_its_code_comes_back(self):
-        code, stderr, seen = self.run_child(2)
-        env = seen["env"]
-        tmp, workspace = env["TMPDIR"], env["ENSEMBLE_TEST_WORKSPACE"]
-        self.assertEqual((code, stderr), (2, ""))
-        self.assertEqual((seen["argv"], seen["check"]), (["python3", "-m", "pytest"], False))
+        result, seen = self.supervised(2)
+        env, tmp = seen["env"], seen["tmp"]
+        workspace = env["ENSEMBLE_TEST_WORKSPACE"]
+        self.assertEqual(result, (2, []))
         self.assertEqual(
-            (env["HOME"], env["EXTRA"], env["ENSEMBLE_TEST_SANDBOX"]), (workspace, tmp, tmp)
+            (env["HOME"], env["TMPDIR"], env["ENSEMBLE_TEST_SANDBOX"]),
+            (workspace, str(tmp), str(tmp)),
         )
         self.assertEqual(os.path.dirname(workspace), self.home)
         self.assertTrue(os.path.basename(workspace).startswith(".test-sandbox-"))
         self.assertEqual(
             env["PYTHONPATH"].split(os.pathsep)[:2], [self.home, os.path.join(self.home, ".github")]
         )
-        self.assertEqual((seen["prepared"], seen["collected"]), (Path(tmp), tmp))
-        self.assertTrue(
-            seen["prepared_exists"] and seen["collected_exists"] and seen["dirs_during"]
-        )
-        self.assertFalse(os.path.exists(tmp) or os.path.exists(workspace))
-        seen["leaks"].assert_called_once_with((tmp, workspace), grace=3)
+        self.assertEqual((seen["prepared"], seen["collected"]), (tmp, tmp))
+        self.assertTrue(seen["prepared_exists"] and seen["collected_exists"] and seen["during"])
+        self.assertFalse(tmp.exists() or os.path.exists(workspace))
+        seen["stop"].assert_called_once_with(str(tmp), env)
+        seen["leaks"].assert_called_once_with((str(tmp), workspace), grace=3)
         seen["kill"].assert_called_once_with([])
 
     def test_a_child_killed_by_a_signal_exits_128_plus_the_signal(self):
-        self.assertEqual(self.run_child(-signal.SIGKILL)[0], 128 + signal.SIGKILL)
+        self.assertEqual(self.supervised(-signal.SIGKILL)[0], (128 + signal.SIGKILL, []))
 
-    def test_a_passing_run_that_leaks_fails_and_the_leaks_are_killed(self):
+    def test_what_the_child_left_behind_is_killed_and_named(self):
         leaked = [(400, 1, 400, "sleep 60 /ws/marker")]
-        code, stderr, seen = self.run_child(0, servers=["/sb/tmux-501/default"], leaked=leaked)
-        self.assertEqual(code, 1)
+        result, seen = self.supervised(0, servers=["/sb/tmux-501/default"], leaked=leaked)
         self.assertEqual(
-            stderr,
-            "leaked after the run: tmux server /sb/tmux-501/default; pid 400: sleep 60 /ws/marker\n",
+            result, (0, ["tmux server /sb/tmux-501/default", "pid 400: sleep 60 /ws/marker"])
         )
         seen["kill"].assert_called_once_with(leaked)
 
-    def test_a_failing_run_that_leaks_keeps_its_own_code(self):
-        code, stderr, _ = self.run_child(3, leaked=[(400, 1, 400, "sleep 60 /ws/marker")])
-        self.assertEqual(code, 3)
-        self.assertIn("leaked after the run: pid 400", stderr)
+    def test_the_sandbox_is_stopped_and_removed_when_the_child_cannot_start(self):
+        def run(_env, tmp):
+            seen.update(tmp=tmp)
+            raise OSError("no python")
+
+        seen = {}
+        with (
+            mock.patch.object(sandbox, "stop_tmux_servers", return_value=[]) as stop,
+            self.assertRaises(OSError),
+        ):
+            sandbox.supervise(
+                run, Path(self.home), prepare=lambda _tmp: None, collect=lambda _tmp: None
+            )
+        stop.assert_called_once()
+        self.assertFalse(seen["tmp"].exists())
 
 
 class RunnerSandbox(Case):

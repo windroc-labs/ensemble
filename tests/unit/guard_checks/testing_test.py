@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from unittest import mock
 
 from tests import guards
@@ -324,13 +323,13 @@ class UnitIsolation(Sample):
                 self.assertTrue(found, text)
                 self.assertTrue(all(line.startswith(path + ":") for line in found), found)
 
-    def test_tests_cannot_reach_the_gate_through_the_pytest_conftest(self):
+    def test_tests_cannot_reach_the_gate_through_the_pytest_runner(self):
         samples = (
-            "from tests import conftest\nconftest.GATE.unit = False\n",
-            "import tests.conftest\ntests.conftest.GATE.unit = False\n",
-            "from tests.conftest import GATE as gate\ngate.unit = False\n",
-            "import sys\nsys.modules['tests.conftest'].GATE.unit = False\n",
-            "from unittest import mock\nmock.patch('tests.conftest.GATE')\n",
+            "import conftest\nconftest.GATE.unit = False\n",
+            "import conftest as runner\nrunner.GATE.unit = False\n",
+            "from conftest import GATE as gate\ngate.unit = False\n",
+            "import sys\nsys.modules['conftest'].GATE.unit = False\n",
+            "from unittest import mock\nmock.patch('conftest.GATE')\n",
         )
         for text in samples:
             with self.subTest(text=text):
@@ -338,8 +337,6 @@ class UnitIsolation(Sample):
                 found = testing.test_gate_mutation(self.tree({path: text}))
                 self.assertTrue(found, text)
                 self.assertTrue(all(line.startswith(path + ":") for line in found), found)
-        conftest = Path(REPO, "tests/conftest.py").read_text()
-        self.assertEqual(testing.test_gate_mutation(self.tree({"tests/conftest.py": conftest})), [])
 
     def test_no_migration_exemption_can_be_reintroduced(self):
         root = self.tree({"tests/session/unit/present_test.py": ""})
@@ -354,9 +351,9 @@ class UnitIsolation(Sample):
 
 
 class PytestSurface(Sample):
-    def test_only_the_root_pyproject_and_the_tests_conftest_may_configure_pytest(self):
+    def test_only_the_root_pyproject_and_conftest_may_configure_pytest(self):
         self.assertEqual(
-            testing.pytest_surface(self.tree({"pyproject.toml": "", "tests/conftest.py": ""})), []
+            testing.pytest_surface(self.tree({"pyproject.toml": "", "conftest.py": ""})), []
         )
         for name in testing.PYTEST_FILES:
             for rel in (name, f"tests/{name}", f"tests/session/unit/{name}"):

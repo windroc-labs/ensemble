@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 
 from tests.utils.sandbox import supervise
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parent
 RUNNER = "ENSEMBLE_TEST_RUNNER"
 COVERAGE = "ENSEMBLE_TEST_COVERAGE"
 DATA = "coverage-data"
@@ -29,35 +30,27 @@ def pytest_cmdline_main(config):
         return None
     measuring = sys.modules["coverage"].Coverage.current() if "coverage" in sys.modules else None
 
-    def extra_env(_tmp):
-        env = {RUNNER: str(os.getpid())}
+    def run(env, _tmp):
         if measuring:
             options = ("run:source", "run:branch")
             env[COVERAGE] = json.dumps(
                 [measuring.config.config_file, *map(measuring.get_option, options)]
             )
-        return env
+        argv = [sys.executable, "-P", "-X", "faulthandler", "-m", "pytest"]
+        child = {**env, RUNNER: str(os.getpid())}
+        return subprocess.run([*argv, *config.invocation_params.args], env=child).returncode
 
     def collect(tmp):
         # The child saved inside the sandbox, the only place the gate lets it write.
-        if measuring and os.path.exists(data := os.path.join(tmp, DATA)):
-            measuring.combine([data])
+        if measuring and (data := tmp / DATA).exists():
+            measuring.combine([str(data)])
 
-    return supervise(
-        [
-            sys.executable,
-            "-P",
-            "-X",
-            "faulthandler",
-            "-m",
-            "pytest",
-            *config.invocation_params.args,
-        ],
-        REPO,
-        extra_env=extra_env,
-        prepare=lambda tmp: isolation.blockers(tmp / "blocked-bin"),
-        collect=collect,
+    code, leaks = supervise(
+        run, REPO, prepare=lambda tmp: isolation.blockers(tmp / "blocked-bin"), collect=collect
     )
+    if leaks:
+        print("leaked after the run: " + "; ".join(leaks), file=sys.stderr)
+    return code or int(bool(leaks))
 
 
 def pytest_configure():

@@ -1,6 +1,16 @@
-"""The nested-unit policy applied to an import graph."""
+"""The repo's import contracts, and the nested-unit policy applied to an import graph."""
+
+import os
+import tomllib
 
 from tests.import_policy import violation
+
+
+def contracts(repo):
+    """Every import contract in pyproject.toml: import-linter's, then the nested-unit ones."""
+    with open(os.path.join(repo, "pyproject.toml"), "rb") as file:
+        tool = tomllib.load(file)["tool"]
+    return [*tool["importlinter"]["contracts"], *tool.get("ensemble", {}).get("unit_contracts", ())]
 
 
 def broken(graph, policy):
