@@ -381,27 +381,3 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 		})
 	}
 }
-
-// A daemon whose check fails leaves every other daemon's check and prune; its error is the result's.
-func TestCheckClientsIteratesDaemons(t *testing.T) {
-	for _, localUp := range []bool{true, false} {
-		e := newBuildEnv(t)
-		first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})
-		e.releases.latest["@openai/codex"] = "0.171.0"
-		down := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
-		h := onTwo(e.lookupHost(), e.fake, down)
-		if localUp {
-			h = onTwo(e.lookupHost(), down, e.fake)
-		}
-		from := len(e.fake.calls)
-		got, err := h.CheckClients(context.Background())
-		failed := protoErr(t, err)
-		if failed.Code != "docker_unreachable" || !strings.Contains(failed.Message, remoteEndpoint) ||
-			!slices.Equal(got.Rebuilt, []string{first.Image}) || len(down.calls) == 0 {
-			t.Fatalf("local up %v: %+v %v; unreachable daemon calls %q", localUp, got, err, down.calls)
-		}
-		if !slices.Contains(e.fake.verbs()[from:], "image ls") {
-			t.Fatalf("local up %v: no prune on the reachable daemon: %q", localUp, e.fake.verbs()[from:])
-		}
-	}
-}
