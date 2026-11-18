@@ -143,7 +143,7 @@ assert directory.stat().st_mode & 0o777 == 0o700
 print(json.dumps({"directory": str(directory), "system": tempfile.gettempdir()}))
 """
 
-REPORTS = ("RUN_TESTS_STATE", "GITHUB_STEP_SUMMARY", "RUN_TESTS_DURATIONS", "RUN_TESTS_COVERAGE")
+REPORTS = ("RUN_TESTS_STATE", "GITHUB_STEP_SUMMARY", "RUN_TESTS_DURATIONS")
 
 
 def run_suite(root, title, *directories, roots=(), timeout=10, **variables):
