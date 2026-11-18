@@ -65,9 +65,10 @@ func (h Host) defaultImage(ctx context.Context, d Daemon, r records, run string)
 	return h.checkImage(ctx, d, built.Image)
 }
 
-// prefetch clones m's repo into its new workspace through a throwaway default-image helper on the workers network, as
-// run's agent; the token reaches it only on stdin.
-func (h Host) prefetch(ctx context.Context, d Daemon, r records, c string, m Manifest, run imageInfo, px egressProxy) error {
+// prefetch clones l's repo into its new workspace through a throwaway default-image helper on the workers network, as
+// its image's agent; the token reaches it only on stdin.
+func (h Host) prefetch(ctx context.Context, l launch, r records, px egressProxy) error {
+	d, c, m, run := l.d, l.c, l.m, l.info
 	network, err := h.caller(ctx, d, px, workersKey)
 	if err != nil {
 		return err
