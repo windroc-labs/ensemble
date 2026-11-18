@@ -6,12 +6,12 @@ traffic through an egress proxy on the target.
 
 ```mermaid
 flowchart LR
-  A[Prepare the target] --> B[Write target.json on the Mac]
+  A[Prepare the target] --> B[Set the target on the Mac]
   B --> C[Install the target's egress proxy from the Mac]
   C --> D[Start workers as usual]
 ```
 
-Do the steps in this order. The rules for `~/.ensemble/docker/target.json` (address form, `local_secrets`, SSH
+Do the steps in this order. The rules for the `[docker]` table in `~/.ensemble/config.local.toml` (address form, `local_secrets`, SSH
 options, the check before each start) are in [Upgrading › Broker protocol 43](upgrading.md#broker-protocol-43-remote-docker-target);
 `ensemble-broker target` shows how the broker reads it. A session stays on the daemon its first start chose:
 switching the target to another machine leaves earlier sessions there, to resume or reclaim after switching back.
@@ -58,11 +58,13 @@ On the Mac:
 3. Check that passwords are refused:
    `ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive <user>@<host> true`
    fails with `Permission denied` and asks for no password.
-4. Write the target to `~/.ensemble/docker/target.json`, then install the egress proxy
+4. Set the target in `~/.ensemble/config.local.toml`, then install the egress proxy
    ([Egress proxy on the target](#egress-proxy-on-the-target)):
 
-   ```json
-   {"host": "ssh://<user>@<host>", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
+   ```toml
+   [docker]
+   host = "ssh://<user>@<host>"
+   local_secrets = ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
    ```
 
    `local_secrets` lists the secrets the broker never gives a worker on the target ([Workers that stay on the
@@ -111,13 +113,13 @@ write the target, install the egress proxy.
 
 ## Outside the LAN
 
-Use the target's Tailscale address or MagicDNS name in `target.json`. Add its host key under that name too, by the
+Use the target's Tailscale address or MagicDNS name as `host`. Add its host key under that name too, by the
 [Linux target](#linux-target)'s Mac step 1 with that name: `known_hosts` entries are per name.
 
 ## Egress proxy on the target
 
 The broker starts a worker only when the target runs a healthy egress proxy; without one, start fails
-`egress_unavailable` and names this command. Install or upgrade it from the Mac, after `target.json` is written:
+`egress_unavailable` and names this command. Install or upgrade it from the Mac, after the target is set:
 
 ```sh
 bash <ensemble plugin directory>/scripts/install-target-egress.sh

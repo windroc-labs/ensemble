@@ -7,15 +7,17 @@ Upgrade the plugin and broker together with `scripts/install.sh --docker`. The b
 target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock: Docker
 daemon not running; start Docker Desktop and retry.`
 
-With no `~/.ensemble/docker/target.json`, Docker workers use the local Docker Desktop, as before. To make a remote
-machine the target, write exactly this there, with `:port` when it is not 22:
+With no `[docker]` table in `~/.ensemble/config.local.toml`, Docker workers use the local Docker Desktop, as before.
+To make a remote machine the target, add this table there, with `:port` when it is not 22:
 
-```json
-{"host": "ssh://user@host", "local_secrets": ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]}
+```toml
+[docker]
+host = "ssh://user@host"
+local_secrets = ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
 ```
 
-Any other key, or a file without both, fails every Docker command `docker_unreachable` ("invalid target setting").
-Only the broker reads the file: `ensemble-broker target` prints the configured daemons (`local`, and `remote` when
+Any other key in the table, a table without both, or a file that is not valid TOML fails every Docker command
+`docker_unreachable` ("invalid target setting"). Only the broker reads the table: `ensemble-broker target` prints the configured daemons (`local`, and `remote` when
 `host` is set), the default one, and each daemon's ID or why it cannot be reached. The broker and the session send
 every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say:
 

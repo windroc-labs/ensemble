@@ -1,8 +1,6 @@
 package docker
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,16 +11,19 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 const (
-	// Without TargetFile, every docker call reaches the local Docker Desktop.
-	TargetFile = ".ensemble/docker/target.json"
+	// Without a SettingTable in SettingFile, every docker call reaches the local Docker Desktop.
+	SettingFile  = ".ensemble/config.local.toml"
+	SettingTable = "docker"
 	// SSHDir holds only ssh, a root-owned link to this broker.
 	SSHDir          = "/usr/local/libexec/ensemble/ssh"
 	SSHPath         = "/usr/bin/ssh"
 	TargetPattern   = `ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?`
-	maxTarget       = 64 << 10
+	maxSetting      = 1 << 20
 	minEngine       = 26
 	EnvItemPrefix   = "ensemble-broker-env/"
 	maxLocalSecrets = 16
@@ -73,13 +74,13 @@ type Target struct {
 
 func (t Target) Remote() bool { return t.Host != "" }
 
-// readTarget reads one byte past maxTarget at most.
-func readTarget(path string) ([]byte, error) {
+// readSetting reads one byte past maxSetting at most.
+func readSetting(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxTarget+1))
+	data, err := io.ReadAll(io.LimitReader(f, maxSetting+1))
 	if err := errors.Join(err, f.Close()); err != nil {
 		return nil, err
 	}
@@ -98,65 +99,78 @@ func validHost(host string) bool {
 	return err == nil && port >= 1 && port <= 65535
 }
 
-// LoadTarget admits only the keys host and local_secrets; no file is the local target.
+// LoadTarget reads SettingFile's SettingTable, admitting only the keys host and local_secrets; no file or no table is
+// the local target. Keys are compared exactly: TOML keys are case-sensitive.
 func LoadTarget(home string) (Target, error) {
-	path := filepath.Join(home, TargetFile)
+	path := filepath.Join(home, SettingFile)
 	invalid := func(format string, args ...any) (Target, error) {
-		return Target{}, &Unreachable{Endpoint: path, Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
+		return Target{}, &Unreachable{Endpoint: path + " [" + SettingTable + "]",
+			Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
 	}
-	data, err := readTarget(path)
+	data, err := readSetting(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Target{}, nil
 	}
 	if err != nil {
 		return invalid("%v", err)
 	}
-	if len(data) > maxTarget {
-		return invalid("larger than %d bytes", maxTarget)
+	if len(data) > maxSetting {
+		return invalid("larger than %d bytes", maxSetting)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var v struct {
-		Host         *string   `json:"host"`
-		LocalSecrets *[]string `json:"local_secrets"`
-	}
-	if err := dec.Decode(&v); err != nil {
+	var file map[string]any
+	if err := toml.Unmarshal(data, &file); err != nil {
 		return invalid("%v", err)
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return invalid("trailing data")
+	found, ok := file[SettingTable]
+	if !ok {
+		return Target{}, nil
 	}
-	if v.Host == nil {
-		return invalid("no host")
+	table, ok := found.(map[string]any)
+	if !ok {
+		return invalid("[%s] is not a table", SettingTable)
 	}
-	// The decoder matches keys case-insensitively, so a case variant could override a key.
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(data, &keys); err != nil {
-		return invalid("%v", err)
+	keys := make([]string, 0, len(table))
+	for key := range table {
+		keys = append(keys, key)
 	}
-	for key := range keys {
+	slices.Sort(keys)
+	for _, key := range keys {
 		if key != "host" && key != "local_secrets" {
 			return invalid("unknown key %q", key)
 		}
 	}
-	host := *v.Host
+	value, ok := table["host"]
+	if !ok {
+		return invalid("no host")
+	}
+	host, ok := value.(string)
+	if !ok {
+		return invalid("host is not a string")
+	}
 	if !validHost(host) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)
 	}
-	if v.LocalSecrets == nil {
+	value, ok = table["local_secrets"]
+	if !ok {
 		return invalid("no local_secrets")
 	}
-	secrets := *v.LocalSecrets
-	if len(secrets) > maxLocalSecrets {
+	items, ok := value.([]any)
+	if !ok {
+		return invalid("local_secrets is not an array")
+	}
+	if len(items) > maxLocalSecrets {
 		return invalid("more than %d local_secrets", maxLocalSecrets)
 	}
-	for i, item := range secrets {
-		if !ValidEnvItem(item) {
-			return invalid("local_secrets item %q is not %s<name>", item, EnvItemPrefix)
+	secrets := make([]string, 0, len(items))
+	for _, value := range items {
+		item, ok := value.(string)
+		if !ok || !ValidEnvItem(item) {
+			return invalid("local_secrets item %q is not %s<name>", fmt.Sprint(value), EnvItemPrefix)
 		}
-		if slices.Contains(secrets[:i], item) {
+		if slices.Contains(secrets, item) {
 			return invalid("local_secrets item %q repeated", item)
 		}
+		secrets = append(secrets, item)
 	}
 	return Target{Host: host, LocalSecrets: secrets}, nil
 }

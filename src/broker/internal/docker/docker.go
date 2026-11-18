@@ -109,7 +109,7 @@ type CLI struct {
 	path, buildx, home, config string
 	Progress                   io.Writer // gets each docker build's stderr live
 	target                     Target
-	targetErr                  error // an invalid TargetFile: every Run's error
+	targetErr                  error // an invalid target setting: every Run's error
 	sshDir                     string
 	mu                         sync.Mutex
 	probed                     bool

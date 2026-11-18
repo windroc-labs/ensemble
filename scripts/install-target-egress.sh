@@ -130,7 +130,7 @@ main() {
   path=${found#*$'\n'}
   case $code in
     0) ;;
-    3) die 2 "no remote Docker target is set (~/.ensemble/docker/target.json); scripts/install.sh --docker installs this Mac's egress proxy" ;;
+    3) die 2 "no remote Docker target is set ([docker] in ~/.ensemble/config.local.toml); scripts/install.sh --docker installs this Mac's egress proxy" ;;
     4) die 1 "cannot reach the remote Docker target $host: $path" ;;
     5)
       say "$me: $found"

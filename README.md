@@ -63,7 +63,7 @@ A Docker session started before broker protocol 40 keeps its client state in the
 `~/.ensemble/docker-state/<name>/<client>` (`<client>`: `claude`, `codex` or `opencode`), which workers no longer
 read. A session with no target record, as such a session has, belongs to the local Docker Desktop: its resume on a
 remote target fails, naming the local Docker Desktop as its target. To keep its conversation, copy that directory into
-its state volume once, with the Docker target unset (no `~/.ensemble/docker/target.json`) and the session closed.
+its state volume once, with the Docker target unset (no `[docker]` table in `~/.ensemble/config.local.toml`) and the session closed.
 In a Mac terminal, set `name` and `client`, then run the block as a whole; it stops at the first failing step:
 
 ```sh

@@ -180,8 +180,8 @@ func (h Host) localOnly(d Daemon, m Manifest) error {
 	for _, s := range m.Secrets {
 		if slices.Contains(h.LocalOnly, s.Item) {
 			return protocol.Newf(protocol.ManifestRejected,
-				"Manifest rejected: environment secret %s stays on the local Docker Desktop (local_secrets in ~/%s); this worker's daemon is %s %s.",
-				s.Item, docker.TargetFile, d.Name, d.Endpoint)
+				"Manifest rejected: environment secret %s stays on the local Docker Desktop (local_secrets in [%s] of ~/%s); this worker's daemon is %s %s.",
+				s.Item, docker.SettingTable, docker.SettingFile, d.Name, d.Endpoint)
 		}
 	}
 	return nil
