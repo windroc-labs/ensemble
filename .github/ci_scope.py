@@ -199,7 +199,6 @@ def selected(root: Path, directories: list[str]) -> list[str]:
 
 SUCCESS = frozenset({"success"})
 SKIPPED = frozenset({"skipped"})
-ANY = frozenset({"success", "failure", "cancelled", "skipped"})
 REPO_GUARDS = ("github-dir-pr", "go", "jscpd", "python")
 
 
@@ -248,12 +247,6 @@ def gate(needs: dict, event: str) -> list[str]:
         "jscpd": SUCCESS,
         "python": SUCCESS,
     }
-    if "python" not in needs:
-        # An org ruleset runs main's ci.yml for pull requests and queue groups, so until main calls
-        # python.yml, the change that adds it runs main's unit and coverage jobs instead.
-        del expected["python"], expected["github"]
-        # Advisory on main: its data is a by-product, never a gate.
-        expected.update(unit=tests, coverage=ANY if event == "push" else tests)
     for job, wanted in expected.items():
         data = needs.get(job)
         actual = data.get("result") if isinstance(data, dict) else None
