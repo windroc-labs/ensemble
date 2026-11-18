@@ -32,7 +32,6 @@ paths = [
 
 [tool.importlinter]
 include_external_packages = true
-contract_types = ["units: tests.import_contracts.UnitsContract"]
 root_packages = ["ensemble", "tests"]
 
 [[tool.importlinter.contracts]]
@@ -47,7 +46,7 @@ source_modules = ["ensemble.manager"]
 forbidden_modules = ["ensemble.session", "ensemble.delegate", "ensemble.orchestrator"]
 allow_indirect_imports = true
 
-[[tool.importlinter.contracts]]
+[[tool.ensemble.unit_contracts]]
 name = "Manager units own commands, bookkeeping and events"
 type = "units"
 container = "ensemble.manager"
@@ -94,7 +93,7 @@ source_modules = ["ensemble.orchestrator"]
 forbidden_modules = ["ensemble.session"]
 allow_indirect_imports = true
 
-[[tool.importlinter.contracts]]
+[[tool.ensemble.unit_contracts]]
 name = "Linear transport, operations and reporting have one direction"
 type = "units"
 container = "ensemble.orchestrator"
@@ -191,7 +190,7 @@ type = "forbidden"
 source_modules = ["ensemble.session.modes"]
 forbidden_modules = ["ensemble.session.engine.base", "ensemble.session.engine.hosted_session"]
 
-[[tool.importlinter.contracts]]
+[[tool.ensemble.unit_contracts]]
 name = "Session units follow the main import rules"
 type = "units"
 container = "ensemble.session"
@@ -224,7 +223,7 @@ dependencies = [
     "outside -> ensemble.session.harness ensemble.session.engine.status_log ensemble.session.engine.base ensemble.session.engine.config ensemble.session.engine.records ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.viewer ensemble.utils",
 ]
 
-[[tool.importlinter.contracts]]
+[[tool.ensemble.unit_contracts]]
 name = "Delegate units and shared modules follow the main import rules"
 type = "units"
 container = "ensemble.delegate"
@@ -239,7 +238,7 @@ dependencies = [
     "ensemble.delegate.team.tools -> ensemble.delegate.config ensemble.delegate.engine.config ensemble.utils",
 ]
 
-[[tool.importlinter.contracts]]
+[[tool.ensemble.unit_contracts]]
 name = "Utils imports only itself and the standard library"
 type = "units"
 container = "ensemble.utils"

@@ -1,6 +1,15 @@
-"""Pure dependency policy shared by repository guards and Import Linter contracts."""
+"""Pure dependency policy shared by repository guards, and the repo's import contracts."""
 
+import os
 import sys
+import tomllib
+
+
+def contracts(repo):
+    """Every import contract in pyproject.toml: import-linter's, then the nested-unit ones."""
+    with open(os.path.join(repo, "pyproject.toml"), "rb") as file:
+        tool = tomllib.load(file)["tool"]
+    return [*tool["importlinter"]["contracts"], *tool.get("ensemble", {}).get("unit_contracts", ())]
 
 
 def _within(module, package):

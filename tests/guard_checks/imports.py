@@ -28,7 +28,7 @@ from tests.guard_data.orchestrator import (
 )
 from tests.guard_data.session import SESSION
 from tests.guards import PKG, PROJECTS
-from tests.import_policy import violation
+from tests.import_policy import contracts, violation
 
 READS = {"copy", "count", "get", "index", "items", "keys", "values"}
 
@@ -183,11 +183,9 @@ def _orchestrator_name(name, exported):
 
 def literal_imports(repo: str) -> list[str]:
     """Literal dynamic imports obey the same contracts as normal imports."""
-    config = os.path.join(repo, "pyproject.toml")
-    if not os.path.isfile(config):
+    if not os.path.isfile(os.path.join(repo, "pyproject.toml")):
         return []
-    with open(config, "rb") as file:
-        contracts = tomllib.load(file)["tool"]["importlinter"]["contracts"]
+    rules = contracts(repo)
     found = set()
     for project in PROJECTS:
         for rel, text in _source_files(repo, project, ".py"):
@@ -206,7 +204,7 @@ def literal_imports(repo: str) -> list[str]:
                     continue
                 target = _boundary_name(call.args[0], {})
                 if target and any(
-                    _literal_violation(module, target, contract) for contract in contracts
+                    _literal_violation(module, target, contract) for contract in rules
                 ):
                     found.add(f"src/{rel}:{call.lineno}: imports {target}")
     return sorted(found)

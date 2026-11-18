@@ -1,18 +1,27 @@
 """Nested unit contracts preserve main's allowed edges and reject future-module escapes."""
 
-import tomllib
 from pathlib import Path
 
 from tests.case import REPO, Case
-from tests.import_policy import violation
+from tests.guard_samples import Sample
+from tests.import_policy import contracts, violation
+
+
+class Contracts(Sample):
+    def test_the_loader_returns_import_linters_contracts_then_the_unit_ones(self):
+        types = [contract["type"] for contract in contracts(REPO)]
+        self.assertEqual(types[-5:], ["units"] * 5)
+        self.assertEqual(set(types[:-5]), {"layers", "forbidden"})
+        self.assertEqual(len(types), 20)
+
+    def test_a_tree_without_unit_contracts_loads_import_linters_alone(self):
+        root = self.tree({"pyproject.toml": "[[tool.importlinter.contracts]]\ntype = 'layers'\n"})
+        self.assertEqual(contracts(root), [{"type": "layers"}])
 
 
 class Units(Case):
     def setUp(self):
-        config = tomllib.loads(Path(REPO, "pyproject.toml").read_text())
-        self.policies = [
-            c for c in config["tool"]["importlinter"]["contracts"] if c["type"] == "units"
-        ]
+        self.policies = [c for c in contracts(REPO) if c["type"] == "units"]
 
     def rejected(self, source, target):
         return any(violation(source, target, policy) for policy in self.policies)
@@ -151,10 +160,8 @@ class Units(Case):
 
 class TestOwnership(Case):
     def test_each_layer_forbids_every_shared_test_module(self):
-        contracts = tomllib.loads(Path(REPO, "pyproject.toml").read_text())["tool"]["importlinter"][
-            "contracts"
-        ]
-        layers = next(c["layers"] for c in contracts if c["type"] == "layers")
+        rules = contracts(REPO)
+        layers = next(c["layers"] for c in rules if c["type"] == "layers")
         layer_packages = {f"tests.{layer.rsplit('.', 1)[-1]}" for layer in layers}
         root = Path(REPO, "tests")
         modules = {
@@ -165,7 +172,7 @@ class TestOwnership(Case):
             with self.subTest(layer=layer):
                 ownership = [
                     c
-                    for c in contracts
+                    for c in rules
                     if c["type"] == "forbidden" and c.get("source_modules") == [layer]
                 ]
                 self.assertEqual(len(ownership), 1)
