@@ -44,6 +44,8 @@ STEPS = (
     ("end", {"session_id": "n1", "last": "Done.", "tasks": []}),
 )
 REAPED = 10.0  # s from a kill to the client's and the container's end
+LIMIT = 3.0  # s, the fake container guard's heartbeat limit where a test needs it short
+STALL = 7.0  # s a stopped harness sends nothing: past the guard's limit before it was raised
 
 
 class GuardedDockerTest(Case):
@@ -120,10 +122,22 @@ class GuardedDockerTest(Case):
             self.assertEqual(json.loads(path.read_text())["state"], "exited")
 
     def test_sigkill_of_the_harness_ends_the_container_and_its_client(self):
+        self.env["ENSEMBLE_FAKE_HEARTBEAT"] = str(LIMIT)
         proc, value, client = self.started_harness()
         proc.kill()
         proc.wait(timeout=10)
         self.reaped(value, client)
+
+    def test_a_stalled_harness_keeps_its_worker(self):
+        proc, value, client = self.started_harness()
+        os.kill(proc.pid, signal.SIGSTOP)
+        try:
+            time.sleep(STALL)
+            self.assertTrue(self.alive(client) and self.alive(value["guard"]))
+        finally:
+            os.kill(proc.pid, signal.SIGCONT)
+        time.sleep(2)
+        self.assertTrue(self.alive(client) and self.alive(value["guard"]))
 
     def test_sigkill_of_the_attach_ends_the_container_and_its_client(self):
         _, value, client = self.started_harness()
@@ -142,8 +156,9 @@ class GuardedDockerTest(Case):
         self.reaped(value, client, guard_exits=False)
 
     def test_an_idle_worker_outlives_the_heartbeat_limit(self):
+        self.env["ENSEMBLE_FAKE_HEARTBEAT"] = str(LIMIT)
         _, value, client = self.started_harness()
-        time.sleep(guard.HEARTBEAT + 2)
+        time.sleep(LIMIT + 2)
         self.assertTrue(self.alive(client) and self.alive(value["guard"]))
 
     def worker(self, remove=lambda: None, *, client=None, terminal=False) -> DockerWorker:

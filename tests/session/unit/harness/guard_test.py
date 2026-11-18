@@ -2751,6 +2751,13 @@ class ServeTest(Case):
 
 
 class HeartbeatTest(Base):
+    def test_the_limit_outlasts_host_stalls(self):
+        self.assertEqual(guard.HEARTBEAT, 60.0)
+        runtime = self.runtime(heartbeat=guard.HEARTBEAT)
+        runtime.heard = 100.0
+        self.assertFalse(runtime.lost(160.0))
+        self.assertTrue(runtime.lost(160.1))
+
     def test_a_serve_guard_closes_once_its_harness_is_silent_over_the_limit(self):
         runtime = self.runtime(heartbeat=5.0)
         runtime.heard = 100.0
