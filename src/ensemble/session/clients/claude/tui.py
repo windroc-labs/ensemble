@@ -33,6 +33,7 @@ from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
     ACCOUNT_REJECTED,
     ClientBound,
+    ClientHome,
     ConfigError,
     HomePath,
     HomeStore,
@@ -115,7 +116,7 @@ class ClaudeTui(Tui):
         self._cutoff: str | None = None
         self._pending: tuple[str, HomePath | None, str | None] | None = None
 
-    def _home(self):
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def launch(self, spec: Spec, hook):

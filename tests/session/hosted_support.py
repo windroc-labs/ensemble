@@ -113,7 +113,7 @@ class PoolClient(ProbeClient):
 class PoolHeadless(fake_client.FakeHeadless):
     """Has a home, so a container Host's start records the account it selects."""
 
-    def _home(self):
+    def home(self) -> engine_types.ClientHome:
         return engine_types.ClientHome("pool_dir", "pool", "FAKE_HOME", "pool-token")
 
 

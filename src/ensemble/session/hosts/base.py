@@ -389,8 +389,11 @@ class Host(ABC):
         """ConfigError: `client` cannot run on this Host."""
         return {}
 
-    def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
+    def home_store(self, name: str, home: ClientHome | None) -> HomeStore:
         return LocalHome()
+
+    def session_context(self, name: str, home: ClientHome | None) -> ClientContext:
+        return replace(self._client_context(), home=self.home_store(name, home))
 
     def _resume_argv(self, name: str) -> tuple[str, ...] | None:
         """None: the client's."""

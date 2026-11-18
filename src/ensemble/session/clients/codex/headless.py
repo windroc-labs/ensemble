@@ -17,6 +17,7 @@ from ensemble.session.engine.types import (
     Activity,
     Blocked,
     ClientBound,
+    ClientHome,
     Launch,
     LimitHit,
     Reply,
@@ -32,7 +33,7 @@ from ensemble.session.modes.client_adapters.headless import JsonHeadless
 class CodexHeadless(JsonHeadless):
     _invalid_output = "codex: invalid JSON event"
 
-    def _home(self):
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def __init__(self, common: CodexCommon):

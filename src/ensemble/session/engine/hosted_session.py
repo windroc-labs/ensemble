@@ -203,7 +203,7 @@ def _resumable(
 def _client_home(client: Client) -> ClientHome | None:
     """The home its adapters name; None: it keeps none."""
     adapters = (client.tui(), client.headless())
-    homes = (adapter._home() for adapter in adapters if adapter is not None)
+    homes = (adapter.home() for adapter in adapters if adapter is not None)
     return next((home for home in homes if home is not None), None)
 
 
@@ -467,7 +467,7 @@ def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
     except OSError:
         recorded = None
     info = recorded or SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
-    found = _resumable(lambda: client, info, spec, lambda home: on._home_store(name, home))
+    found = _resumable(lambda: client, info, spec, lambda home: on.home_store(name, home))
     if found.resumable == Resumable.NO:
         raise ConfigError(f"session {name}: conversation {spec.sid} has no transcript to resume")
 
@@ -1426,7 +1426,7 @@ class HostedSession(Session):
         if not self._bound:
             return
         try:
-            home = self._host._home_store(self.name or "", _client_home(self._client))
+            home = self._host.home_store(self.name or "", _client_home(self._client))
             resolved = self._client.session_metadata(self._info, home=home)
             resume = self._host_resume(self._info.cwd) or resolved.resume
             info = replace(self._info, transcript=resolved.transcript, resume=resume)
@@ -1471,7 +1471,7 @@ class HostedSession(Session):
             lambda: self._client,
             info,
             self._running.prepared.spec,
-            lambda home: self._host._home_store(self.name or "", home),
+            lambda home: self._host.home_store(self.name or "", home),
         )
         resume = self._host_resume(info.cwd)
         return found if resume is None else replace(found, resume_command=resume)

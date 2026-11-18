@@ -22,8 +22,11 @@ from ensemble.session.engine.types import (
 class Headless(ABC):
     _context: ClientContext = LOCAL_CONTEXT
 
-    def _home(self) -> ClientHome | None:
+    def home(self) -> ClientHome | None:
         return None
+
+    def set_context(self, context: ClientContext) -> None:
+        self._context = context
 
     def commit(self) -> None:
         return None

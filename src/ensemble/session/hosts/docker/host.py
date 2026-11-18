@@ -760,7 +760,7 @@ class DockerHost(Host):
             )
         return {home.env: client_home(home.dir)}
 
-    def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
+    def home_store(self, name: str, home: ClientHome | None) -> HomeStore:
         if home is None:
             raise ConfigError("client home: not supported on the Docker Host yet")
         return client_state.VolumeHome(name, home.dir)

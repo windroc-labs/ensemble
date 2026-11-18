@@ -3868,7 +3868,7 @@ class OwnedStartTest(Case):
         client = self.session_cls._config().registry.client("claude")
         host = mock.Mock()
         host._client_context.return_value = mock.Mock(container=object())
-        host._home_store.return_value = LocalHome()
+        host.home_store.return_value = LocalHome()
         hosted_session._resume_check(self.spec(resume=True), client, "w1", host)
         host._client_context.return_value = mock.Mock(container=None)
         with self.assertRaises(ConfigError):

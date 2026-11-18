@@ -591,7 +591,7 @@ class SharedConversationTest(Base):
     def test_headless_and_tui_share_their_container_home_and_transcript(self):
         self.enterContext(serve())
         client = ClaudeClient(CONFIG)
-        self.assertEqual(client.headless()._home(), client.tui()._home())
+        self.assertEqual(client.headless().home(), client.tui().home())
         for env, home in (
             ({}, LocalHome()),
             ({"CLAUDE_CONFIG_DIR": stored("w", "claude")}, VolumeHome("w", "claude")),

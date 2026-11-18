@@ -155,7 +155,7 @@ class CodexTui(Tui):
     _remote_owned = True
     _interrupt = Key("Escape")
 
-    def _home(self) -> ClientHome:
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def __init__(self, common: CodexCommon):
