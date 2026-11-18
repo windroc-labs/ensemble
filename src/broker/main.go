@@ -518,7 +518,10 @@ func system() app {
 				if err != nil {
 					return nil, err
 				}
-				return h.WorkspaceRm(ctx, d, volume, force)
+				if force {
+					return h.WorkspaceRmForce(ctx, d, volume)
+				}
+				return h.WorkspaceRm(ctx, d, volume)
 			})
 		},
 		login: func(k keys, account string, out io.Writer) error {

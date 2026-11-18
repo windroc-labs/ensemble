@@ -28,7 +28,7 @@ func TestWorkspaceCheckNamesAHelperItCannotRemove(t *testing.T) {
 	c.runErr = &docker.CommandError{Exit: 1, Stderr: "boom"}
 	d := c.docker()
 	failingRm(d, "ensemble-check-")
-	_, err := Host{}.WorkspaceRm(context.Background(), Daemon{Runner: d}, volume, false)
+	_, err := Host{}.WorkspaceRm(context.Background(), Daemon{Runner: d}, volume)
 	if e := protoErr(t, err); e.Code != protocol.WorkspaceFailed || !strings.Contains(e.Message, " Remove its helper with docker rm --force ensemble-check-") {
 		t.Fatalf("%+v", e)
 	}
