@@ -10,7 +10,6 @@ import re
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tempfile
 import time
 import unittest
@@ -20,13 +19,8 @@ from pathlib import Path
 import ci_scope
 import isolation
 
-from tests.utils.sandbox import (
-    CONTROL_GRACE,
-    clean_env,
-    kill_processes,
-    leaked_processes,
-    stop_tmux_servers,
-)
+from tests.utils import sandbox
+from tests.utils.sandbox import CONTROL_GRACE
 
 STATE = "RUN_TESTS_STATE"
 COVERAGE = "RUN_TESTS_COVERAGE"
@@ -264,68 +258,44 @@ def supervise(title, *, grace=CONTROL_GRACE):
     if supervised_child():
         return None
     tail = collections.deque(maxlen=5 * TAIL)
-    repo = Path(__file__).resolve().parents[1]
-    with (
-        tempfile.TemporaryDirectory(
-            dir=os.environ.get("ENSEMBLE_TEST_SANDBOX") or os.path.realpath("/tmp")
-        ) as tmp,
-        tempfile.TemporaryDirectory(prefix=".test-sandbox-", dir=repo) as workspace,
-    ):
-        state = os.path.join(tmp, "state")
-        open(state, "w").close()
-        roots = [
-            repo,
-            repo / ".github",
-            *src_trees(repo),
-            sysconfig.get_path("purelib"),
-            sysconfig.get_path("platlib"),
-        ]
-        # A worker or board-run container's ENSEMBLE_* would steer tests: they set what they need.
-        caller = {k: v for k, v in os.environ.items() if not k.startswith("ENSEMBLE_")}
-        env = clean_env({**caller, "HOME": workspace, "ENSEMBLE_TEST_WORKSPACE": workspace}, *roots)
-        env.update(
-            HOME=workspace,
-            TMPDIR=tmp,
-            TMUX_TMPDIR=tmp,
-            ENSEMBLE_TEST_SANDBOX=tmp,
-            ENSEMBLE_CONTROL_ROOT=tmp,
-            ENSEMBLE_TEST_TMP=workspace,
-            ENSEMBLE_TEST_WORKSPACE=workspace,
-        )
-        isolation.blockers(Path(tmp) / "blocked-bin")
+    lines = []
+
+    def prepare(tmp):
+        (tmp / "state").touch()
+        isolation.blockers(tmp / "blocked-bin")
         if os.environ.get(COVERAGE):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(os.environ[COVERAGE])
-        try:
-            with subprocess.Popen(
-                [sys.executable, "-P", "-S", "-X", "faulthandler", *sys.orig_argv[1:]],
-                env={**env, STATE: state, "RUN_TESTS_PARENT": str(os.getpid())},
-                stderr=subprocess.PIPE,
-                text=True,
-                errors="replace",
-            ) as child:
-                for line in child.stderr:
-                    sys.stderr.write(line)
-                    tail.append(line)
-        finally:
-            servers = stop_tmux_servers(tmp, env)
-        processes = leaked_processes((tmp, workspace), grace=grace)
-        kill_processes(processes)
-        with open(state, encoding="utf-8") as file:
-            lines = file.read().splitlines()
-        data = os.path.join(tmp, COVERAGE_DATA)
-        if os.environ.get(COVERAGE) and os.path.exists(data):
+
+    def run(env, tmp):
+        with subprocess.Popen(
+            [sys.executable, "-P", "-S", "-X", "faulthandler", *sys.orig_argv[1:]],
+            env={**env, STATE: str(tmp / "state"), "RUN_TESTS_PARENT": str(os.getpid())},
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        ) as child:
+            for line in child.stderr:
+                sys.stderr.write(line)
+                tail.append(line)
+        return child.returncode
+
+    def collect(tmp):
+        lines.extend((tmp / "state").read_text(encoding="utf-8").splitlines())
+        data = tmp / COVERAGE_DATA
+        if os.environ.get(COVERAGE) and data.exists():
             try:
                 shutil.copyfile(data, os.environ[COVERAGE])
             except OSError as error:
                 coverage_lost(title, error)
-    code = 128 - child.returncode if child.returncode < 0 else child.returncode
+
+    code, leaks = sandbox.supervise(
+        run, Path(__file__).resolve().parents[1], prepare=prepare, collect=collect, grace=grace
+    )
     if code and not (code == 1 and lines[-1:] == ["failed"]):
         message = crash(code, lines)
         annotate(title, message + "\n" + "".join(stack(list(tail))))
         append("GITHUB_STEP_SUMMARY", f"### {title}\n\n{message}\n\n")
-    leaks = [f"tmux server {socket}" for socket in servers]
-    leaks += [f"pid {pid}: {args[:200]}" for pid, _, _, args in processes]
     if leaks:
         annotate(title, "leaked after the run: " + "; ".join(leaks))
         items = "".join(f"- {leak}\n" for leak in leaks)

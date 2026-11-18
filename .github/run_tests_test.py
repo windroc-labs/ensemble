@@ -98,7 +98,7 @@ class Coverage(unittest.TestCase):
 
     def start(self):
         if importlib.util.find_spec("coverage") is None:
-            self.skipTest("coverage.py is unavailable; CI's Unit job installs it")
+            self.skipTest("coverage.py is unavailable; CI's GitHub tooling tests job installs it")
         return runner.start_coverage("Unit x", str(self.tmp), self.tmp)
 
     def test_collected_data_is_saved(self):

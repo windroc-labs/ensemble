@@ -6,6 +6,7 @@ import os
 from tests.guard_checks.common import (
     _boundary_bindings,
     _boundary_name,
+    _files,
     _resolve_boundary,
     _source_modules,
     _tree_files,
@@ -91,6 +92,21 @@ def _boundary_calls(node, aliases, own, modules):
     return [reason for reason, violated in rules.items() if violated]
 
 
+GATE_HOLDERS = ("run_tests.GATE", "run_tests.isolation", "conftest")
+# Every name pytest reads configuration or hooks from, and the two paths that may carry one.
+PYTEST_FILES = (
+    "conftest.py",
+    "pytest.ini",
+    ".pytest.ini",
+    "pytest.toml",
+    ".pytest.toml",
+    "tox.ini",
+    "setup.cfg",
+    "pyproject.toml",
+)
+PYTEST_ALLOWED = ("pyproject.toml", "conftest.py")
+
+
 def unit_test_modules(repo: str) -> list[str]:
     """Unit <rel>/<name>_test.py matches a source module or nonempty directory at the same path, or
     a helper module under the project's tests. Package tests use the package name, including the
@@ -148,19 +164,57 @@ def test_gate_mutation(repo: str) -> list[str]:
         aliases = _boundary_bindings(tree)
         for node in ast.walk(tree):
             name = _boundary_name(node, aliases)
-            if isinstance(node, ast.Name | ast.Attribute) and any(
-                _within(name, target) for target in ("run_tests.GATE", "run_tests.isolation")
-            ):
+            # A string reaches a module too: sys.modules[...], import_module(...), getattr(...).
+            named = [node.slice] if isinstance(node, ast.Subscript) else []
+            if isinstance(node, ast.Call):
+                named = [arg for arg in node.args if isinstance(arg, ast.Constant)]
+            base = node
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            imported = isinstance(base, ast.Name) and base.id in aliases
+            names = [name] if isinstance(node, ast.Name | ast.Attribute) and imported else []
+            names += [
+                text
+                for text in (_boundary_name(key, aliases) for key in named)
+                if not text.endswith(".py")
+            ]
+            if any(_within(reached, target) for reached in names for target in GATE_HOLDERS):
                 found.add(f"{rel}:{node.lineno}: interpreter gate access")
             if not isinstance(node, ast.Call) or not node.args:
                 continue
             call = _boundary_name(node.func, aliases)
             target = _boundary_name(node.args[0], aliases)
             if ("patch" in call.split(".") or call in {"setattr", "delattr"}) and any(
-                _within(target, name)
-                for name in ("isolation", "run_tests.GATE", "run_tests.isolation")
+                _within(target, name) for name in ("isolation", *GATE_HOLDERS)
             ):
                 found.add(f"{rel}:{node.lineno}: interpreter gate patch")
+    return sorted(found)
+
+
+def pytest_surface(repo: str) -> list[str]:
+    """pytest takes the config file nearest the tests and no conftest above it, so only the two
+    owned files may exist among the tests' ancestors.
+    """
+    tests = os.path.join(repo, "tests")
+    read = [name for name in os.listdir(repo) if name in PYTEST_FILES]
+    for top, _, names in os.walk(tests):
+        read += [
+            os.path.relpath(os.path.join(top, name), repo).replace(os.sep, "/")
+            for name in names
+            if name in PYTEST_FILES
+        ]
+    found = [
+        f"{rel}: pytest reads it; only {' and '.join(PYTEST_ALLOWED)} may"
+        for rel in read
+        if rel not in PYTEST_ALLOWED
+    ]
+    for rel, text in _files(tests, ".py"):
+        for node in ast.walk(ast.parse(text)):
+            targets = getattr(node, "targets", [getattr(node, "target", None)])
+            if isinstance(node, ast.Assign | ast.AnnAssign) and any(
+                isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets
+            ):
+                found.append(f"tests/{rel}:{node.lineno}: pytest_plugins loads pytest hooks")
     return sorted(found)
 
 

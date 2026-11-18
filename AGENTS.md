@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`.
+Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`; unit tests also run as `uv run pytest [path]` (`conftest.py` gives them the same sandbox and isolation gate).
 
 ## Gotchas
 
@@ -29,11 +29,10 @@ The queue tests current `main` plus preceding queued PRs on `merge_group` commit
 squash-merges automatically when required `CI` passes; no manual branch updates are needed.
 `Worker image` also reports on queue groups, building when their combined diff changes image inputs.
 Queue groups run every CI project, including diff coverage against the group's base SHA.
-Once every unit shard passes (none run when only docs or the version changed), the `Coverage` job combines their data into artifact `unit-coverage-merged-<run id>-<attempt>` (`coverage-data` for coverage.py 7.10.7, `total.md`; kept 30 days; a pull request's covers only the projects it tests) and writes total line coverage to its job summary.
-A unit shard that cannot collect coverage warns and keeps its tests' result.
-Pull requests and queue groups gate coverage: `Coverage` fails on a shard without data or low diff coverage.
-On pushes to `main` coverage is advisory: the unit jobs' coverage install and upload steps and the whole `Coverage` job may fail without failing `CI`, and diff coverage is not measured.
-Latest `main` coverage, from the newest of the last 20 push runs that has it (a run lacks it when it changed only docs or the version, a unit test failed, or a coverage step failed; its Unit and `Coverage` jobs show which): `for run in $(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --limit 20 --json databaseId --jq '.[].databaseId'); do gh run download "$run" --repo windroc-labs/ensemble --pattern 'unit-coverage-merged-*' && break; done`.
+Unit coverage runs in repo-guards' `python.yml` (the `python` job): each `python / Coverage shard …` job runs `coverage run -m pytest` through root `conftest.py` on one `coverage-shards` entry (`tests/**/unit` paths only), and `python / Coverage` combines their data (shard artifacts kept 1 day); a failed shard fails it.
+`python / Coverage` gates every event, pushes to `main` included: total ≥ 80% and changed lines ≥ 90% (repo-guards' defaults; diff-cover against the pull request's base branch, the queue group's base SHA or the push's previous commit).
+On a pull request, `python / Changes` skips the other `python` jobs when it changes no Python file, config or repo-guards call or setting.
+Latest `main` total coverage, from the newest successful push run: `run=$(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId'); job=$(gh run view "$run" --repo windroc-labs/ensemble --json jobs --jq '.jobs[] | select(.name == "python / Coverage") | .databaseId'); gh run view --job "$job" --repo windroc-labs/ensemble --log | grep 'total coverage:'`.
 
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
@@ -58,7 +57,7 @@ A base change alone reruns no CI: push to the branch, or close and reopen the PR
 
 Layer contracts live in `pyproject.toml` and run with `lint-imports`: manager > orchestrator > delegate > session > utils. Manager imports only itself and utils; it reaches other layers through commands. Cross-layer imports use the lower layer's public package; exact test exceptions for removed exports are listed in `pyproject.toml`. Orchestration reaches session only through Delegate: its contract ignores no import. Orchestrator `engine/` imports nothing under `trackers/` (one subpackage per tracker; Linear: `trackers/linear/`) but the router's Linear transport its contract lists, and `trackers/` imports none of the board rules (`router`, `promote`, `prune`, `writeback`); `engine/flow/`, its tracker-agnostic core, names no Linear concept. Project tests may import their project and lower layers, never the root `tests` package or a higher project.
 
-Session and Delegate internal units use the longest matching package; their dependency rules and shared-module purity are declared in `pyproject.toml`'s unit contracts. Session owns no config reader, reply-protocol tag or team text; `tests/guard_checks/` enforces those names and literal dynamic imports.
+Session and Delegate internal units use the longest matching package; their dependency rules and shared-module purity are declared in `pyproject.toml`'s `[[tool.ensemble.unit_contracts]]`, which `tests/integration/import_contracts_integration_test.py` checks on the real import graph (not `lint-imports`). Session owns no config reader, reply-protocol tag or team text; `tests/guard_checks/` enforces those names and literal dynamic imports.
 
 Repository design rules live in `tests/guard_checks/`, one module per concern: namespace and subsystem placement, unit test placement, shared types, client-name ownership (`client_names`), configuration and import side effects. A rule's exceptions and a layer's constants live in `tests/guard_data/<package>.py` of the layer owning the path or package they name. A helper used by one file stays there as a private function; otherwise, a helper independent of its layer's own classes goes in `utils/`. Shared data types live in their layer's types module; standalone scripts keep theirs local. The `standalone_imports` guard owns their inventory and enforces standard-library-only imports.
 

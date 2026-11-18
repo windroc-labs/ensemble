@@ -1583,7 +1583,7 @@ class WorkspaceCheck(Case):
     def repo(self, rel):
         (self.root / rel / ".git").mkdir(parents=True)
 
-    def run(self, dirty=(), failing=()):
+    def fake_git(self, dirty=(), failing=()):
         def run(argv, **kw):
             rel = os.path.relpath(kw["cwd"], self.root)
             self.calls.append((argv, kw))
@@ -1614,7 +1614,7 @@ class WorkspaceCheck(Case):
         for rel in ("publish", "src/o/a", "src/o/b"):
             self.repo(rel)
         found = self.check["dirty"](
-            str(self.root), CACHE, run=self.run(dirty={"src/o/a"}, failing={"src/o/b"})
+            str(self.root), CACHE, run=self.fake_git(dirty={"src/o/a"}, failing={"src/o/b"})
         )
         self.assertEqual(found, ["src/o/a", "src/o/b"])
         guard = [
@@ -1655,17 +1655,18 @@ class WorkspaceCheck(Case):
             return scandir(path)
 
         with mock.patch("os.scandir", side_effect=denied):
-            found = self.check["dirty"](str(self.root), CACHE, run=self.run())
+            found = self.check["dirty"](str(self.root), CACHE, run=self.fake_git())
         self.assertEqual(found, ["src/o"])
 
     def test_paths_have_control_characters_escaped(self):
         self.repo("src/o/bad\x1b[31m")
         found = self.check["dirty"](
-            str(self.root), CACHE, run=self.run(dirty={"src/o/bad\x1b[31m"})
+            str(self.root), CACHE, run=self.fake_git(dirty={"src/o/bad\x1b[31m"})
         )
         self.assertEqual(found, ["src/o/bad\\x1b[31m"])
 
     def test_main_prints_the_dirty_list_and_wants_one_absolute_path(self):
+        self.root.mkdir()
         with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
             self.check["main"]([str(self.root), CACHE])
         self.assertEqual(json.loads(out.getvalue()), {"dirty": []})
