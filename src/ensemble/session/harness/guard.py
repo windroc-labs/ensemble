@@ -956,6 +956,7 @@ class Guard:
         self.args = args
         self.env, self.heartbeat, self.pending = env, heartbeat, pending
         self.heard = 0.0
+        self.reason: str | None = None
         self.proc = None
         self.client: list | None = None  # [pid, start token]
         self.master = None
@@ -999,6 +1000,8 @@ class Guard:
             value["client"] = self.client  # None: it started no client
         if error is not None:
             value["error"] = error.encode("utf-8", "backslashreplace").decode()[:ERROR_CHARS]
+        if self.reason is not None:
+            value["reason"] = self.reason[:ERROR_CHARS]
         self._save("state.json", value)
 
     def last_lines(self) -> str:
@@ -1071,9 +1074,9 @@ class Guard:
         self.output.append((wire, ack, delivery))
         self.output_size += len(wire)
 
-    def close(self, *, display: bool = False) -> None:
+    def close(self, reason: str, *, display: bool = False) -> None:
         if self.closing is None:
-            self.closing = time.monotonic()
+            self.closing, self.reason = time.monotonic(), reason
             while self.taken:
                 self.ack(*self.taken.popleft())
         if display:
@@ -1139,7 +1142,7 @@ class Guard:
                 self.channel = False
                 self.output.clear()
                 self.output_size = 0
-                self.close(display=True)
+                self.close("harness channel broken", display=True)
                 break
             self.output_size -= count
             if count < len(wire):
@@ -1165,7 +1168,7 @@ class Guard:
                     raise ValueError("guard input buffer full")
                 self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
-            self.close(display=True)
+            self.close("harness asked to close", display=True)
         elif kind == b"p" and json.loads(data) == {}:
             pass
         elif kind == b"k" and json.loads(data) == {}:
@@ -1185,7 +1188,7 @@ class Guard:
         """Harness bytes: each read restarts the heartbeat limit; EOF is a close."""
         data = os.read(0, READ_SIZE)
         if not data:
-            self.close(display=True)
+            self.close("harness channel closed", display=True)
             return
         self.heard = time.monotonic()
         for kind, payload in self.decoder.feed(data):
@@ -1193,8 +1196,9 @@ class Guard:
 
     def listen(self, ready) -> None:
         """After a select, so a guard frozen past the limit (docker pause) reads its bytes first."""
-        if 0 not in ready and self.lost(time.monotonic()):
-            self.close(display=True)
+        now = time.monotonic()
+        if 0 not in ready and self.lost(now):
+            self.close(f"no harness byte for {now - self.heard:.1f} s", display=True)
 
     def lost(self, now: float) -> bool:
         return (
@@ -1306,7 +1310,7 @@ class Guard:
         now = time.monotonic()  # before the reap: an exit before UP s can never be reported up
         self.reap()
         if self.proc.returncode is not None:
-            self.close()
+            self.close("client exited")
         elif not self.up_sent and self.channel and now - self.spawned >= UP:
             self.emit(json_frame(b"u", {}))
             self.up_sent = True
@@ -1348,6 +1352,8 @@ class Guard:
                         exit_value = {"returncode": self.proc.returncode}
                         if self.args.terminal:
                             exit_value["text"] = self.last_lines()
+                        if self.reason is not None:
+                            exit_value["reason"] = self.reason
                         self.emit(json_frame(b"x", exit_value))
                     self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
@@ -1416,7 +1422,7 @@ class Guard:
             raise
         finally:
             if self.proc is not None and not self.exit_sent:
-                self.close()
+                self.close("guard error")
                 with contextlib.suppress(OSError):
                     while not self.tick():
                         time.sleep(TICK)
@@ -1697,7 +1703,12 @@ def supervise(args, lease_path: str | None, **options) -> int:
             return 1
     runtime = Guard(args, lease, **options)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda _sig, _frame: runtime.close(display=True))
+        signal.signal(
+            sig,
+            lambda sig, _frame: runtime.close(
+                f"guard got {signal.Signals(sig).name}", display=True
+            ),
+        )
     try:
         return runtime.run()
     except (OSError, ValueError) as error:
