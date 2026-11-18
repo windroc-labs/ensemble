@@ -2115,6 +2115,13 @@ class LastLinesTest(Base):
         self.assertEqual(self.host.last_lines("w", "s1", "f" * 32), "")
         self.assertEqual(self.host.last_lines("v", "s1", GEN), "")
 
+    def test_a_diagnostic_with_only_a_close_reason_has_no_last_lines(self):
+        self.record()
+        self.diagnostic({"reason": "no harness byte for 61.2 s"})
+        self.assertEqual(self.host.last_lines("w", "s1", GEN), "")
+        self.diagnostic({"text": "error", "reason": "client exited"})
+        self.assertEqual(self.host.last_lines("w", "s1", GEN), "error")
+
     def test_a_bad_record_or_diagnostic_has_no_last_lines(self):
         self.record(generation="../" + GEN)
         self.diagnostic({"text": "error"}, gen="../" + GEN)

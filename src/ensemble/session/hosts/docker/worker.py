@@ -34,7 +34,7 @@ LOG_MAX = 1 << 20
 
 
 def diagnostic_file(state: str, generation: str) -> str:
-    """Its run's exit tail on the host: the guard's own goes with its container."""
+    """Its run's exit tail and close reason on the host: the guard's own go with its container."""
     return os.path.join(state, f"{generation}.diagnostic.json")
 
 
@@ -255,12 +255,10 @@ class DockerWorker(ManagedProcess):
             self.end_releases()
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()
-        if self.last_lines:
+        kept = {"text": self.last_lines, "reason": self.reason}
+        if kept := {key: value for key, value in kept.items() if value}:
             with contextlib.suppress(OSError):
-                save(
-                    diagnostic_file(self.state_dir, self.generation),
-                    json.dumps({"text": self.last_lines}),
-                )
+                save(diagnostic_file(self.state_dir, self.generation), json.dumps(kept))
         while True:
             try:
                 self.remove()

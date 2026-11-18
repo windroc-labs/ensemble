@@ -477,6 +477,22 @@ class EndTest(Base):
         self.assertEqual(seen, [{"text": "error: bad flag"}])
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
+    def test_an_exit_keeps_its_guards_close_reason_on_the_host(self):
+        path = worker.diagnostic_file(self.state, GEN)
+        for frame, kept in (
+            ({"returncode": 129, "reason": "no harness byte for 61.2 s"},) * 2,
+            ({"returncode": 2, "text": "error", "reason": "client exited"},) * 2,
+        ):
+            with self.subTest(frame=frame):
+                channel = self.make()
+                channel.accept(b"x", json.dumps(frame).encode())
+                self.assertTrue(self.ended(channel))
+                with open(path, encoding="utf-8") as f:
+                    self.assertEqual(
+                        json.load(f), {k: v for k, v in kept.items() if k != "returncode"}
+                    )
+                os.unlink(path)
+
     def test_an_exit_without_last_lines_keeps_no_file(self):
         for frames in ([(b"x", b'{"returncode":2}')], []):
             with self.subTest(frames=frames):

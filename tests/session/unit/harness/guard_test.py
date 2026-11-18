@@ -371,7 +371,10 @@ class DisplayTest(Base):
         kinds = [kind for kind, _ in frames]
         self.assertEqual(kinds[-1], b"x")
         self.assertEqual(kinds.count(b"x"), 1)
-        self.assertEqual(json.loads(frames[-1][1]), {"returncode": 0, "text": "current screen"})
+        self.assertEqual(
+            json.loads(frames[-1][1]),
+            {"returncode": 0, "text": "current screen", "reason": "client exited"},
+        )
 
 
 class CellTest(Base):
@@ -1770,7 +1773,7 @@ class GuardTest(Base):
 
     def test_a_hook_while_closing_is_acked_once_its_whole_frame_is_written(self):
         runtime = self.runtime()
-        runtime.close()  # stdin no longer read: no k to wait for
+        runtime.close("test")  # stdin no longer read: no k to wait for
         peer = mock.Mock()
         runtime.peers[peer] = ("ack", bytearray())
         runtime.emit(b"hello", peer, "a" * 32)
@@ -1818,7 +1821,7 @@ class GuardTest(Base):
         peer = mock.Mock()
         runtime.peers[peer] = ("ack", bytearray())
         runtime.taken.append((peer, "a" * 32))
-        runtime.close()
+        runtime.close("test")
         self.assertEqual(
             json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )
@@ -1829,9 +1832,9 @@ class GuardTest(Base):
         runtime.emit(b"hello")
         with mock.patch.object(os, "write", side_effect=BlockingIOError):
             runtime.flush()
-        runtime.close()
+        runtime.close("test")
         first = runtime.closing
-        runtime.close()
+        runtime.close("test")
         self.assertEqual(runtime.closing, first)
         self.assertEqual(runtime.output_size, 5)
 
@@ -1934,7 +1937,7 @@ class GuardTest(Base):
         peer.recv.return_value = guard.json_frame(b"w", {"rows": 19, "columns": 33})
         with mock.patch.object(guard.fcntl, "ioctl") as ioctl:
             runtime.peer_read(peer)
-            runtime.close()
+            runtime.close("test")
             runtime.drop(peer)
         self.assertEqual(ioctl.call_count, 1)
 
@@ -2224,7 +2227,7 @@ class GuardTest(Base):
             self.assertEqual(runtime.run(), 0)
         frames = guard.Decoder().feed(b"".join(captured))
         self.assertEqual([kind for kind, _ in frames], [b"s", b"o", b"h", b"x"])
-        self.assertEqual(json.loads(frames[-1][1]), {"returncode": 0})
+        self.assertEqual(json.loads(frames[-1][1]), {"returncode": 0, "reason": "client exited"})
         self.assertEqual(
             json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )
@@ -2288,12 +2291,13 @@ class EndTest(Base):
         with open(self.home + "/state.json") as stream:
             return json.load(stream)
 
-    def expected(self, state, error, **fields):
+    def expected(self, state, error, reason=None, **fields):
         return {
             "generation": os.path.basename(self.home),
             "state": state,
             **fields,
             "error": error,
+            **({} if reason is None else {"reason": reason}),
         }
 
     def test_a_running_record_names_its_client(self):
@@ -2341,7 +2345,12 @@ class EndTest(Base):
             runtime.run()
         self.assertEqual(
             self.record(),
-            self.expected("failed", "OSError: worker tree exit unconfirmed", client=[100, "777"]),
+            self.expected(
+                "failed",
+                "OSError: worker tree exit unconfirmed",
+                "harness channel closed",
+                client=[100, "777"],
+            ),
         )
 
     def test_an_invalid_harness_command_records_the_exit_its_close_confirmed(self):
@@ -2350,7 +2359,8 @@ class EndTest(Base):
             runtime.run()
         self.assertFalse(self.client_alive)
         self.assertEqual(
-            self.record(), self.expected("exited", "ValueError: invalid guard command")
+            self.record(),
+            self.expected("exited", "ValueError: invalid guard command", "guard error"),
         )
 
     def test_a_failed_scan_after_the_client_starts_records_failed_with_its_client(self):
@@ -2362,7 +2372,12 @@ class EndTest(Base):
             runtime.run()
         self.assertEqual(
             self.record(),
-            self.expected("failed", "OSError: [Errno 24] Too many open files", client=[100, "777"]),
+            self.expected(
+                "failed",
+                "OSError: [Errno 24] Too many open files",
+                "guard error",
+                client=[100, "777"],
+            ),
         )
 
     def test_output_still_open_9_s_after_the_client_exit_records_the_exit_and_error(self):
@@ -2374,7 +2389,8 @@ class EndTest(Base):
         with self.world(select), self.assertRaisesRegex(OSError, "output open after its exit"):
             runtime.run()
         self.assertEqual(
-            self.record(), self.expected("exited", "OSError: worker output open after its exit")
+            self.record(),
+            self.expected("exited", "OSError: worker output open after its exit", "client exited"),
         )
 
     def test_output_undelivered_9_s_after_the_exit_keeps_exited_with_the_error(self):
@@ -2393,7 +2409,8 @@ class EndTest(Base):
             runtime.run()
         self.assertTrue(runtime.exit_sent)
         self.assertEqual(
-            self.record(), self.expected("exited", "OSError: guard output undelivered")
+            self.record(),
+            self.expected("exited", "OSError: guard output undelivered", "client exited"),
         )
 
     def test_a_client_that_never_started_records_failed_with_no_client(self):
@@ -2449,6 +2466,34 @@ class EndTest(Base):
                 json.load(stream),
                 self.expected("failed", "OSError: cannot run /opt/中/client", client=None),
             )
+
+    def signalled(self, sig) -> dict:
+        """The exit frame of a supervised guard that got `sig` at its first select."""
+        self.client_alive, self.proc.returncode = True, None
+        handlers, written = {}, []
+
+        def select(readers):
+            handlers[sig](sig, None)
+            return [fd for fd in readers if fd in (11, 12)]
+
+        def write(_fd, data):
+            written.append(data)
+            return len(data)
+
+        with (
+            self.world(select, write=write),
+            mock.patch.object(signal, "pthread_sigmask"),
+            mock.patch.object(signal, "signal", side_effect=handlers.__setitem__),
+        ):
+            self.assertEqual(guard.supervise(self.runtime().args, None), 0)
+        return json.loads(guard.Decoder().feed(b"".join(written))[-1][1])
+
+    def test_a_signal_to_the_guard_is_named_in_its_exit_frame(self):
+        for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+            with self.subTest(sig=sig.name):
+                self.assertEqual(
+                    self.signalled(sig), {"returncode": 0, "reason": f"guard got {sig.name}"}
+                )
 
 
 class LeaseTest(Case):
@@ -2751,12 +2796,19 @@ class ServeTest(Case):
 
 
 class HeartbeatTest(Base):
+    def test_the_limit_outlasts_host_stalls(self):
+        self.assertEqual(guard.HEARTBEAT, 60.0)
+        runtime = self.runtime(heartbeat=guard.HEARTBEAT)
+        runtime.heard = 100.0
+        self.assertFalse(runtime.lost(160.0))
+        self.assertTrue(runtime.lost(160.1))
+
     def test_a_serve_guard_closes_once_its_harness_is_silent_over_the_limit(self):
         runtime = self.runtime(heartbeat=5.0)
         runtime.heard = 100.0
         self.assertFalse(runtime.lost(105.0))
         self.assertTrue(runtime.lost(105.1))
-        runtime.close()
+        runtime.close("test")
         self.assertFalse(runtime.lost(200.0))
         self.assertFalse(self.runtime().lost(1e9))
 
@@ -2819,3 +2871,62 @@ class HeartbeatTest(Base):
             (env["KEEP"], env["NEW"], env["OWN"], env["TERM"]),
             ("handoff", "1", "1", "xterm-256color"),
         )
+
+
+class CloseReasonTest(Base):
+    def test_the_first_close_names_the_reason_and_later_ones_keep_it(self):
+        runtime = self.runtime()
+        self.assertIsNone(runtime.reason)
+        runtime.close("first")
+        runtime.close("second", display=True)
+        self.assertEqual(runtime.reason, "first")
+        self.assertTrue(runtime.display_closed)
+
+    def test_a_silent_harness_is_named_with_its_measured_silence(self):
+        runtime = self.runtime(heartbeat=60.0)
+        runtime.heard = 10.0
+        with mock.patch.object(guard.time, "monotonic", return_value=83.26):
+            runtime.listen([])
+        self.assertEqual(runtime.reason, "no harness byte for 73.3 s")
+
+    def test_channel_eof_is_named(self):
+        runtime = self.runtime()
+        with mock.patch.object(os, "read", return_value=b""):
+            runtime.read_channel()
+        self.assertEqual(runtime.reason, "harness channel closed")
+
+    def test_a_broken_channel_is_named(self):
+        runtime = self.runtime()
+        runtime.emit(guard.json_frame(b"u", {}))
+        with mock.patch.object(os, "write", side_effect=BrokenPipeError):
+            runtime.flush()
+        self.assertEqual(runtime.reason, "harness channel broken")
+
+    def test_a_close_command_is_named(self):
+        runtime = self.runtime()
+        runtime.command(b"c", b"{}")
+        self.assertEqual(runtime.reason, "harness asked to close")
+
+    def test_a_client_that_exited_first_is_named(self):
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(returncode=0)
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+        ):
+            runtime.tick()
+        self.assertEqual(runtime.reason, "client exited")
+
+    def test_a_record_without_a_close_has_no_reason(self):
+        runtime = self.runtime(lease="9")
+        runtime.state("exited")
+        with open(self.home + "/state.json") as stream:
+            self.assertNotIn("reason", json.load(stream))
+
+    def test_a_record_names_a_bounded_reason(self):
+        runtime = self.runtime(lease="9")
+        runtime.close("r" * 5000)
+        for status in ("exited", "failed"):
+            runtime.state(status)
+            with open(self.home + "/state.json") as stream:
+                self.assertEqual(json.load(stream)["reason"], "r" * guard.ERROR_CHARS)
