@@ -389,7 +389,6 @@ func (h Host) clientLogin(ctx context.Context, m Manifest) (clientLogin, error) 
 	return clientLogin{}, nil
 }
 
-// secretWrites: held gains each secret once its write is confirmed.
 func (h Host) secretWrites(l launch, batch *startDelivery, held *holding) error {
 	for _, s := range l.m.Secrets {
 		message := "Writing " + s.Item + " into the container failed."
@@ -406,7 +405,6 @@ func (h Host) secretWrites(l launch, batch *startDelivery, held *holding) error 
 	return nil
 }
 
-// tokenWrites issues the GitHub and Linear tokens l's manifest asks for: held keeps their revocations.
 func (h Host) tokenWrites(ctx context.Context, l launch, batch *startDelivery, held *holding, lap func(phase string)) (github []protocol.Expiry, linear string, err error) {
 	github = []protocol.Expiry{}
 	if l.m.GitHubApp != "" {
