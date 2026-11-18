@@ -13,7 +13,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// Ready checks, under the account lock, that the login is usable, renewing it when due.
+// Ready renews the login when due.
 func (c Codex) Ready(ctx context.Context) error {
 	s, err := c.begin(ctx, protocol.StartFailed)
 	if err != nil {
@@ -26,7 +26,7 @@ func (c Codex) Ready(ctx context.Context) error {
 	return err
 }
 
-// Inject prepares an access-only login and keeps the account locked until the caller finishes delivery.
+// Inject keeps the account locked until the caller finishes delivery.
 func (c Codex) Inject(ctx context.Context) (launcher.CodexInjection, error) {
 	s, err := c.begin(ctx, protocol.StartFailed)
 	if err != nil {
@@ -43,14 +43,12 @@ func (c Codex) Inject(ctx context.Context) (launcher.CodexInjection, error) {
 	}, nil
 }
 
-// Refresh writes the current access-only login into a container through exec, then publishes its expiry.
 func (c Codex) Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error) {
 	return c.deliver(ctx, protocol.RefreshFailed, exec, publish)
 }
 
-// deliver writes the current access-only login into a container under the account lock, renewing it only when due
-// (codexRefreshAhead) and no concurrent run renewed it since this run began (revision.json); publish (nil: none) gets
-// its expiry after the write. failed is the calling command's failure code.
+// deliver renews the login only when due (codexRefreshAhead) and no concurrent run renewed it since this run began
+// (revision.json); publish (nil: none) gets its expiry after the write.
 func (c Codex) deliver(ctx context.Context, failed protocol.Code, exec func([]string, []byte) error, publish func(string) error) (_ string, err error) {
 	s, err := c.begin(ctx, failed)
 	if err != nil {
@@ -78,8 +76,7 @@ func (c Codex) deliver(ctx context.Context, failed protocol.Code, exec func([]st
 	return expiry, nil
 }
 
-// codexError is the protocol's account of a Codex delivery error: a protocol error as it is, an unreachable Docker
-// target wrapped, anything else opaque.
+// codexError keeps a protocol error, wraps an unreachable Docker target and makes anything else opaque.
 func codexError(err error) error {
 	var e *protocol.Error
 	var u *docker.Unreachable
@@ -94,8 +91,7 @@ func codexError(err error) error {
 	return err
 }
 
-// codexSession is one run under the account lock, from begin to end: read reads the login, renewing it when due,
-// write delivers its access-only carrier, end records the account revision and unlocks.
+// codexSession is one run under the account lock; end records the account revision and unlocks.
 type codexSession struct {
 	c                Codex
 	failed           protocol.Code
@@ -133,8 +129,7 @@ func codexCarrier(auth codexAuthDocument) ([]byte, error) {
 	return json.Marshal(auth)
 }
 
-// read reads the login and renews it when due, unless a concurrent run completed a renewal meanwhile or the last
-// renewal is being repaired; it returns the login's expiry.
+// read skips the renewal when a concurrent run completed one meanwhile or the last one is being repaired.
 func (s *codexSession) read(ctx context.Context) (_ time.Time, err error) {
 	defer func() { s.readFailed = s.readFailed || err != nil }()
 	c := s.c
@@ -191,7 +186,6 @@ func (s *codexSession) read(ctx context.Context) (_ time.Time, err error) {
 	return expires, nil
 }
 
-// carry keeps auth's carrier for write.
 func (s *codexSession) carry(auth codexAuthDocument) error {
 	carrier, err := codexCarrier(auth)
 	if err != nil {
@@ -202,7 +196,7 @@ func (s *codexSession) carry(auth codexAuthDocument) error {
 	return nil
 }
 
-// write gives the container the carrier read got, through bootstrap.py's codex-auth writer.
+// write goes through bootstrap.py's codex-auth writer.
 func (s *codexSession) write(exec func([]string, []byte) error) error {
 	err := exec([]string{launcher.Python, "-I", launcher.Bootstrap, "codex-auth"}, s.carrier)
 	var u *docker.Unreachable

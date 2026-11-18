@@ -16,45 +16,36 @@ import (
 )
 
 const (
-	// TargetFile, under the account home, names the one Docker target every docker call reaches; without it, the
-	// local Docker Desktop.
+	// Without TargetFile, every docker call reaches the local Docker Desktop.
 	TargetFile = ".ensemble/docker/target.json"
-	// SSHDir holds only ssh, a root-owned link to this broker: first on docker's PATH for a remote target, so the
-	// docker CLI's ssh gets SSHArgs' options.
-	SSHDir  = "/usr/local/libexec/ensemble/ssh"
-	SSHPath = "/usr/bin/ssh"
-	// TargetPattern is a remote target, as the protocol schema's endpoint admits it.
-	TargetPattern = `ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?`
-	maxTarget     = 64 << 10
-	minEngine     = 26
-	// EnvItemPrefix starts every environment secret's keychain service.
+	// SSHDir holds only ssh, a root-owned link to this broker.
+	SSHDir          = "/usr/local/libexec/ensemble/ssh"
+	SSHPath         = "/usr/bin/ssh"
+	TargetPattern   = `ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?`
+	maxTarget       = 64 << 10
+	minEngine       = 26
 	EnvItemPrefix   = "ensemble-broker-env/"
 	maxLocalSecrets = 16
 )
 
 var (
-	targetHost = regexp.MustCompile(`^` + TargetPattern + `$`)
-	portSuffix = regexp.MustCompile(`:([0-9]+)$`)
-	// engineMajor reads a server version's major number: 26.0.0-rc1 is 26.
+	targetHost  = regexp.MustCompile(`^` + TargetPattern + `$`)
+	portSuffix  = regexp.MustCompile(`:([0-9]+)$`)
 	engineMajor = regexp.MustCompile(`^([0-9]+)\.`)
 	// shown is a version safe to repeat in a message.
 	shown = regexp.MustCompile(`^[0-9A-Za-z.+~_-]{1,32}$`)
-	// An environment secret's name: lowercase, so the keychain's case handling cannot merge two.
+	// Lowercase, so the keychain's case handling cannot merge two names.
 	envNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
-// ValidEnvName is whether name can be an environment secret, item ensemble-broker-env/<name>.
 func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
 
-// ValidEnvItem is whether item is an environment secret's reference, ensemble-broker-env/<name>; no other keychain
-// service is.
 func ValidEnvItem(item string) bool {
 	name, ok := strings.CutPrefix(item, EnvItemPrefix)
 	return ok && ValidEnvName(name)
 }
 
-// sshOptions come before docker's own ssh arguments: ssh keeps an option's first value. Without the user's ssh
-// config, a connection uses keys only, never forwards, and needs a known, matching host key.
+// sshOptions come before docker's own ssh arguments: ssh keeps an option's first value.
 var sshOptions = []string{
 	"-F", "/dev/null",
 	"-o", "BatchMode=yes",
@@ -74,8 +65,7 @@ var sshOptions = []string{
 	"-o", "ControlPath=none",
 }
 
-// Target is the Docker target: Host is a remote ssh:// endpoint, "" the local Docker Desktop. A worker given any of
-// LocalSecrets, environment secret items, runs on the local Docker Desktop whatever Host is.
+// Target's Host is "" for the local Docker Desktop; a worker given any of LocalSecrets runs there whatever Host is.
 type Target struct {
 	Host         string
 	LocalSecrets []string
@@ -83,8 +73,7 @@ type Target struct {
 
 func (t Target) Remote() bool { return t.Host != "" }
 
-// LoadTarget reads home's TargetFile: {"host": "ssh://[user@]host[:port]", "local_secrets": [item, ...]}, nothing
-// else; no file is the local target.
+// LoadTarget admits only the keys host and local_secrets; no file is the local target.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, TargetFile)
 	invalid := func(format string, args ...any) (Target, error) {
@@ -155,13 +144,10 @@ func LoadTarget(home string) (Target, error) {
 	return Target{Host: host, LocalSecrets: secrets}, nil
 }
 
-// SSHArgs is the system ssh's argument list for args, the docker CLI's.
 func SSHArgs(args []string) []string {
 	return append(append([]string(nil), sshOptions...), args...)
 }
 
-// remoteReason names why the docker CLI could not reach a remote target from its stderr: ssh's and the remote
-// shell's words, else a failed connection.
 func remoteReason(stderr string) string {
 	switch {
 	case strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
@@ -179,7 +165,7 @@ func remoteReason(stderr string) string {
 	return "connection failed"
 }
 
-// connectDetail is the last line of what ssh printed, as the docker CLI quotes it after stderr=, else its own.
+// connectDetail is ssh's last line, which the docker CLI quotes after stderr=, else its own.
 func connectDetail(stderr string) string {
 	if i := strings.LastIndex(stderr, "stderr="); i >= 0 {
 		stderr = stderr[i+len("stderr="):]
@@ -187,7 +173,6 @@ func connectDetail(stderr string) string {
 	return Diagnostic(&CommandError{Stderr: stderr})
 }
 
-// engine checks a probe's Server version against the floor.
 func engine(out []byte) string {
 	version := strings.TrimSpace(string(out))
 	m := engineMajor.FindStringSubmatch(version)

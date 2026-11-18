@@ -19,9 +19,8 @@ func (h Host) remove(ctx context.Context, d Daemon, c string) (bool, error) {
 	return err == nil && strings.TrimSpace(string(out)) == c, err
 }
 
-// held is what c's secrets tmpfs holds, only for the audit: kind is its client credential's audit kind ("": none or
-// unknown), from its client label, else (a container an older broker started) its env's client home; secrets are the
-// environment secrets its secrets label names.
+// held is for the audit only: kind ("": none or unknown) from c's client label, else (an older broker's container)
+// its env's client home; secrets from its secrets label.
 func (h Host) held(ctx context.Context, d Daemon, c string) (kind string, secrets []string) {
 	if h.Audit == nil {
 		return "", nil
