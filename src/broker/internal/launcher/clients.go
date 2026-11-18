@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -133,14 +134,16 @@ type variantRecord struct {
 	entry os.DirEntry
 }
 
-func (r records) variants() []variantRecord {
+func (r records) variants() []variantRecord { return r.files("json") }
+
+func (r records) files(kind string) []variantRecord {
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		return nil
 	}
 	var found []variantRecord
 	for _, entry := range entries {
-		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "json" {
+		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == kind {
 			found = append(found, variantRecord{m[1], entry})
 		}
 	}
@@ -235,6 +238,13 @@ func writeCheckState(r records, state checkState) error {
 		return err
 	}
 	return writePrivate(r.path("clients-check.json"), data)
+}
+
+// forget only notes a failed removal.
+func (h Host) forget(path string) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		h.note("cannot " + err.Error())
+	}
 }
 
 // afterBuild never fails the build.
@@ -348,7 +358,7 @@ func (h Host) checkDaemon(ctx context.Context, d Daemon) (CheckResult, error) {
 func (h Host) checkVariant(ctx context.Context, d Daemon, r records, key string, latest ClientVersions) (rebuilt bool, failed string) {
 	image := "ensemble-worker:" + key
 	drop := func(why string) (bool, string) {
-		_ = os.Remove(r.recordPath(key))
+		h.forget(r.recordPath(key))
 		h.note("dropped the variant record of " + image + ": " + why)
 		return false, ""
 	}

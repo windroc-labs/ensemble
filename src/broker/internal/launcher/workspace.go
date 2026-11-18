@@ -94,8 +94,9 @@ func (h Host) checkWorkspace(ctx context.Context, d Daemon, volume, path string)
 		"--security-opt", "no-new-privileges", "--user", "agent", "--network", "none", "--mount", volumeMount(volume, path, true),
 		"--entrypoint", Python, info.ID, "-I", checker, path, cache}, nil)
 	if err != nil {
-		_, _ = d.Runner.Run(context.WithoutCancel(ctx), []string{"rm", "--force", name}, nil)
-		return nil, diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
+		e := diagnosed(err, protocol.WorkspaceFailed, "The workspace check of "+volume+" failed.")
+		e.Message += removeHelper(ctx, d, name)
+		return nil, e
 	}
 	var found struct{ Dirty *[]string }
 	if json.Unmarshal(out, &found) != nil || found.Dirty == nil {

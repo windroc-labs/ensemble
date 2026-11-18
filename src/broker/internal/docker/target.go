@@ -73,21 +73,41 @@ type Target struct {
 
 func (t Target) Remote() bool { return t.Host != "" }
 
+// readTarget reads one byte past maxTarget at most.
+func readTarget(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxTarget+1))
+	if err := errors.Join(err, f.Close()); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func validHost(host string) bool {
+	if !targetHost.MatchString(host) {
+		return false
+	}
+	m := portSuffix.FindStringSubmatch(host)
+	if m == nil {
+		return true
+	}
+	port, err := strconv.Atoi(m[1])
+	return err == nil && port >= 1 && port <= 65535
+}
+
 // LoadTarget admits only the keys host and local_secrets; no file is the local target.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, TargetFile)
 	invalid := func(format string, args ...any) (Target, error) {
 		return Target{}, &Unreachable{Endpoint: path, Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
 	}
-	f, err := os.Open(path)
+	data, err := readTarget(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Target{}, nil
 	}
-	if err != nil {
-		return invalid("%v", err)
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxTarget+1))
 	if err != nil {
 		return invalid("%v", err)
 	}
@@ -111,20 +131,17 @@ func LoadTarget(home string) (Target, error) {
 	}
 	// The decoder matches keys case-insensitively, so a case variant could override a key.
 	var keys map[string]json.RawMessage
-	_ = json.Unmarshal(data, &keys)
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return invalid("%v", err)
+	}
 	for key := range keys {
 		if key != "host" && key != "local_secrets" {
 			return invalid("unknown key %q", key)
 		}
 	}
 	host := *v.Host
-	if !targetHost.MatchString(host) {
+	if !validHost(host) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)
-	}
-	if m := portSuffix.FindStringSubmatch(host); m != nil {
-		if port, err := strconv.Atoi(m[1]); err != nil || port < 1 || port > 65535 {
-			return invalid("host %q is not ssh://[user@]host[:port]", host)
-		}
 	}
 	if v.LocalSecrets == nil {
 		return invalid("no local_secrets")

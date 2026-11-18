@@ -721,20 +721,17 @@ func (h Host) prune(ctx context.Context, d Daemon, r records, key string) {
 		} else {
 			h.note("removed " + ref)
 			// A stale lease and none are alike: the lease goes with the first of its key's images.
-			_ = os.Remove(r.leasePath(refKey))
+			h.forget(r.leasePath(refKey))
 			if strings.HasPrefix(ref, "ensemble-worker:") {
-				_ = os.Remove(r.recordPath(refKey))
-				_ = os.Remove(r.replacedPath(refKey))
+				h.forget(r.recordPath(refKey))
+				h.forget(r.replacedPath(refKey))
 			}
 		}
 	}
 	replaced := map[string]bool{}
-	entries, _ := os.ReadDir(r.dir)
-	for _, entry := range entries {
-		if m := variantFile.FindStringSubmatch(entry.Name()); m != nil && m[2] == "replaced" {
-			for _, e := range h.readReplaced(r, m[1]) {
-				replaced[e.ID] = true
-			}
+	for _, f := range r.files("replaced") {
+		for _, e := range h.readReplaced(r, f.key) {
+			replaced[e.ID] = true
 		}
 	}
 	out, err = d.Runner.Run(ctx, []string{"image", "ls", "--quiet", "--no-trunc", "--filter", "dangling=true", "--filter", "label=ensemble.key"}, nil)

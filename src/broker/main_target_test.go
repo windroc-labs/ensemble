@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -73,16 +72,16 @@ func TestTargetCommandWithAnUnwritableHome(t *testing.T) {
 func TestSSHModeExecsSystemSSH(t *testing.T) {
 	var path string
 	var argv, env []string
-	var stderr bytes.Buffer
 	t.Setenv("SSH_AUTH_SOCK", "/private/agent.sock")
-	code := execSSH([]string{"-o", "ForwardAgent=yes", "-T", "--", "pc", "docker", "system", "dial-stdio"},
-		func(p string, a, e []string) error { path, argv, env = p, a, e; return errors.New("exec failed") }, &stderr)
+	failed := errors.New("exec failed")
+	err := execSSH([]string{"-o", "ForwardAgent=yes", "-T", "--", "pc", "docker", "system", "dial-stdio"},
+		func(p string, a, e []string) error { path, argv, env = p, a, e; return failed })
 	want := append([]string{"ssh"}, docker.SSHArgs([]string{"-o", "ForwardAgent=yes", "-T", "--", "pc", "docker", "system", "dial-stdio"})...)
 	if path != "/usr/bin/ssh" || !reflect.DeepEqual(argv, want) || argv[1] != "-F" || !slices.Contains(env, "SSH_AUTH_SOCK=/private/agent.sock") {
 		t.Fatalf("%s %q", path, argv)
 	}
-	if code != 255 || stderr.String() != "ensemble-broker ssh: exec failed\n" {
-		t.Fatalf("%d %q", code, stderr.String())
+	if err != failed {
+		t.Fatalf("%v", err)
 	}
 }
 

@@ -78,6 +78,7 @@ func (h Host) prefetch(ctx context.Context, d Daemon, r records, c string, m Man
 	}
 	owner := run.Config.Labels["ensemble.agent-uid"] + ":" + run.Config.Labels["ensemble.agent-gid"]
 	name := "ensemble-prefetch-" + randomHex()
+	stranded := ""
 	start := func(argv []string, stdin []byte) error {
 		cctx, cancel := context.WithTimeout(ctx, prefetchTimeout)
 		defer cancel()
@@ -88,9 +89,22 @@ func (h Host) prefetch(ctx context.Context, d Daemon, r records, c string, m Man
 			"--mount", volumeMount(m.Workspace, m.CWD, false), "--entrypoint", argv[0], helper.ID)
 		_, err := d.Runner.Run(cctx, append(args, argv[1:]...), stdin)
 		if err != nil {
-			_, _ = d.Runner.Run(context.WithoutCancel(ctx), []string{"rm", "--force", name}, nil)
+			stranded = removeHelper(ctx, d, name)
 		}
 		return err
 	}
-	return h.GitHub.Prefetch(ctx, m.Prefetch.Repo, m.Prefetch.Ref, m.CWD, c, start)
+	err = h.GitHub.Prefetch(ctx, m.Prefetch.Repo, m.Prefetch.Ref, m.CWD, c, start)
+	if e, ok := errors.AsType[*protocol.Error](err); ok {
+		e.Message += stranded
+	}
+	return err
+}
+
+// removeHelper force-removes a helper container whose run failed, whatever ctx's state; hint is what its failure adds
+// to the run's.
+func removeHelper(ctx context.Context, d Daemon, name string) (hint string) {
+	if _, err := d.Runner.Run(context.WithoutCancel(ctx), []string{"rm", "--force", name}, nil); err != nil {
+		return " Remove its helper with docker rm --force " + name + "."
+	}
+	return ""
 }

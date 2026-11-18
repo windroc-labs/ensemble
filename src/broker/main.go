@@ -142,7 +142,8 @@ func readEnvValue(r io.Reader) ([]byte, error) {
 
 func main() {
 	if filepath.Base(os.Args[0]) == "ssh" {
-		os.Exit(execSSH(os.Args[1:], syscall.Exec, os.Stderr))
+		fmt.Fprintln(os.Stderr, "ensemble-broker ssh:", execSSH(os.Args[1:], syscall.Exec))
+		os.Exit(255)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, system())
@@ -152,10 +153,8 @@ func main() {
 
 // execSSH replaces this process with the system ssh, given the options every connection to a Docker target needs
 // before the docker CLI's own arguments; it returns only when that fails.
-func execSSH(args []string, exec func(path string, argv, env []string) error, stderr io.Writer) int {
-	err := exec(docker.SSHPath, append([]string{"ssh"}, docker.SSHArgs(args)...), os.Environ())
-	_, _ = fmt.Fprintf(stderr, "ensemble-broker ssh: %v\n", err)
-	return 255
+func execSSH(args []string, exec func(path string, argv, env []string) error) error {
+	return exec(docker.SSHPath, append([]string{"ssh"}, docker.SSHArgs(args)...), os.Environ())
 }
 
 func accountHome() (string, error) {
