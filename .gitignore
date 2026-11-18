@@ -2,6 +2,7 @@ work/
 .test-sandbox-*/
 logs/
 __pycache__/
+.venv/
 .DS_Store
 /docs/adr/
 /docs/agents/

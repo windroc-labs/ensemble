@@ -54,7 +54,7 @@ class Sample(Case):
         return root
 
 
-def test_suites(root, top):
+def suite_starts(root, top):
     base = Path(root, top)
     owners = [base, *(p for p in sorted(base.iterdir()) if (p / "__init__.py").is_file())]
     return [

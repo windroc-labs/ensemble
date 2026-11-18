@@ -1,4 +1,4 @@
-"""Pure dependency policy shared by repository guards and Import Linter contracts."""
+"""Pure dependency policy shared by repository guards and the nested-unit import contracts."""
 
 import sys
 

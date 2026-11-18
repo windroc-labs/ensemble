@@ -1,5 +1,6 @@
 """Owned tmux fixture cleanup, including failed shutdown and locked allocation, the processes
-a supervised run leaves behind, and a tree's project import roots.
+a supervised run leaves behind, the sandbox environment and supervised child, and a tree's project
+import roots.
 """
 
 import os
@@ -242,3 +243,138 @@ class Scratch(Case):
         self.assertTrue(all(map(os.path.isdir, (real, raw, default))))
         owner.doCleanups()
         self.assertFalse(any(map(os.path.exists, (real, raw, default))))
+
+
+class SandboxEnv(Case):
+    def test_the_sandbox_replaces_whatever_would_steer_a_test(self):
+        caller = {
+            "PATH": "/bin",
+            "KEPT": "1",
+            "HOME": "/real/home",
+            "ENSEMBLE_CLIENT": "claude",
+            "ENSEMBLE_GUARD_HOOK_SOCKET": "/run/ensemble/guard/ci/hook",
+            "GIT_DIR": "elsewhere",
+            "TMUX": "/tmp/tmux-1/default,1,0",
+            "PYTHONPATH": "/other/checkout/src",
+        }
+        env = sandbox.sandbox_env(caller, "/sb/tmp", "/repo/.test-sandbox-1", "/repo", "/repo/src")
+        self.assertEqual(
+            env,
+            {
+                "PATH": "/bin",
+                "KEPT": "1",
+                "HOME": "/repo/.test-sandbox-1",
+                "TMPDIR": "/sb/tmp",
+                "TMUX_TMPDIR": "/sb/tmp",
+                "ENSEMBLE_TEST_SANDBOX": "/sb/tmp",
+                "ENSEMBLE_CONTROL_ROOT": "/sb/tmp",
+                "ENSEMBLE_TEST_TMP": "/repo/.test-sandbox-1",
+                "ENSEMBLE_TEST_WORKSPACE": "/repo/.test-sandbox-1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CEILING_DIRECTORIES": "/repo",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": os.pathsep.join(("/repo", "/repo/src")),
+            },
+        )
+
+
+class Supervise(Case):
+    def supervised(self, code, *, servers=(), leaked=()):
+        """((exit code, leaks), what the callbacks saw) of one supervised run."""
+        seen = {}
+
+        def run(env, tmp):
+            seen.update(env=env, tmp=tmp, during=tmp.is_dir() and os.path.isdir(env["HOME"]))
+            return code
+
+        with (
+            mock.patch.object(sandbox, "stop_tmux_servers", return_value=list(servers)) as stop,
+            mock.patch.object(sandbox, "leaked_processes", return_value=list(leaked)) as leaks,
+            mock.patch.object(sandbox, "kill_processes") as kill,
+        ):
+            result = sandbox.supervise(
+                run,
+                Path(self.home),
+                prepare=lambda tmp: seen.update(prepared=tmp, prepared_exists=tmp.is_dir()),
+                collect=lambda tmp: seen.update(collected=tmp, collected_exists=tmp.is_dir()),
+                grace=3,
+            )
+        seen.update(stop=stop, leaks=leaks, kill=kill)
+        return result, seen
+
+    def test_the_child_runs_in_the_sandbox_and_its_code_comes_back(self):
+        result, seen = self.supervised(2)
+        env, tmp = seen["env"], seen["tmp"]
+        workspace = env["ENSEMBLE_TEST_WORKSPACE"]
+        self.assertEqual(result, (2, []))
+        self.assertEqual(
+            (env["HOME"], env["TMPDIR"], env["ENSEMBLE_TEST_SANDBOX"]),
+            (workspace, str(tmp), str(tmp)),
+        )
+        self.assertEqual(os.path.dirname(workspace), self.home)
+        self.assertTrue(os.path.basename(workspace).startswith(".test-sandbox-"))
+        self.assertEqual(
+            env["PYTHONPATH"].split(os.pathsep)[:2], [self.home, os.path.join(self.home, ".github")]
+        )
+        self.assertEqual((seen["prepared"], seen["collected"]), (tmp, tmp))
+        self.assertTrue(seen["prepared_exists"] and seen["collected_exists"] and seen["during"])
+        self.assertFalse(tmp.exists() or os.path.exists(workspace))
+        seen["stop"].assert_called_once_with(str(tmp), env)
+        seen["leaks"].assert_called_once_with((str(tmp), workspace), grace=3)
+        seen["kill"].assert_called_once_with([])
+
+    def test_a_child_killed_by_a_signal_exits_128_plus_the_signal(self):
+        self.assertEqual(self.supervised(-signal.SIGKILL)[0], (128 + signal.SIGKILL, []))
+
+    def test_what_the_child_left_behind_is_killed_and_named(self):
+        leaked = [(400, 1, 400, "sleep 60 /ws/marker")]
+        result, seen = self.supervised(0, servers=["/sb/tmux-501/default"], leaked=leaked)
+        self.assertEqual(
+            result, (0, ["tmux server /sb/tmux-501/default", "pid 400: sleep 60 /ws/marker"])
+        )
+        seen["kill"].assert_called_once_with(leaked)
+
+    def test_the_sandbox_is_stopped_and_removed_when_the_child_cannot_start(self):
+        def run(_env, tmp):
+            seen.update(tmp=tmp)
+            raise OSError("no python")
+
+        seen = {}
+        with (
+            mock.patch.object(sandbox, "stop_tmux_servers", return_value=[]) as stop,
+            self.assertRaises(OSError),
+        ):
+            sandbox.supervise(
+                run, Path(self.home), prepare=lambda _tmp: None, collect=lambda _tmp: None
+            )
+        stop.assert_called_once()
+        self.assertFalse(seen["tmp"].exists())
+
+
+class RunnerSandbox(Case):
+    def _case_env(self):
+        return {}
+
+    def test_the_runner_gives_each_test_the_sandbox(self):
+        env = os.environ
+        tmp, workspace = env["ENSEMBLE_TEST_SANDBOX"], env["ENSEMBLE_TEST_WORKSPACE"]
+        repo = str(Path(__file__).resolve().parents[3])
+        self.assertEqual((env["HOME"], env["ENSEMBLE_TEST_TMP"]), (workspace, workspace))
+        self.assertEqual(
+            (env["TMPDIR"], env["ENSEMBLE_CONTROL_ROOT"], tempfile.gettempdir()), (tmp, tmp, tmp)
+        )
+        self.assertTrue(os.path.isdir(tmp) and os.path.isdir(workspace))
+        self.assertEqual(os.path.dirname(workspace), repo)
+        self.assertTrue(os.path.basename(workspace).startswith(".test-sandbox-"))
+        self.assertTrue(Path(env["TMUX_TMPDIR"]).is_relative_to(tmp))
+        self.assertEqual(
+            [key for key in env if key.startswith("GIT_") or key in sandbox.CALLER_SESSION]
+            + [key for key in ("ENSEMBLE_CLIENT", "ENSEMBLE_GUARD_HOOK_SOCKET") if key in env],
+            ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CEILING_DIRECTORIES"],
+        )
+        self.assertEqual((env["GIT_CONFIG_GLOBAL"], env["GIT_CONFIG_NOSYSTEM"]), (os.devnull, "1"))
+        roots = env["PYTHONPATH"].split(os.pathsep)
+        self.assertEqual(
+            roots[:3], [repo, os.path.join(repo, ".github"), os.path.join(repo, "src")]
+        )

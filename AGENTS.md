@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`.
+Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`; unit tests also run as `uv run pytest [path]` (`conftest.py` gives them the same sandbox and isolation gate).
 
 ## Gotchas
 
@@ -58,7 +58,7 @@ A base change alone reruns no CI: push to the branch, or close and reopen the PR
 
 Layer contracts live in `pyproject.toml` and run with `lint-imports`: manager > orchestrator > delegate > session > utils. Manager imports only itself and utils; it reaches other layers through commands. Cross-layer imports use the lower layer's public package; exact test exceptions for removed exports are listed in `pyproject.toml`. Orchestration reaches session only through Delegate: its contract ignores no import. Orchestrator `engine/` imports nothing under `trackers/` (one subpackage per tracker; Linear: `trackers/linear/`) but the router's Linear transport its contract lists, and `trackers/` imports none of the board rules (`router`, `promote`, `prune`, `writeback`); `engine/flow/`, its tracker-agnostic core, names no Linear concept. Project tests may import their project and lower layers, never the root `tests` package or a higher project.
 
-Session and Delegate internal units use the longest matching package; their dependency rules and shared-module purity are declared in `pyproject.toml`'s unit contracts. Session owns no config reader, reply-protocol tag or team text; `tests/guard_checks/` enforces those names and literal dynamic imports.
+Session and Delegate internal units use the longest matching package; their dependency rules and shared-module purity are declared in `pyproject.toml`'s `[[tool.ensemble.unit_contracts]]`, which `tests/integration/import_contracts_integration_test.py` checks on the real import graph (not `lint-imports`). Session owns no config reader, reply-protocol tag or team text; `tests/guard_checks/` enforces those names and literal dynamic imports.
 
 Repository design rules live in `tests/guard_checks/`, one module per concern: namespace and subsystem placement, unit test placement, shared types, client-name ownership (`client_names`), configuration and import side effects. A rule's exceptions and a layer's constants live in `tests/guard_data/<package>.py` of the layer owning the path or package they name. A helper used by one file stays there as a private function; otherwise, a helper independent of its layer's own classes goes in `utils/`. Shared data types live in their layer's types module; standalone scripts keep theirs local. The `standalone_imports` guard owns their inventory and enforces standard-library-only imports.
 
