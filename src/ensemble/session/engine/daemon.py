@@ -14,7 +14,7 @@ import time
 from typing import TypeAlias
 
 from ensemble.session.engine.types import Daemon, DaemonName, DaemonRecord, SessionError, Target
-from ensemble.utils import DOCKER_STATE, read_regular, save
+from ensemble.utils import DOCKER_STATE, read_beneath, save
 
 CLEARED = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 RUN_TIMEOUT = 10
@@ -65,7 +65,7 @@ def recorded_image(name: str) -> str:
 
 
 def _recorded(path: str, key: str) -> str | None:
-    data = read_regular(path, limit=SESSION_RECORD_MAX)
+    data = read_beneath(os.path.dirname(path), path, limit=SESSION_RECORD_MAX)
     try:
         found: _Json = json.loads(data) if data is not None else None
     except (ValueError, RecursionError):
@@ -91,7 +91,7 @@ def save_record(name: str, record: DaemonRecord) -> None:
 def load_record(name: str) -> DaemonRecord | None:
     """None: no record; OSError (EINVAL): malformed."""
     path = _record_path(name)
-    data = read_regular(path, limit=RECORD_MAX + 1)
+    data = read_beneath(os.path.dirname(path), path, limit=RECORD_MAX + 1)
     if data is None:
         return None
     try:

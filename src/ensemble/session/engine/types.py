@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, NamedTuple, Protocol, Self
+from typing import Any, ClassVar, NamedTuple, Protocol, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -309,7 +309,7 @@ class HookCall:
     """
 
     label: str
-    payload: dict
+    payload: dict[str, Any]
     sid: str
     workdir: str
     events: str | None
