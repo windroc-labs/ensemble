@@ -13,9 +13,10 @@ import (
 	"testing"
 )
 
+// writeTarget names the setting file itself, so the tests pin where users write it.
 func writeTarget(t *testing.T, home, content string) {
 	t.Helper()
-	path := filepath.Join(home, SettingFile)
+	path := filepath.Join(home, ".ensemble/config.local.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestLoadTarget(t *testing.T) {
 			t.Fatalf("%s: %+v %v", host, target, err)
 		}
 	}
-	endpoint := filepath.Join(home, SettingFile) + " [" + SettingTable + "]"
+	endpoint := filepath.Join(home, ".ensemble/config.local.toml") + " [docker]"
 	for content, why := range map[string]string{
 		"[docker":                         "invalid target setting (",
 		`docker = "ssh://pc"`:             "invalid target setting ([docker] is not a table)",
@@ -225,7 +226,7 @@ func TestInvalidTargetFailsEveryCommand(t *testing.T) {
 	defer clean()
 	_, err = c.Run(context.Background(), []string{"ps"}, nil)
 	var u *Unreachable
-	if !errors.As(err, &u) || u.Endpoint != filepath.Join(home, SettingFile)+" [docker]" || !strings.HasPrefix(u.Reason, "invalid target setting (") {
+	if !errors.As(err, &u) || u.Endpoint != filepath.Join(home, ".ensemble/config.local.toml")+" [docker]" || !strings.HasPrefix(u.Reason, "invalid target setting (") {
 		t.Fatalf("%v", err)
 	}
 }

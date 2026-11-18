@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -72,7 +73,7 @@ func TestStartRefusesALocalOnlySecretOnARemoteDaemon(t *testing.T) {
 	_, err := h.Start(context.Background(), editedManifest(t, withSecrets([]any{secret(miniPassword, "mini-password")})))
 	e := protoErr(t, err)
 	if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, miniPassword) || !strings.Contains(e.Message, "remote "+remoteEndpoint) ||
-		!strings.Contains(e.Message, "(local_secrets in [docker] of ~/.ensemble/config.local.toml)") {
+		!strings.Contains(e.Message, "(local_secrets in ["+docker.SettingTable+"] of ~/"+docker.SettingFile+")") {
 		t.Fatalf("%+v", e)
 	}
 	if len(beyondInfo(rd)) != 0 || len(beyondInfo(ld)) != 0 || len(env.calls) != 0 {

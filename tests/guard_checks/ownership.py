@@ -455,8 +455,8 @@ DOCKER_STDERR = ("no such volume", "cannot connect to the docker daemon")
 
 
 def docker_target_owner(repo: str) -> list[str]:
-    """The broker alone reads the Docker target setting and classifies a daemon's answers: no
-    other source names target.json, no Python holds an ssh:// address or matches Docker's error
+    """The broker alone reads the Docker target setting and classifies a daemon's answers: no other
+    Go source names config.local.toml, no Python holds an ssh:// address or matches Docker's error
     text, and no client code names the Mac's docker-state directory.
     """
     found = []
@@ -464,8 +464,12 @@ def docker_target_owner(repo: str) -> list[str]:
         path = f"src/{rel}"
         if path.endswith(".md"):
             continue
-        if "target.json" in text and not path.startswith(TARGET_OWNER):
-            found.append(f"{path}: target.json outside {TARGET_OWNER}")
+        if (
+            path.endswith(".go")
+            and "config.local.toml" in text
+            and not path.startswith(TARGET_OWNER)
+        ):
+            found.append(f"{path}: config.local.toml outside {TARGET_OWNER}")
         if path.endswith(".py"):
             if "ssh://" in text:
                 found.append(f"{path}: ssh:// address in Python")

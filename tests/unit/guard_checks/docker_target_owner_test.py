@@ -10,14 +10,9 @@ class DockerTargetOwner(Sample):
     def test_each_second_owner_is_flagged_with_its_file(self):
         for rel, text, why in (
             (
-                "src/ensemble/session/engine/target.py",
-                'PATH = ".ensemble/docker/target.json"\n',
-                "target.json outside src/broker/internal/docker/",
-            ),
-            (
                 "src/broker/internal/launcher/target.go",
-                'const f = ".ensemble/docker/target.json"\n',
-                "target.json outside src/broker/internal/docker/",
+                'const f = ".ensemble/config.local.toml"\n',
+                "config.local.toml outside src/broker/internal/docker/",
             ),
             (
                 "src/ensemble/session/engine/daemon.py",
@@ -47,12 +42,13 @@ class DockerTargetOwner(Sample):
         self.assertEqual(
             self.found(
                 {
-                    "src/broker/internal/docker/target.go": 'const f = ".ensemble/docker/target.json"\n',
+                    "src/broker/internal/docker/target.go": 'const f = ".ensemble/config.local.toml"\n',
+                    "src/ensemble/utils/config_file.py": 'LOCAL = f"{STATE}/config.local.toml"\n',
                     "src/broker/internal/docker/docker.go": '// "ssh://u@pc"; "no such volume"\n',
-                    "src/ensemble/session/README.md": "~/.ensemble/docker/target.json\n",
+                    "src/ensemble/session/README.md": "[docker] in ~/.ensemble/config.local.toml\n",
                     "src/broker/internal/launcher/egress.go": 'const hint = "ssh://"\n',
                     "src/ensemble/session/hosts/docker/mounts.py": 'STATE = "docker-state"\n',
-                    "docs/upgrading.md": "target.json\n",
+                    "docs/upgrading.md": "config.local.toml\n",
                 }
             ),
             [],
