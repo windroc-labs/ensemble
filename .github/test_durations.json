@@ -158,8 +158,6 @@
   "tests.integration.github_runner_integration_test.Supervise.test_a_tmux_server_outliving_the_run_fails_it": 0.225,
   "tests.integration.github_runner_integration_test.Supervise.test_an_exit_before_any_test_is_annotated": 0.2441,
   "tests.integration.github_runner_integration_test.Supervise.test_main_discovers_from_the_cwd": 0.2898,
-  "tests.integration.github_runner_integration_test.Supervise.test_run_tests_coverage_saves_the_child_process_src_arcs_outside_the_checkout": 0.6641,
-  "tests.integration.github_runner_integration_test.Supervise.test_without_run_tests_coverage_the_child_never_imports_coverage": 0.2687,
   "tests.integration.imports_integration_test.ImportsAlone.test_each_module_1": 52.4696,
   "tests.integration.imports_integration_test.ImportsAlone.test_each_module_2": 51.3641,
   "tests.integration.imports_integration_test.ImportsAlone.test_each_module_3": 51.4226,
