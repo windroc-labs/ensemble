@@ -44,12 +44,18 @@ STEPS = (
     ("end", {"session_id": "n1", "last": "Done.", "tasks": []}),
 )
 REAPED = 10.0  # s from a kill to the client's and the container's end
+LIMIT = 5.0  # s, the fake container guard's heartbeat limit: REAPED allows for it
+STALL = 7.0  # s a stopped harness sends nothing: past the guard's limit before it was raised
 
 
 class GuardedDockerTest(Case):
     def setUp(self):
         self.run_dir = os.path.join(self.home, "run")
-        self.env = {**child_env(), "ENSEMBLE_FAKE_RUN": self.run_dir}
+        self.env = {
+            **child_env(),
+            "ENSEMBLE_FAKE_RUN": self.run_dir,
+            "ENSEMBLE_FAKE_HEARTBEAT": str(LIMIT),
+        }
         self.addCleanup(self.kill_tree)
 
     def kill_tree(self):
@@ -125,6 +131,18 @@ class GuardedDockerTest(Case):
         proc.wait(timeout=10)
         self.reaped(value, client)
 
+    def test_a_stalled_harness_keeps_its_worker(self):
+        del self.env["ENSEMBLE_FAKE_HEARTBEAT"]  # the guard's own limit
+        proc, value, client = self.started_harness()
+        os.kill(proc.pid, signal.SIGSTOP)
+        try:
+            time.sleep(STALL)
+            self.assertTrue(self.alive(client) and self.alive(value["guard"]))
+        finally:
+            os.kill(proc.pid, signal.SIGCONT)
+        time.sleep(2)
+        self.assertTrue(self.alive(client) and self.alive(value["guard"]))
+
     def test_sigkill_of_the_attach_ends_the_container_and_its_client(self):
         _, value, client = self.started_harness()
         os.kill(value["docker"], signal.SIGKILL)
@@ -143,7 +161,7 @@ class GuardedDockerTest(Case):
 
     def test_an_idle_worker_outlives_the_heartbeat_limit(self):
         _, value, client = self.started_harness()
-        time.sleep(guard.HEARTBEAT + 2)
+        time.sleep(LIMIT + 2)
         self.assertTrue(self.alive(client) and self.alive(value["guard"]))
 
     def worker(self, remove=lambda: None, *, client=None, terminal=False) -> DockerWorker:

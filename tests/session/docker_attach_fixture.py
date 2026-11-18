@@ -54,6 +54,8 @@ def info_path(name: str) -> str:
 def serve() -> int:
     guard = _guard_module()
     guard.RUN = os.environ["ENSEMBLE_FAKE_RUN"]
+    if limit := os.environ.get("ENSEMBLE_FAKE_HEARTBEAT"):
+        guard.HEARTBEAT = float(limit)
     launch = guard.launch
 
     def unwrapped(data):

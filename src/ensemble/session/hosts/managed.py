@@ -91,6 +91,7 @@ class ManagedProcess(InteractiveProcess):
         self.size = 0
         self.code = None
         self.last_lines: str | None = None  # its terminal's, from its exit frame
+        self.reason: str | None = None  # why its guard closed, from its exit frame
         self.failure = None
         self.started = False
         self.up = False
@@ -170,11 +171,14 @@ class ManagedProcess(InteractiveProcess):
                     not isinstance(value, dict)
                     or type(value.get("returncode")) is not int
                     or not isinstance(value.get("text", ""), str)
+                    or not isinstance(value.get("reason", ""), str)
                 ):
                     raise ValueError("invalid guard exit")
                 self.code = value["returncode"]
                 if "text" in value:
                     self.last_lines = value["text"][-guard.DIAGNOSTIC_CHARS :]
+                if "reason" in value:
+                    self.reason = value["reason"][: guard.ERROR_CHARS]
                 message = WorkerExit(self.code)
                 self._ended()
             else:
