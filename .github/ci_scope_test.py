@@ -499,14 +499,6 @@ class Aggregate(unittest.TestCase):
         result["broker"]["result"] = "success" if full else "skipped"
         return result
 
-    def main_needs(self, *, docs=False, version=False, **kwargs):
-        """The needs of main's ci.yml, which the org ruleset runs until main calls python.yml."""
-        result = self.needs(docs=docs, version=version, **kwargs)
-        del result["python"], result["github"]
-        tests = "skipped" if docs or version else "success"
-        result["unit"], result["coverage"] = {"result": tests}, {"result": tests}
-        return result
-
     def test_repo_guards_jobs_must_succeed_and_only_pull_requests_run_github_dir_pr(self):
         for event in ("pull_request", "push", "merge_group"):
             for job in REPO_GUARDS:
@@ -541,59 +533,23 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(scope.gate(self.needs(), "merge_group"), [])
         self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
 
-    def test_main_ci_yml_needs_pass_in_every_scope_and_event(self):
-        for kwargs in (
-            {},
-            {"full": False},
-            {"full": False, "docs": True},
-            {"full": False, "version": True},
-            {"event": "push"},
-            {"event": "merge_group"},
-        ):
-            event = kwargs.get("event", "pull_request")
-            with self.subTest(**kwargs):
-                self.assertEqual(scope.gate(self.main_needs(**kwargs), event), [])
-
-    def test_python_and_main_ci_yml_jobs_never_mix(self):
+    def test_removed_unit_and_coverage_jobs_are_not_gated_and_python_is_required(self):
         needs = self.needs()
         needs["unit"] = needs["coverage"] = {"result": "success"}
         self.assertEqual(
             scope.gate(needs, "pull_request"), ["unit: not gated", "coverage: not gated"]
         )
-        needs = self.main_needs()
-        needs["github"] = {"result": "success"}
-        self.assertEqual(scope.gate(needs, "pull_request"), ["github: not gated"])
         needs = self.needs()
-        del needs["python"]
+        del needs["python"], needs["github"]
+        needs["unit"] = needs["coverage"] = {"result": "success"}
         self.assertEqual(
             scope.gate(needs, "pull_request"),
             [
-                "unit: expected success, got None",
-                "coverage: expected success, got None",
-                "github: not gated",
+                "github: expected success, got None",
+                "python: expected success, got None",
+                "unit: not gated",
+                "coverage: not gated",
             ],
-        )
-
-    def test_main_ci_yml_merge_group_requires_diff_coverage(self):
-        needs = self.main_needs()
-        self.assertEqual(scope.gate(needs, "merge_group"), [])
-        needs["coverage"]["result"] = "skipped"
-        self.assertTrue(scope.gate(needs, "merge_group"))
-
-    def test_main_ci_yml_push_passes_whatever_coverage_reports(self):
-        for outcome in ("success", "failure", "cancelled", "skipped"):
-            needs = self.main_needs(event="push")
-            needs["coverage"]["result"] = outcome
-            with self.subTest(outcome=outcome):
-                self.assertEqual(scope.gate(needs, "push"), [])
-                self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
-
-    def test_main_ci_yml_push_without_a_coverage_result_fails(self):
-        needs = self.main_needs(event="push")
-        del needs["coverage"]
-        self.assertEqual(
-            scope.gate(needs, "push"),
-            ["coverage: expected cancelled or failure or skipped or success, got None"],
         )
 
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
@@ -604,36 +560,31 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(scope.gate(needs, "pull_request"), [])
 
     def test_failure_cancel_and_unexpected_skip_always_fail(self):
-        for shape in (self.needs, self.main_needs):
-            for job in shape():
-                for outcome in ("failure", "cancelled", "skipped", "unknown"):
-                    needs = shape()
-                    needs[job]["result"] = outcome
-                    with self.subTest(shape=shape.__name__, job=job, outcome=outcome):
-                        failures = scope.gate(needs, "pull_request")
-                        self.assertTrue(failures)
-                        self.assertIn(job, " ".join(failures))
+        for job in self.needs():
+            for outcome in ("failure", "cancelled", "skipped", "unknown"):
+                needs = self.needs()
+                needs[job]["result"] = outcome
+                with self.subTest(job=job, outcome=outcome):
+                    failures = scope.gate(needs, "pull_request")
+                    self.assertTrue(failures)
+                    self.assertIn(job, " ".join(failures))
 
     def test_expected_skip_is_not_failure_or_cancel_and_unexpected_success_fails(self):
-        for shape, job, kwargs in (
-            (self.needs, "repository", {"full": False, "docs": True}),
-            (self.needs, "repository", {"full": False, "version": True}),
-            (self.needs, "broker", {"full": False}),
-            (self.needs, "broker", {"full": False, "docs": True}),
-            (self.needs, "broker", {"full": False, "version": True}),
-            (self.needs, "integration", {"full": False, "docs": True}),
-            (self.needs, "github", {"full": False, "docs": True}),
-            (self.needs, "github", {"full": False, "version": True}),
-            (self.needs, "integration", {"full": False, "version": True}),
-            (self.main_needs, "unit", {"full": False, "docs": True}),
-            (self.main_needs, "coverage", {"full": False, "docs": True}),
-            (self.main_needs, "unit", {"full": False, "version": True}),
-            (self.main_needs, "coverage", {"full": False, "version": True}),
+        for job, kwargs in (
+            ("repository", {"full": False, "docs": True}),
+            ("repository", {"full": False, "version": True}),
+            ("broker", {"full": False}),
+            ("broker", {"full": False, "docs": True}),
+            ("broker", {"full": False, "version": True}),
+            ("integration", {"full": False, "docs": True}),
+            ("github", {"full": False, "docs": True}),
+            ("github", {"full": False, "version": True}),
+            ("integration", {"full": False, "version": True}),
         ):
             for result in ("failure", "cancelled", "success"):
-                needs = shape(**kwargs)
+                needs = self.needs(**kwargs)
                 needs[job]["result"] = result
-                with self.subTest(shape=shape.__name__, job=job, result=result):
+                with self.subTest(job=job, result=result):
                     self.assertTrue(scope.gate(needs, kwargs.get("event", "pull_request")))
 
     def test_classifier_failure_or_invalid_output_cannot_authorize_skips(self):
@@ -657,16 +608,15 @@ class Aggregate(unittest.TestCase):
         self.assertTrue(scope.gate(needs, "pull_request"))
 
     def test_every_repo_guards_job_is_required(self):
-        for shape in (self.needs, self.main_needs):
-            for event in ("pull_request", "push", "merge_group"):
-                for job in set(REPO_GUARDS) & set(shape()) - {"python"}:
-                    needs = shape(event=event)
-                    del needs[job]
-                    with self.subTest(shape=shape.__name__, event=event, missing=job):
-                        self.assertEqual(len(scope.gate(needs, event)), 1)
-                        self.assertRegex(
-                            scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
-                        )
+        for event in ("pull_request", "push", "merge_group"):
+            for job in REPO_GUARDS:
+                needs = self.needs(event=event)
+                del needs[job]
+                with self.subTest(event=event, missing=job):
+                    self.assertEqual(len(scope.gate(needs, event)), 1)
+                    self.assertRegex(
+                        scope.gate(needs, event)[0], rf"^{job}: expected .*, got None$"
+                    )
 
     def test_a_needed_job_without_an_expectation_fails(self):
         for event in ("pull_request", "push", "merge_group"):
