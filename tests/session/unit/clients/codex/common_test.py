@@ -20,6 +20,7 @@ from ensemble.session.clients.codex.common import (
     NativeMetadata,
     RecoveryError,
     SessionStore,
+    absolute_path,
     launch_flags,
     mcp_off,
     read_metadata,
@@ -31,6 +32,7 @@ from ensemble.session.clients.codex.common import (
     validate_snapshot,
 )
 from ensemble.session.clients.codex.common.types import Snapshot
+from ensemble.session.engine import daemon
 from ensemble.session.engine.client_state import LocalHome, VolumeHome
 from ensemble.session.engine.types import (
     Access,
@@ -1331,6 +1333,47 @@ class CodecTest(Base):
                 found = HomePath(str(self.codex_home), f"sessions/2026/10/11/{path.name}")
                 metadata = read_metadata(LocalHome(), found).metadata
                 self.assertEqual(metadata, NativeMetadata(NATIVE, str(self.cwd), expected))
+
+
+class ContainerHomeTest(Base):
+    """A Docker worker's CODEX_HOME names a path in its container, whatever this machine's links."""
+
+    def setUp(self):
+        super().setUp()
+        real = os.path.realpath
+
+        def linked_home(path, *args, **kwargs):
+            found = os.fspath(path)
+            if found == "/home" or found.startswith("/home/"):
+                found = "/System/Volumes/Data" + found
+            return real(found, *args, **kwargs)
+
+        self.enterContext(mock.patch("os.path.realpath", side_effect=linked_home))
+        self.container_home = daemon.client_home("codex")
+
+    def test_a_container_home_path_is_normalized_never_resolved(self):
+        self.assertEqual(self.container_home, "/home/agent/.ensemble-state/codex")
+        for given in (self.container_home, f"{self.container_home}/../codex/."):
+            with self.subTest(given=given):
+                self.assertEqual(absolute_path(given, "codex_home"), self.container_home)
+
+    def test_a_path_outside_the_container_homes_is_still_resolved(self):
+        for given in ("/home/agent/x", "/home/agent/.ensemble-state-other/codex"):
+            with self.subTest(given=given):
+                self.assertEqual(absolute_path(given, "dir"), "/System/Volumes/Data" + given)
+        self.assertEqual(
+            absolute_path(f"{self.container_home}/../../x", "dir"),
+            "/System/Volumes/Data/home/agent/x",
+        )
+
+    def test_a_docker_start_keeps_codex_home_through_launch_save_and_load(self):
+        spec = replace(self.spec, env={"CODEX_HOME": self.container_home})
+        state = self.common.save(self.common.prepare(spec, VolumeHome("w", "codex")))
+        self.assertEqual(state.snapshot.codex_home, self.container_home)
+        self.assertIn(self.container_home, state.writable_roots)
+        self.assertEqual(self.common.environment(state.snapshot)["CODEX_HOME"], self.container_home)
+        self.assertEqual(self.common.load(str(self.work), spec.sid), state)
+        self.assertIn(self.container_home, self.common.writable_dirs(spec))
 
 
 class DockerSessionFilesTest(Case):
