@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR --daemon ID [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME --daemon ID | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] --daemon ID | check-clients | target | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--daemon ID] [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME --daemon ID | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] --daemon ID | check-clients | target | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -291,10 +291,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 	switch {
 	case command == "version" && len(args) == 1:
 		return emit(stdout, map[string]string{"protocol_version": protocol.Version})
-	case command == "build" && len(args) >= 5 && args[1] == "--ensemble" && isPath(args[2]) && args[3] == "--daemon" &&
-		launcher.ValidDaemon(args[4]) && buildOptions(args[5:]) != nil:
-		o := buildOptions(args[5:])
-		o.spec.Daemon = args[4]
+	case command == "build" && len(args) >= 3 && args[1] == "--ensemble" && isPath(args[2]) && buildOptions(args[3:]) != nil:
+		o := buildOptions(args[3:])
 		s, arg = func(ctx context.Context, k keys, pkg string, progress io.Writer) (any, error) {
 			return a.build(ctx, k, pkg, o.spec, o.maxAge, progress)
 		}, args[2]
@@ -359,10 +357,13 @@ type buildArgs struct {
 	maxAge time.Duration
 }
 
-// buildOptions parses build's [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
+// buildOptions parses build's [--daemon ID] [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
 // [--image-plugin NAME]... [--max-age SECONDS], else nil.
 func buildOptions(args []string) *buildArgs {
 	o := &buildArgs{maxAge: -1}
+	if len(args) >= 2 && args[0] == "--daemon" && launcher.ValidDaemon(args[1]) {
+		o.spec.Daemon, args = args[1], args[2:]
+	}
 	if len(args) >= 2 && args[0] == "--base-image" && launcher.ValidBaseImage(args[1]) {
 		o.spec.BaseImage, args = args[1], args[2:]
 	}

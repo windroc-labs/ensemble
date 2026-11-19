@@ -50,8 +50,9 @@ Where a worker runs:
   stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
   `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
   cannot be asked.
-- `build`, `close` and `workspace-rm` take `--daemon <ID>`; a start's manifest names its `daemon`. A daemon ID no
-  configured daemon has fails `docker_unreachable`, naming it and the configured daemons.
+- `close` and `workspace-rm` take `--daemon <ID>`; `build` takes an optional one, building on the default daemon
+  `ensemble-broker target` reports without it; a start's manifest names its `daemon`. A daemon ID no configured daemon
+  has fails `docker_unreachable`, naming it and the configured daemons.
 - The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`. The old files directly in
   `~/.ensemble/docker/images/` and `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer
   read; delete them:

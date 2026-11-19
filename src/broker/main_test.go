@@ -514,22 +514,28 @@ func TestBuildOptions(t *testing.T) {
 		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
 		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
 	} {
-		var spec launcher.BuildSpec
-		maxAge := time.Duration(-2)
-		app := app{build: func(_ context.Context, _ keys, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
-			spec, maxAge = s, m
-			return map[string]string{}, nil
-		}}
-		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg", "--daemon", "D1"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
-			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge ||
-			spec.Daemon != "D1" {
-			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
+		for _, daemon := range []string{"D1", ""} {
+			var spec launcher.BuildSpec
+			maxAge := time.Duration(-2)
+			app := app{build: func(_ context.Context, _ keys, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
+				spec, maxAge = s, m
+				return map[string]string{}, nil
+			}}
+			argv := []string{"build", "--ensemble", "/pkg"}
+			if daemon != "" {
+				argv = append(argv, "--daemon", daemon)
+			}
+			argv = append(argv, c.args...)
+			if code, _, errOut := invoke(app, argv...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
+				!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge ||
+				spec.Daemon != daemon {
+				t.Fatalf("%q: exit %d spec %+v max age %v: %s", argv, code, spec, maxAge, errOut)
+			}
 		}
 	}
 	for _, args := range [][]string{
 		{"--daemon", "D1", "--secret", "ensemble-broker-env/mini-op-password"},
 		{"--daemon", "D1", "--image-plugin", "z", "--secret", "ensemble-broker-env/a"},
-		{},
 		{"--daemon"},
 		{"--daemon", "a b"},
 		{"--max-age", "0", "--daemon", "D1"},

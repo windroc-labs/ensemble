@@ -48,7 +48,7 @@ type BuildSpec struct {
 	BaseImage    string // a local stage-1 image, never pulled; "": built from ~/.ensemble/docker/worker
 	Plugins      []string
 	ImagePlugins []string // for Claude Code, under /opt/windroc/plugins
-	Daemon       string   // never part of the image
+	Daemon       string   // never part of the image; "": the default daemon
 }
 
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -310,7 +310,14 @@ func (h Host) prepare(ctx context.Context, d Daemon, pkg string, spec BuildSpec,
 // Build reuses a matching image built within maxAge (<0: any age; 0: never); a rebuild installs each client's
 // latest release, without cache to refresh plugins.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
-	d, r, err := h.find(ctx, spec.Daemon, protocol.BuildFailed)
+	var d Daemon
+	var r records
+	var err error
+	if spec.Daemon == "" {
+		d, r, err = h.identify(ctx, h.Daemons[0], protocol.BuildFailed)
+	} else {
+		d, r, err = h.find(ctx, spec.Daemon, protocol.BuildFailed)
+	}
 	if err != nil {
 		return BuildResult{}, err
 	}
