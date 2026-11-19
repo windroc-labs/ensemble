@@ -151,11 +151,47 @@ class ClientTest(Case):
             self.assertRaises(app_server.Exited) as caught,
         ):
             app_server.AppServer.call("fake", [], "hooks/list", env={}, wait=1, limit=1024)
-        self.assertEqual(caught.exception.args, (17,))
+        self.assertEqual((caught.exception.code, caught.exception.stderr), (17, ""))
         kill.assert_called_once_with(123, app_server.signal.SIGKILL)
         proc.stdin.close.assert_called_once_with()
         proc.stdout.close.assert_called_once_with()
         proc.wait.assert_any_call()
+
+    def exits(self, stderr: bytes) -> app_server.Exited:
+        """The Exited of an app-server that writes `stderr` and exits 1 before answering."""
+        proc = mock.Mock(pid=123, returncode=None)
+        proc.stdout.fileno.return_value = 42
+
+        def spawn(*_args, **kwargs):
+            kwargs["stderr"].write(stderr)
+            return proc
+
+        def wait(**_kwargs):
+            proc.returncode = 1
+            return 1
+
+        proc.wait.side_effect = wait
+        with (
+            mock.patch("subprocess.Popen", side_effect=spawn),
+            mock.patch("select.select", return_value=([42], [], [])),
+            mock.patch("os.read", return_value=b""),
+            mock.patch("os.killpg"),
+            self.assertRaises(app_server.Exited) as caught,
+        ):
+            app_server.AppServer.call("fake", [], "hooks/list", env={}, wait=1, limit=1024)
+        self.assertEqual(caught.exception.code, 1)
+        return caught.exception
+
+    def test_an_exit_carries_the_last_line_its_stderr_wrote(self):
+        said = 'Error: CODEX_HOME points to "/x", but that path does not exist'
+        self.assertEqual(self.exits(f"WARNING: proceeding\n{said}\n\n".encode()).stderr, said)
+        self.assertEqual(self.exits(b"").stderr, "")
+
+    def test_an_exits_stderr_line_is_bounded_and_printable(self):
+        tail = self.exits(b"x" * (1 << 20) + b"\nlast \x1b[1mline\x07 \xff\n").stderr
+        self.assertEqual(tail, "last [1mline \ufffd")
+        long = self.exits(b"y" * (1 << 20)).stderr
+        self.assertEqual(long, "y" * app_server.STDERR_LINE_MAX)
 
     def test_line_bounds_and_timeout(self):
         with (
