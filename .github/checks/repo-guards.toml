@@ -343,3 +343,6 @@ rule = "skipIf"
 function = "RemoveTree.test_an_unreadable_directory_is_skipped_and_the_retry_raises"
 count = 1
 reason = "Root ignores permissions; CI runs as a non-root user, so the test runs there."
+
+["ci-checks/dependency-allowlist/allowlist.toml"]
+allow = ["github.com/BurntSushi/toml@v1.6.0"]
