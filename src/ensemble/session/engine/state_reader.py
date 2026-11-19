@@ -1,7 +1,7 @@
-"""state_reader.py ROOT: serves reads of a client state volume mounted at ROOT, one JSON request line
-on stdin at a time, until EOF. Runs in a session's reader container, standard library only.
+"""state_reader.py ROOT: serves reads of the client state volumes mounted at ROOT/<session>, one JSON
+request line on stdin at a time, until EOF. Runs in a reader container, standard library only.
 
-Request: {"op": "read"|"stat"|"entries"|"snapshot", "path": "<client>/<rel>", ...}; read adds
+Request: {"op": "read"|"stat"|"entries"|"snapshot", "path": "<session>/<client>/<rel>", ...}; read adds
 offset, limit and tail, entries a limit, snapshot "paths" (main first) and a total "limit".
 Reply: one JSON header line {"errno", "message", "size", "mtime", "entries", "length"}, then
 `length` payload bytes: a read's bytes, or a snapshot's tar of regular files named by basename.
