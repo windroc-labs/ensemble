@@ -92,27 +92,27 @@ PowerShell on the PC.
    Get-NetFirewallRule -Name OpenSSH-Server-In-TCP | Select-Object Enabled, Profile   # True, Private
    Get-NetConnectionProfile | Select-Object Name, NetworkCategory                     # Private
    ```
-5. Add the Mac's public key. For an administrator account it goes in
+5. Start sshd once to create its files, and stop it at once: `Start-Service sshd; Stop-Service sshd`. The first start creates
+   `C:\ProgramData\ssh` with its access rules, `sshd_config` and the host keys; the default config allows passwords,
+   so stop it at once.
+6. Add the Mac's public key. For an administrator account it goes in
    `C:\ProgramData\ssh\administrators_authorized_keys`, which only Administrators and SYSTEM may read:
    `icacls.exe C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant Administrators:F /grant SYSTEM:F`.
    For any other account it goes in `%USERPROFILE%\.ssh\authorized_keys`.
-6. Turn off password login. `C:\ProgramData\ssh\sshd_config` exists only after sshd's first start, and the default
-   allows passwords, so start sshd once and stop it at once: `Start-Service sshd; Stop-Service sshd`. In that file, put
-   `PasswordAuthentication no` and `KbdInteractiveAuthentication no` above the first `Match` line: the default file
-   ends in a `Match Group administrators` block, and a line after it applies only to that group. Then check it, and
-   only then start sshd for good:
+7. Turn off password login. In `C:\ProgramData\ssh\sshd_config`, put `PasswordAuthentication no` and
+   `KbdInteractiveAuthentication no` above the first `Match` line: the default file ends in a
+   `Match Group administrators` block, and a line after it applies only to that group. Check it; both values must
+   print `no`:
 
    ```powershell
    & "$env:WINDIR\System32\OpenSSH\sshd.exe" -T | Select-String -Pattern '^(passwordauthentication|kbdinteractiveauthentication) '
-   Start-Service sshd
-   Set-Service sshd -StartupType Automatic
    ```
 
-   Both values must print `no`.
-7. Keep the Docker API off the network: in Docker Desktop's settings, "Expose daemon on tcp://localhost:2375 without
+   Only then start sshd for good: `Start-Service sshd; Set-Service sshd -StartupType Automatic`.
+8. Keep the Docker API off the network: in Docker Desktop's settings, "Expose daemon on tcp://localhost:2375 without
    TLS" stays off. `Get-NetTCPConnection -State Listen -LocalPort 2375,2376 -ErrorAction SilentlyContinue` prints
    nothing.
-8. Note the host key's fingerprint: `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`.
+9. Note the host key's fingerprint: `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`.
 
 On the Mac, do the [Linux target](#linux-target)'s Mac steps: compare and add the host key
 (`known_hosts`) from one scan, check the key login, check that `PreferredAuthentications=password,keyboard-interactive` is refused,
@@ -147,7 +147,8 @@ PATH=/usr/local/libexec/ensemble/ssh:$PATH docker --host ssh://<user>@<host> log
 
 The policy starts with no exceptions, so workers on the target reach no LAN address. A model provider on the LAN
 needs an `exceptions:` entry for its `host:port`, for example OpenCode's provider at `192.168.1.40:8080`; without one,
-those workers get `Proxy Authentication Required … denied by rule 'Deny: User Configured'`:
+those workers get `Proxy Authentication Required … denied by rule 'Deny: User Configured'`. Add it under the existing
+`workers:` network, then apply it with `start.sh` as above:
 
 ```yaml
 networks:
