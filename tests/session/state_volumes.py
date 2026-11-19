@@ -3,11 +3,13 @@ a reader state_reader.answer over pipes, with no process; a reader mounting sess
 /state/<session> answers ENOENT for a path in a session it does not mount.
 """
 
+import _socket
 import contextlib
 import errno
 import json
 import os
 import queue
+import socket
 import subprocess
 import threading
 from unittest import mock
@@ -166,6 +168,73 @@ class Volumes:
             self.readers.append(reader)
             return reader
         raise AssertionError(f"unexpected docker call {argv}")
+
+
+_SOCKET = socket.socket
+
+
+class Listener:
+    """A service socket bound at `path` in this process: connect() reaches it while in LISTENING."""
+
+    def __init__(self, path):
+        self.path, self.timeout, self.waiting = path, None, queue.Queue()
+        LISTENING[path] = self
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def getsockname(self):
+        return self.path
+
+    def accept(self):
+        try:
+            return self.waiting.get(timeout=self.timeout), self.path
+        except queue.Empty:
+            raise TimeoutError from None
+
+    def close(self):
+        if LISTENING.get(self.path) is self:
+            del LISTENING[self.path]
+
+
+LISTENING: dict[str, Listener] = {}
+
+
+class Dialer:
+    """socket.socket for a client of a Listener: connect() hands it one end of a socket pair."""
+
+    def __init__(self, *_args, **_kw):
+        self.sock = None
+
+    def connect(self, path):
+        listener = LISTENING.get(path)
+        if listener is None:
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+        mine, theirs = (
+            _SOCKET(socket.AF_UNIX, socket.SOCK_STREAM, 0, end.detach())
+            for end in _socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        )
+        listener.waiting.put(theirs)
+        self.sock = mine
+
+    def close(self):
+        if self.sock is not None:
+            self.sock.close()
+
+    def __getattr__(self, name):
+        if self.sock is None:
+            raise OSError(errno.ENOTCONN, "not connected")
+        return getattr(self.sock, name)
+
+
+@contextlib.contextmanager
+def sockets():
+    """Unix sockets in this process: Listener in place of bind, Dialer in place of connect."""
+    with mock.patch("socket.socket", Dialer):
+        try:
+            yield
+        finally:
+            LISTENING.clear()
 
 
 def stored(session, client):

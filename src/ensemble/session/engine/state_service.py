@@ -10,6 +10,7 @@ use the same header: ENOENT absent, EIO docker failed, EINVAL a bad request.
 
 import contextlib
 import errno
+import fcntl
 import functools
 import hashlib
 import json
@@ -17,8 +18,12 @@ import os
 import re
 import secrets
 import select
+import socket
+import stat
 import subprocess
+import sys
 import threading
+import time
 from typing import TypeGuard, cast
 
 from ensemble.session.engine import daemon
@@ -30,6 +35,8 @@ HEADER_MAX = 32 << 20
 ARCHIVE_SLACK = 64 << 10  # tar headers and padding
 REQUEST_MAX = 64 << 10
 REPLY_TIMEOUT = 10
+IDLE = 60  # seconds with no client before the service exits
+POLL = 0.5  # seconds between idle checks
 SOCKET_PATH_MAX = 103  # bytes: macOS's AF_UNIX sun_path holds 104 with its NUL, Linux's 108
 SOCKETS = f"{STATE}/state-readers"
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
@@ -164,6 +171,62 @@ class Service:
         self.readers: dict[str, _Container] = {}
         self.wanted: dict[str, int] = {}
         self._wanted_lock = threading.Lock()
+        self._clients: set[socket.socket] = set()
+        self._clients_lock = threading.Lock()
+        self._quiet_since = time.monotonic()
+        self._stopped = threading.Event()
+
+    def serve(self, listener: socket.socket, *, idle: float) -> None:
+        """Answers each client on its own thread until `stop`, or `idle` seconds with none; then
+        removes the socket, so a later client starts another service, and stops every reader.
+        """
+        path = listener.getsockname()
+        listener.settimeout(POLL)
+        try:
+            while not self._stopped.is_set():
+                try:
+                    client, _ = listener.accept()
+                except TimeoutError:
+                    with self._clients_lock:
+                        if not self._clients and time.monotonic() - self._quiet_since >= idle:
+                            return
+                    continue
+                client.settimeout(None)
+                with self._clients_lock:
+                    self._clients.add(client)
+                threading.Thread(target=self._talk, args=(client,), daemon=True).start()
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+            listener.close()
+            with self._clients_lock:
+                clients = list(self._clients)
+            for client in clients:
+                with contextlib.suppress(OSError):
+                    client.shutdown(socket.SHUT_RDWR)
+            self.close()
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+    def _talk(self, client: socket.socket) -> None:
+        """Answers `client`'s requests in turn until it leaves; a reply it left before is dropped."""
+        try:
+            frames = Frames(client.fileno(), None, "state client")
+            while True:
+                try:
+                    line = frames.line(REQUEST_MAX)
+                except OSError:
+                    return
+                try:
+                    client.sendall(self.answer(line))
+                except OSError:
+                    return
+        finally:
+            with self._clients_lock:
+                self._clients.discard(client)
+                self._quiet_since = time.monotonic()
+            client.close()
 
     def answer(self, line: bytes) -> bytes:
         """The framed reply to one request line."""
@@ -392,3 +455,69 @@ def _well_formed(found: dict[str, object]) -> TypeGuard[StateHeader]:
         and isinstance(found["entries"], list)
         and _count(found["length"])
     )
+
+
+def bind(daemon_id: str) -> tuple[socket.socket, int] | None:
+    """`daemon_id`'s listening socket and its held lock; None: another service holds the lock.
+    EPERM: its directory is not this user's alone.
+    """
+    path = socket_path(daemon_id)
+    _private(os.path.dirname(path))
+    lock = os.open(
+        lock_path(daemon_id), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+    )
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock)
+        return None
+    try:
+        os.fchmod(lock, 0o600)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)  # a crashed service's
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(path)
+            os.chmod(path, 0o600)
+            listener.listen()
+        except BaseException:
+            listener.close()
+            raise
+    except BaseException:
+        os.close(lock)
+        raise
+    return listener, lock
+
+
+def _private(folder: str) -> None:
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    info = os.lstat(folder)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise OSError(errno.EPERM, "not a private directory", folder)
+
+
+def main(argv: list[str]) -> int:
+    """state_service <daemon id>: serves until idle; 0 also when another service serves it."""
+    if len(argv) != 1 or not daemon.DAEMON.fullmatch(argv[0]):
+        return 64
+    os.umask(0o077)
+    try:
+        bound = bind(argv[0])
+    except OSError:
+        return 1
+    if bound is None:
+        return 0
+    listener, lock = bound
+    try:
+        Service(argv[0]).serve(listener, idle=IDLE)
+    finally:
+        os.close(lock)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

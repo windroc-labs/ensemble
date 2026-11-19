@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import select
+import socket
+import stat
 import threading
 import time
 from unittest import mock
@@ -15,7 +17,18 @@ from unittest import mock
 from ensemble.session.engine import daemon, state_reader, state_service
 from ensemble.session.engine.state_service import Service
 from tests.session.case import Case
-from tests.session.state_volumes import DOCKER, IMAGE, LOCAL, OWNER, record, serve, stored
+from tests.session.state_volumes import (
+    DOCKER,
+    IMAGE,
+    LISTENING,
+    LOCAL,
+    OWNER,
+    Listener,
+    record,
+    serve,
+    sockets,
+    stored,
+)
 
 SESSIONS = ("s1", "v", "w")
 
@@ -355,3 +368,146 @@ class FramesTest(Case):
             with self.subTest(text=text), self.assertRaises(OSError) as caught:
                 state_service.header(text)
             self.assertEqual(caught.exception.errno, errno.EPROTO)
+
+
+class Bindable:
+    """socket.socket for bind(): binding makes a file at its path, refused where one is."""
+
+    def __init__(self, *_args):
+        self.path = None
+
+    def bind(self, path):
+        if os.path.lexists(path):
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+        with open(path, "x"):
+            self.path = path
+
+    def listen(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class BindTest(Case):
+    def setUp(self):
+        self.enterContext(mock.patch("socket.socket", Bindable))
+        self.folder = os.path.join(self.ensemble, "state-readers")
+
+    def bound(self):
+        found = state_service.bind(LOCAL.id)
+        assert found is not None
+        self.addCleanup(os.close, found[1])
+        return found
+
+    def test_main_refuses_a_bad_argument_list(self):
+        for argv in ([], ["daemon-a", "x"], ["../x"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(state_service.main(argv), 64)
+
+    def test_the_dir_socket_and_lock_are_private(self):
+        listener, _ = self.bound()
+        self.assertEqual(listener.path, state_service.socket_path(LOCAL.id))
+        modes = [
+            stat.S_IMODE(os.lstat(path).st_mode)
+            for path in (self.folder, listener.path, state_service.lock_path(LOCAL.id))
+        ]
+        self.assertEqual(modes, [0o700, 0o600, 0o600])
+
+    def test_a_stale_socket_is_replaced(self):
+        os.makedirs(self.folder, mode=0o700)
+        with open(state_service.socket_path(LOCAL.id), "w"):
+            pass
+        self.assertEqual(self.bound()[0].path, state_service.socket_path(LOCAL.id))
+
+    def test_a_held_lock_binds_nothing(self):
+        listener, _ = self.bound()
+        os.unlink(listener.path)
+        self.assertIsNone(state_service.bind(LOCAL.id))
+        self.assertEqual(state_service.main([LOCAL.id]), 0)
+        self.assertFalse(os.path.lexists(listener.path))
+
+    def test_a_shared_or_linked_dir_is_refused_without_a_socket(self):
+        os.makedirs(self.folder)
+        os.chmod(self.folder, 0o755)
+        with self.assertRaises(OSError) as caught:
+            state_service.bind(LOCAL.id)
+        self.assertEqual(caught.exception.errno, errno.EPERM)
+        self.assertEqual(state_service.main([LOCAL.id]), 1)
+        self.assertEqual(os.listdir(self.folder), [])
+        os.rmdir(self.folder)
+        elsewhere = os.path.join(self.home, "elsewhere")
+        os.mkdir(elsewhere, 0o700)
+        os.symlink(elsewhere, self.folder)
+        self.assertEqual(state_service.main([LOCAL.id]), 1)
+        self.assertEqual(os.listdir(elsewhere), [])
+
+
+class LifecycleTest(ServiceCase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(sockets())
+
+    def serving(self, idle: float = 60) -> threading.Thread:
+        listener = Listener(state_service.socket_path(LOCAL.id))
+        thread = threading.Thread(
+            target=self.service.serve, args=(listener,), kwargs={"idle": idle}
+        )
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(self.service.stop)
+        return thread
+
+    def client(self) -> socket.socket:
+        found = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(found.close)
+        found.connect(state_service.socket_path(LOCAL.id))
+        return found
+
+    def exchange(self, client: socket.socket, session: str) -> bytes:
+        client.sendall(line(session, read(session)))
+        frames = state_service.Frames(client.fileno(), 10, "test")
+        head = json.loads(frames.line(1 << 20))
+        return frames.take(head["length"])
+
+    def test_clients_are_served_in_turn_and_it_exits_once_idle(self):
+        thread = self.serving(idle=0.2)
+        first, second = self.client(), self.client()
+        self.assertEqual(self.exchange(first, "s1"), b"s1")
+        self.assertEqual(self.exchange(second, "v"), b"v")
+        self.assertEqual(self.exchange(first, "v"), b"v")
+        first.close()
+        time.sleep(1)
+        self.assertTrue(thread.is_alive())
+        second.close()
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn(state_service.socket_path(LOCAL.id), LISTENING)
+        self.assertEqual(self.alive(), [])
+
+    def test_a_client_gone_before_its_reply_leaves_the_others_served(self):
+        self.serving()
+        gone = self.client()
+        gone.sendall(line("s1", read("s1")))
+        gone.close()
+        for _ in range(3):
+            self.assertEqual(self.exchange(self.client(), "v"), b"v")
+
+    def test_a_request_over_its_bound_ends_the_client(self):
+        self.serving()
+        client = self.client()
+        client.sendall(b"x" * (state_service.REQUEST_MAX + 2))
+        client.settimeout(10)
+        self.assertEqual(client.recv(1), b"")
+        self.assertEqual(self.exchange(self.client(), "s1"), b"s1")
+
+    def test_stop_ends_serving_and_its_clients(self):
+        thread = self.serving()
+        client = self.client()
+        self.assertEqual(self.exchange(client, "s1"), b"s1")
+        self.service.stop()
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        client.settimeout(10)
+        self.assertEqual(client.recv(1), b"")
+        self.assertEqual(self.alive(), [])
