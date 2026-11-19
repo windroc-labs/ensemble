@@ -15,6 +15,10 @@ Do the steps in this order. The rules for the `[docker]` table in `~/.ensemble/c
 options, the check before each start) are in [Upgrading › Broker protocol 43](upgrading.md#broker-protocol-43-remote-docker-target);
 `ensemble-broker target` shows how the broker reads it. A session stays on the daemon its first start chose:
 switching the target to another machine leaves earlier sessions there, to resume or reclaim after switching back.
+While the target cannot be reached, a new worker that would run there starts on the Mac's Docker Desktop instead and
+says so on stderr (`ensemble-session: docker: <target> unreachable (<reason>); starting on the local Docker Desktop
+…`); its session stays there. A start with a lock still fails `docker_unreachable`, and a resume still needs its own
+daemon.
 
 The target needs Docker Engine 26 or newer, an SSH server that accepts only keys, and `docker` on the PATH of the SSH
 login shell: `docker --host ssh://…` runs `ssh <host> docker system dial-stdio` there. It needs no bash, `gh`, GitHub

@@ -889,15 +889,23 @@ class DockerHost(Host):
         return hook, root, built
 
     def _choose(self, environment: EnvironmentSpec | None) -> Daemon:
-        """A new session's daemon: its environment's, else the target's default."""
+        """A new session's daemon: its environment's, else the target's default; down, local."""
         target = self._target()
         name = environment.daemon if environment and environment.daemon else target.default
         daemon = daemon_named(target, name)
         if daemon is None:
             raise SessionError(f"host {self.name}: no {name} Docker daemon is configured")
-        if daemon.id is None:
+        if daemon.id is not None:
+            return daemon
+        local = daemon_named(target, DaemonName.LOCAL)
+        if local is None or local.id is None:
             raise _unreachable(daemon)
-        return daemon
+        print(
+            f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable});"
+            f" starting on {describe(local)}",
+            file=sys.stderr,
+        )
+        return local
 
     def _recorded(self, name: str) -> DaemonRecord | None:
         try:

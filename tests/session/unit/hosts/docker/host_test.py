@@ -2862,9 +2862,41 @@ class DaemonChoiceTest(StartBase):
         self.assertFalse([c for c in self.order if isinstance(c, list) and "info" in c])
         self.assertEqual(self.broker.targets, 1)
 
-    def test_an_unreachable_chosen_daemon_fails_a_new_start_before_any_build(self):
-        why = "host key unknown: not in ~/.ssh/known_hosts"
+    def test_an_unreachable_remote_default_falls_back_to_the_local_daemon(self):
+        why = "Docker daemon not running"
         self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        notice = (
+            f"ensemble-session: docker: {REMOTE} unreachable ({why});"
+            f" starting on the local Docker Desktop ({self.ep})\n"
+        )
+        for check in (
+            lambda: self.host.validate("w", self.launch),
+            lambda: self.host._preflight("w", self.launch, self.METADATA),
+            lambda: self.host._validate("w", self.launch, self.METADATA),
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                check()
+            self.assertIn(notice, err.getvalue())
+        self.assertIsNone(load_record("w"))
+        self.broker.built_daemons.clear()
+        for environment in (None, carried(ENVIRONMENT)):
+            with self.subTest(environment=environment):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.start(environment=environment)
+                self.assertIn(notice, err.getvalue())
+                self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+                self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
+                self.assertEqual(self.remote_work(), [])
+                os.unlink(os.path.join(self.state, RECORD_FILE))
+        self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+
+    def test_with_both_daemons_unreachable_a_new_start_fails_on_the_remote_s_reason(self):
+        why = "host key unknown: not in ~/.ssh/known_hosts"
+        self.targets(
+            "remote",
+            self.pc._replace(id=None, unreachable=why),
+            self.local._replace(id=None, unreachable="Docker daemon not running"),
+        )
         want = f"^broker: Cannot reach Docker target {REMOTE}: {re.escape(why)}\\.$"
         for check in (
             lambda: self.host.validate("w", self.launch),
@@ -2878,8 +2910,6 @@ class DaemonChoiceTest(StartBase):
         self.assertEqual(self.broker.built_daemons, [])
         self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
         self.assertIsNone(load_record("w"))
-        self.start(environment=carried(replace(ENVIRONMENT, daemon="local")))
-        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
 
     def test_a_preflight_builds_on_the_default_and_records_nothing(self):
         self.host._preflight("w", self.launch, self.METADATA)
