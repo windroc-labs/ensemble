@@ -33,7 +33,7 @@ from tests.session.state_volumes import (
 SESSIONS = ("s1", "v", "w")
 
 
-def line(session: str, request: dict, image: str = IMAGE) -> bytes:
+def line(session: str, request: dict, image: str | None = IMAGE) -> bytes:
     return json.dumps({"session": session, "image": image, "request": request}).encode() + b"\n"
 
 
@@ -97,6 +97,7 @@ class RequestTest(ServiceCase):
             json.dumps({**good, "image": "latest"}).encode(),
             json.dumps({**good, "request": []}).encode(),
             line("s1", {"op": "chmod", "path": "s1/app/t"}),
+            line("s1", read("s1"), image=None),
             line("s1", read("v")),
             line("s1", {**read("s1"), "path": "s1"}),
             line("s1", {**read("s1"), "path": 3}),
@@ -293,9 +294,9 @@ class LossTest(ServiceCase):
     def test_reset_stops_the_reader_mounting_the_session(self):
         self.ask("s1")
         self.ask("w")
-        self.assertEqual(self.errno_of("v", {"op": "reset"}), None)
+        self.assertEqual(self.errno_of("v", {"op": "reset"}, image=None), None)
         self.assertFalse(self.volumes.readers[-1].killed)
-        self.assertEqual(self.errno_of("s1", {"op": "reset"}), None)
+        self.assertEqual(self.errno_of("s1", {"op": "reset"}, image=None), None)
         self.assertEqual(self.alive(), [])
 
     def test_after_a_loss_only_requested_sessions_are_mounted(self):
@@ -322,14 +323,14 @@ class LossTest(ServiceCase):
 class SocketPathTest(Case):
     def test_keyed_by_daemon_and_code_below_state_readers(self):
         key = hashlib.sha256(b"daemon-a").hexdigest()[:16]
-        folder = os.path.join(self.ensemble, "state-readers")
+        folder = os.path.join(self.home, f"eg-{os.getuid()}")
         digest = state_service.code_digest()
         self.assertRegex(digest, r"\A[0-9a-f]{8}\Z")
         self.assertEqual(
-            state_service.socket_path("daemon-a"), os.path.join(folder, f"{key}-{digest}.sock")
+            state_service.socket_path("daemon-a"), os.path.join(folder, f"sr-{key}-{digest}.sock")
         )
         self.assertEqual(
-            state_service.lock_path("daemon-a"), os.path.join(folder, f"{key}-{digest}.lock")
+            state_service.lock_path("daemon-a"), os.path.join(folder, f"sr-{key}-{digest}.lock")
         )
         self.assertNotEqual(
             state_service.socket_path("daemon-b"), state_service.socket_path("daemon-a")
@@ -344,7 +345,10 @@ class SocketPathTest(Case):
 
     def test_a_path_over_the_af_unix_limit_is_refused(self):
         long = os.path.join(self.home, "x" * 100)
-        with mock.patch.dict(os.environ, {"HOME": long}), self.assertRaises(OSError) as caught:
+        with (
+            mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": long}),
+            self.assertRaises(OSError) as caught,
+        ):
             state_service.socket_path("daemon-a")
         self.assertEqual(caught.exception.errno, errno.EIO)
         self.assertIn("over the 103-byte AF_UNIX limit", caught.exception.strerror)
@@ -392,7 +396,7 @@ class Bindable:
 class BindTest(Case):
     def setUp(self):
         self.enterContext(mock.patch("socket.socket", Bindable))
-        self.folder = os.path.join(self.ensemble, "state-readers")
+        self.folder = os.path.join(self.home, f"eg-{os.getuid()}")
 
     def bound(self):
         found = state_service.bind(LOCAL.id)

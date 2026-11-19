@@ -33,6 +33,7 @@ from ensemble.session.hosts.base import (
 )
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.hosts.types import WorkerState
+from ensemble.utils import control_root
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 ONE_SHOT = re.compile(r"o[0-9a-f]{15}")
@@ -74,11 +75,6 @@ def check_directory(path: str) -> None:
         or stat.S_IMODE(info.st_mode) != 0o700
     ):
         raise OSError("guard directory is not private")
-
-
-def control_root() -> str:
-    root = os.environ.get("ENSEMBLE_CONTROL_ROOT", "/tmp")  # never macOS's long $TMPDIR
-    return os.path.join(root, f"eg-{os.getuid()}")
 
 
 def location(host: str, name: str) -> str:

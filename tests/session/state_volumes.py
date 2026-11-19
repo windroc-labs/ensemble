@@ -1,6 +1,5 @@
-"""Fake Docker for client_state and state_service: a session's volume is its dir under DOCKER_STATE,
-a reader state_reader.answer over pipes, with no process; a reader mounting sessions at
-/state/<session> answers ENOENT for a path in a session it does not mount.
+"""Fake Docker: volumes are dirs under DOCKER_STATE, readers state_reader.answer, services
+threads over in-process sockets.
 """
 
 import _socket
@@ -14,7 +13,7 @@ import subprocess
 import threading
 from unittest import mock
 
-from ensemble.session.engine import client_state, daemon, state_reader
+from ensemble.session.engine import client_state, daemon, state_reader, state_service
 from ensemble.session.engine.types import Daemon, DaemonRecord
 from ensemble.utils import DOCKER_STATE
 from tests.session.unit.hosts.docker.support import FakeProc
@@ -28,11 +27,9 @@ OWNER = "1001:1002"
 
 
 class ReaderProc:
-    """A reader's docker run; `mounted`: its sessions (None: one volume at the root); `reply`:
-    raw bytes sent instead; `hang`: no answer; `leave`: exits at its next request.
-    """
+    """A reader's docker run over `mounted` sessions; `reply`, `hang`, `leave`: misbehaviours."""
 
-    def __init__(self, argv, root, *, mounted=None, reply=None, hang=False, leave=False):
+    def __init__(self, argv, root, *, mounted, reply=None, hang=False, leave=False):
         self.args, self.root, self.reply, self.hang = argv, root, reply, hang
         self.mounted = mounted
         stdout_read, sink = os.pipe()
@@ -54,7 +51,7 @@ class ReaderProc:
         if self.reply is not None:
             self.replies.put(self.reply)
             return
-        if self.mounted is not None and _first_part(line) not in self.mounted:
+        if _first_part(line) not in self.mounted:
             header, payload = state_reader.answer(self.root, b"{}")
             header.update(errno=errno.ENOENT, message="not mounted")
         else:
@@ -113,20 +110,17 @@ def _first_part(line: bytes) -> str:
 
 
 class Volumes:
-    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr;
-    `owners`: a session's owner label in place of `owner`; `foreign`: sessions whose volume
-    names another session; `hold`: an event each `volume ls` waits for; `leave`: new readers
-    exit at their first request.
-    """
+    """Toggles: `volumes`, `error`, `owners`, `foreign`, `hold`, `leave`, `silent`, `spawn_error`."""
 
     def __init__(self):
-        self.calls, self.readers = [], []
+        self.calls, self.readers, self.spawns = [], [], []
         self.volumes: set[str] | None = None
         self.reply: bytes | None = None
         self.hang, self.error, self.owner, self.leave = False, "", OWNER, False
         self.owners: dict[str, str] = {}
         self.foreign: set[str] = set()
         self.hold: threading.Event | None = None
+        self.silent, self.spawn_error = False, None
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -136,7 +130,13 @@ class Volumes:
             return session in self.volumes
         return os.path.isdir(self.root(session))
 
+    @staticmethod
+    def handles(argv) -> bool:
+        return argv[3:4] in (["volume"], ["run"]) or argv[1:5] == SPAWN
+
     def __call__(self, argv, **kw):
+        if argv[1:5] == SPAWN:
+            return self.spawn(argv, kw)
         self.calls.append(list(argv))
         args = argv[3:]
         if self.error and args[:1] != ["run"]:
@@ -158,23 +158,53 @@ class Volumes:
         if args[:1] == ["run"]:
             mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
             sessions = [m.split("source=ensemble-state-", 1)[1].split(",", 1)[0] for m in mounts]
-            if mounts[0].split("target=", 1)[1].startswith("/state,"):
-                root, mounted = self.root(sessions[0]), None
-            else:
-                root, mounted = os.path.expanduser(DOCKER_STATE), set(sessions)
             reader = ReaderProc(
-                argv, root, mounted=mounted, reply=self.reply, hang=self.hang, leave=self.leave
+                argv,
+                os.path.expanduser(DOCKER_STATE),
+                mounted=set(sessions),
+                reply=self.reply,
+                hang=self.hang,
+                leave=self.leave,
             )
             self.readers.append(reader)
             return reader
         raise AssertionError(f"unexpected docker call {argv}")
+
+    def spawn(self, argv, kw):
+        self.spawns.append((list(argv), kw))
+        if self.spawn_error is not None:
+            raise self.spawn_error
+        path = state_service.socket_path(argv[5])
+        if path not in LISTENING and not self.silent:
+            service, listener = state_service.Service(argv[5]), Listener(path)
+            thread = threading.Thread(
+                target=service.serve, args=(listener,), kwargs={"idle": 60}, daemon=True
+            )
+            thread.start()
+            SERVICES.append((service, listener, thread))
+        return FakeProc(argv)
+
+    def kill_services(self):
+        stop_services()
+
+
+SPAWN = ["-P", "-s", "-m", state_service.__name__]
+SERVICES: list[tuple[state_service.Service, "Listener", threading.Thread]] = []
+
+
+def stop_services():
+    while SERVICES:
+        service, listener, thread = SERVICES.pop()
+        service.stop()
+        listener.waiting.put(WAKE)
+        thread.join(10)
 
 
 _SOCKET = socket.socket
 
 
 class Listener:
-    """A service socket bound at `path` in this process: connect() reaches it while in LISTENING."""
+    """A bound service socket; connect() reaches it while in LISTENING."""
 
     def __init__(self, path):
         self.path, self.timeout, self.waiting = path, None, queue.Queue()
@@ -188,9 +218,12 @@ class Listener:
 
     def accept(self):
         try:
-            return self.waiting.get(timeout=self.timeout), self.path
+            found = self.waiting.get(timeout=self.timeout)
         except queue.Empty:
             raise TimeoutError from None
+        if found is WAKE:
+            raise TimeoutError
+        return found, self.path
 
     def close(self):
         if LISTENING.get(self.path) is self:
@@ -198,10 +231,11 @@ class Listener:
 
 
 LISTENING: dict[str, Listener] = {}
+WAKE = object()
 
 
 class Dialer:
-    """socket.socket for a client of a Listener: connect() hands it one end of a socket pair."""
+    """socket.socket whose connect() gets a pair with a Listener."""
 
     def __init__(self, *_args, **_kw):
         self.sock = None
@@ -229,7 +263,6 @@ class Dialer:
 
 @contextlib.contextmanager
 def sockets():
-    """Unix sockets in this process: Listener in place of bind, Dialer in place of connect."""
     with mock.patch("socket.socket", Dialer):
         try:
             yield
@@ -261,7 +294,7 @@ def serve(sessions=("s1", "v", "w")):
     volumes = Volumes()
     for session in sessions:
         record(session)
-    with mock.patch.object(subprocess, "Popen", volumes):
+    with mock.patch.object(subprocess, "Popen", volumes), sockets():
         try:
             yield volumes
         finally:
@@ -269,6 +302,8 @@ def serve(sessions=("s1", "v", "w")):
 
 
 def reset():
-    """No reader left from an earlier test."""
-    client_state._close_readers()
-    client_state._READERS.clear()
+    """No service, reader or connection left from an earlier test."""
+    stop_services()
+    for connection in list(client_state._CONNECTIONS.values()):
+        connection.close()
+    client_state._CONNECTIONS.clear()

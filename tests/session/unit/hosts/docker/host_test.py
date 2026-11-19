@@ -70,7 +70,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
-from tests.session.state_volumes import Volumes, reset
+from tests.session.state_volumes import Volumes, reset, sockets
 from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, FakePopen, ssh_dir
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
@@ -550,6 +550,7 @@ class StartBase(Base):
         self.popen_mock = popen.start()
         self.addCleanup(popen.stop)
         self.state_volumes = Volumes()
+        self.enterContext(sockets())
         self.addCleanup(reset)
         self.launch = Launch(
             ("agent", "--flag"),
@@ -558,7 +559,7 @@ class StartBase(Base):
         )
 
     def guard_popen(self, argv, **kw):
-        if argv[3:4] in (["volume"], ["image"], ["run"]):
+        if self.state_volumes.handles(argv) or argv[3:4] == ["image"]:
             return self.state_volumes(argv, **kw)
         if argv[3:4] == ["attach"]:
             self.order.append("guard")
@@ -631,11 +632,11 @@ class StartBase(Base):
         self.assertEqual(self.spawned(), [])
 
     def spawned(self):
-        """Processes started other than the state reader's docker calls."""
+        """Processes started other than the state reader service and its docker calls."""
         return [
             call.args[0]
             for call in self.popen_mock.call_args_list
-            if call.args[0][3:4] not in (["volume"], ["image"], ["run"])
+            if not (Volumes.handles(call.args[0]) or call.args[0][3:4] == ["image"])
         ]
 
     def staged(self):

@@ -1,11 +1,6 @@
-"""The Mac's one reader service per Docker daemon: every Mac process reads a Docker session's client
-state volume through its Unix socket, and it serves them all with one reader container per volume
-owner, which runs state_reader.py over each read session's volume mounted at /state/<session>.
-
-Request, one JSON line: {"session", "image", "request"}; `request` is a state_reader.py request whose
-paths are <session>/<client>/<rel>, or {"op": "reset"}, which stops the container mounting `session`.
-Reply: as state_reader.py's, a header line, then `length` payload bytes; the service's own refusals
-use the same header: ENOENT absent, EIO docker failed, EINVAL a bad request.
+"""One reader service per Docker daemon: Mac processes read client state volumes through its
+Unix socket; it reads them with one container per volume owner, each session at /state/<session>.
+A request line is {"session", "image", "request"}; replies are framed as state_reader.py's.
 """
 
 import contextlib
@@ -18,6 +13,7 @@ import os
 import re
 import secrets
 import select
+import signal
 import socket
 import stat
 import subprocess
@@ -28,17 +24,16 @@ from typing import TypeGuard, cast
 
 from ensemble.session.engine import daemon
 from ensemble.session.engine.types import SESSION_NAME, DaemonRecord, SessionError, StateHeader
-from ensemble.utils import STATE
+from ensemble.utils import control_root
 
 READ_MAX = 64 << 20
 HEADER_MAX = 32 << 20
 ARCHIVE_SLACK = 64 << 10  # tar headers and padding
 REQUEST_MAX = 64 << 10
 REPLY_TIMEOUT = 10
-IDLE = 60  # seconds with no client before the service exits
-POLL = 0.5  # seconds between idle checks
+IDLE = 60  # s with no client
+POLL = 0.5
 SOCKET_PATH_MAX = 103  # bytes: macOS's AF_UNIX sun_path holds 104 with its NUL, Linux's 108
-SOCKETS = f"{STATE}/state-readers"
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
 OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
@@ -49,7 +44,7 @@ RESET = "reset"
 
 @functools.cache
 def code_digest() -> str:
-    """Of the code a service runs: a changed install answers on another socket."""
+    """Changed code answers on another socket."""
     found = hashlib.sha256()
     for path in (os.path.abspath(__file__), READER, os.path.abspath(daemon.__file__)):
         with open(path, "rb") as f:
@@ -58,7 +53,7 @@ def code_digest() -> str:
 
 
 def socket_path(daemon_id: str) -> str:
-    """The service socket of `daemon_id`; EIO past the AF_UNIX limit."""
+    """EIO past the AF_UNIX limit."""
     path = _base(daemon_id) + ".sock"
     if (size := len(os.fsencode(path))) > SOCKET_PATH_MAX:
         raise OSError(
@@ -74,11 +69,10 @@ def lock_path(daemon_id: str) -> str:
 
 def _base(daemon_id: str) -> str:
     key = hashlib.sha256(daemon_id.encode()).hexdigest()[:16]
-    return os.path.join(os.path.expanduser(SOCKETS), f"{key}-{code_digest()}")
+    return os.path.join(control_root(), f"sr-{key}-{code_digest()}")
 
 
 def header(line: bytes) -> StateHeader:
-    """A reply's header; EPROTO: not one."""
     found = _json_object(line)
     if not _well_formed(found):
         raise OSError(errno.EPROTO, "state reader reply: bad header")
@@ -94,9 +88,7 @@ def refusal(code: int, message: str) -> bytes:
 
 
 class Frames:
-    """Lines and sized parts read from `fd`: ETIMEDOUT after `timeout` s with no byte (None:
-    no limit), BrokenPipeError at its end.
-    """
+    """Reads lines and sized parts from `fd`; ETIMEDOUT after `timeout` s idle, BrokenPipeError at EOF."""
 
     def __init__(self, fd: int, timeout: float | None, name: str):
         self.fd, self.timeout, self.name = fd, timeout, name
@@ -128,11 +120,9 @@ class Frames:
 
 
 class _Container:
-    """One owner's reader container, over the sessions it mounts."""
-
     def __init__(self, owner: str, proc: subprocess.Popen[bytes], mounted: frozenset[str]):
         self.owner, self.proc, self.mounted = owner, proc, mounted
-        self.fresh = True  # no reply read yet
+        self.fresh = True
         fd = proc.stdout.fileno() if proc.stdout else -1
         self.frames = Frames(fd, REPLY_TIMEOUT, "state reader")
 
@@ -163,7 +153,7 @@ class _Container:
 
 
 class Service:
-    """Answers one daemon's state requests; reads are serial across its sessions."""
+    """Answers one daemon's requests, serially."""
 
     def __init__(self, daemon_id: str):
         self.daemon_id = daemon_id
@@ -177,9 +167,7 @@ class Service:
         self._stopped = threading.Event()
 
     def serve(self, listener: socket.socket, *, idle: float) -> None:
-        """Answers each client on its own thread until `stop`, or `idle` seconds with none; then
-        removes the socket, so a later client starts another service, and stops every reader.
-        """
+        """Until `stop` or `idle` s with no client; then removes the socket and stops every reader."""
         path = listener.getsockname()
         listener.settimeout(POLL)
         try:
@@ -210,7 +198,6 @@ class Service:
         self._stopped.set()
 
     def _talk(self, client: socket.socket) -> None:
-        """Answers `client`'s requests in turn until it leaves; a reply it left before is dropped."""
         try:
             frames = Frames(client.fileno(), None, "state client")
             while True:
@@ -229,7 +216,6 @@ class Service:
             client.close()
 
     def answer(self, line: bytes) -> bytes:
-        """The framed reply to one request line."""
         try:
             session, image, request = _parse(line)
             if request["op"] == RESET:
@@ -264,9 +250,7 @@ class Service:
                         return reader.ask(request, bound)
                     except BrokenPipeError:
                         self._lose(reader)
-                        if (
-                            attempt == 2 or reader.fresh
-                        ):  # a new reader that left: its volume removed
+                        if attempt == 2 or reader.fresh:  # a new one left: volume removed
                             raise OSError(errno.EPIPE, "state reader gone") from None
                     except BaseException:
                         self._lose(reader)
@@ -284,7 +268,6 @@ class Service:
                 self.wanted.pop(session, None)
 
     def _mounting(self, session: str) -> _Container | None:
-        """The live container mounting `session`; one found ended is a loss."""
         for reader in list(self.readers.values()):
             if session in reader.mounted:
                 if reader.alive():
@@ -299,15 +282,12 @@ class Service:
                     self._lose(reader)
 
     def _lose(self, reader: _Container) -> None:
-        """Stops `reader`; its sessions are mounted again only once read again."""
         reader.stop()
         if self.readers.get(reader.owner) is reader:
             del self.readers[reader.owner]
 
     def _restart(self, record: DaemonRecord, session: str, image: str) -> _Container:
-        """A container of `session`'s owner mounting the sessions it had, the waiting ones of its
-        owner and `session`, each verified now: `docker run` would create a removed volume.
-        """
+        """Mounts `session`, its owner's mounted and waiting sessions, each verified: a run creates a missing volume."""
         owner = self._verify(record, session)
         if owner is None:
             raise OSError(errno.EIO, "state volume has no owner", daemon.state_volume(session))
@@ -333,7 +313,7 @@ class Service:
 
     @staticmethod
     def _verify(record: DaemonRecord, session: str) -> str | None:
-        """The owner of `session`'s state volume, None: none; ENOENT: absent or not its."""
+        """The volume's owner, None: none; ENOENT: absent or another session's."""
         volume = daemon.state_volume(session)
         listed = _run(record, "volume", "ls", "--filter", f"name={volume}", "--format", "{{.Name}}")
         if volume not in listed.split():
@@ -380,22 +360,22 @@ class Service:
 
 
 def _parse(line: bytes) -> tuple[str, str, dict[str, object]]:
-    """A request's session, image and reader request; EINVAL: anything else."""
+    """EINVAL: a bad request or a path outside its session."""
     found = _json_object(line)
     session, image, request = found.get("session"), found.get("image"), found.get("request")
     if not (
         set(found) == {"session", "image", "request"}
         and isinstance(session, str)
         and SESSION_NAME.fullmatch(session)
-        and isinstance(image, str)
-        and daemon.DIGEST.fullmatch(image)
         and isinstance(request, dict)
     ):
         raise OSError(errno.EINVAL, "bad state service request")
     request = cast("dict[str, object]", request)
     op = request.get("op")
-    if op == RESET:
-        return session, image, request
+    if op == RESET and image is None:
+        return session, "", request
+    if not isinstance(image, str) or not daemon.DIGEST.fullmatch(image):
+        raise OSError(errno.EINVAL, "bad state service request")
     paths = request.get("paths") if op == "snapshot" else [request.get("path")]
     if op not in READS or not isinstance(paths, list) or not paths:
         raise OSError(errno.EINVAL, "bad state service request")
@@ -406,7 +386,7 @@ def _parse(line: bytes) -> tuple[str, str, dict[str, object]]:
 
 
 def _bound(request: dict[str, object]) -> int:
-    """The payload bytes `request` may get; EINVAL: a read over READ_MAX or a bad limit."""
+    """EINVAL: a read over READ_MAX or a bad limit."""
     if request["op"] not in {"read", "snapshot"}:
         return 0
     limit = request.get("limit")
@@ -416,7 +396,6 @@ def _bound(request: dict[str, object]) -> int:
 
 
 def _run(record: DaemonRecord, *args: str) -> str:
-    """`docker <args>`'s stdout; EIO: it failed."""
     try:
         argv, env = daemon.docker_call(record.docker, *args, daemon=record.daemon)
         done = daemon.capped(argv, env)
@@ -433,7 +412,6 @@ def _ok() -> StateHeader:
 
 
 def _json_object(text: str | bytes) -> dict[str, object]:
-    """`text`'s JSON object; {}: anything else."""
     try:
         found: object = json.loads(text)
     except (ValueError, RecursionError):
@@ -458,9 +436,7 @@ def _well_formed(found: dict[str, object]) -> TypeGuard[StateHeader]:
 
 
 def bind(daemon_id: str) -> tuple[socket.socket, int] | None:
-    """`daemon_id`'s listening socket and its held lock; None: another service holds the lock.
-    EPERM: its directory is not this user's alone.
-    """
+    """The listener and its held lock; None: another service holds it."""
     path = socket_path(daemon_id)
     _private(os.path.dirname(path))
     lock = os.open(
@@ -474,7 +450,7 @@ def bind(daemon_id: str) -> tuple[socket.socket, int] | None:
     try:
         os.fchmod(lock, 0o600)
         with contextlib.suppress(FileNotFoundError):
-            os.unlink(path)  # a crashed service's
+            os.unlink(path)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             listener.bind(path)
@@ -501,7 +477,7 @@ def _private(folder: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    """state_service <daemon id>: serves until idle; 0 also when another service serves it."""
+    """0 also when another service serves the daemon."""
     if len(argv) != 1 or not daemon.DAEMON.fullmatch(argv[0]):
         return 64
     os.umask(0o077)
@@ -512,8 +488,10 @@ def main(argv: list[str]) -> int:
     if bound is None:
         return 0
     listener, lock = bound
+    service = Service(argv[0])
+    signal.signal(signal.SIGTERM, lambda *_: service.stop())
     try:
-        Service(argv[0]).serve(listener, idle=IDLE)
+        service.serve(listener, idle=IDLE)
     finally:
         os.close(lock)
     return 0

@@ -230,8 +230,6 @@ class StateKind(StrEnum):
 
 
 class StateHeader(TypedDict):
-    """A state reader reply's header line; `length` payload bytes follow it."""
-
     errno: int | None
     message: str
     size: int
