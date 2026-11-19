@@ -3,7 +3,9 @@
 ## Broker protocol 43: remote Docker target
 
 Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer also creates
-`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A `docker_unreachable` error names the Docker
+`/usr/local/libexec/ensemble/ssh/ssh`, a root-owned link to the broker. A broker installed any other way, such as
+`sh src/broker/install.sh --build` from a branch, needs `/usr/local/libexec/ensemble/ensemble-broker retrust` after
+each broker change; `scripts/install.sh --docker` runs it. A `docker_unreachable` error names the Docker
 target and the reason, for example `Cannot reach Docker target unix:///Users/you/.docker/run/docker.sock: Docker
 daemon not running; start Docker Desktop and retry.`
 
@@ -36,7 +38,9 @@ Where a worker runs:
   environment (the verifier's) sets `daemon = "local"`. Only `config.toml` and `config.local.toml` set it.
 - The session records that daemon by its ID (`docker info`) in `~/.ensemble/docker-state/<name>/daemon.json`, once,
   and every later command of the session (maintain, close, resume, reclaim) uses it, whatever the settings say then:
-  a LAN address and a Tailscale address of one machine are one daemon. A session with no record belongs to the local
+  a LAN address and a Tailscale address of one machine are one daemon. The record keeps the address of the first
+  start: after a resume through another address of that machine, `daemon.json` still names the first one. That is
+  harmless, as the session finds its daemon by ID. A session with no record belongs to the local
   Docker Desktop. Resuming a session whose daemon no longer has a configured address fails before any volume is made,
   naming the session's target: set the target back to it first.
 - `local_secrets` only refuses: the broker rejects a start on the remote daemon whose environment secrets include a
@@ -46,8 +50,9 @@ Where a worker runs:
   stderr; its workers are not listed, not closed, and their volumes stay. A lock held on either daemon makes a start
   `busy`, naming the holder and its daemon; a start with a lock fails `docker_unreachable` while the other daemon
   cannot be asked.
-- `build`, `close` and `workspace-rm` take `--daemon <ID>`; a start's manifest names its `daemon`. A daemon ID no
-  configured daemon has fails `docker_unreachable`, naming it and the configured daemons.
+- `close` and `workspace-rm` take `--daemon <ID>`; `build` takes an optional one, building on the default daemon
+  `ensemble-broker target` reports without it; a start's manifest names its `daemon`. A daemon ID no configured daemon
+  has fails `docker_unreachable`, naming it and the configured daemons.
 - The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`. The old files directly in
   `~/.ensemble/docker/images/` and `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer
   read; delete them:

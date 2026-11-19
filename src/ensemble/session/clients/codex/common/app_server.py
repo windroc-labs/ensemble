@@ -12,8 +12,10 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from abc import ABC, abstractmethod
+from typing import IO
 
 
 class Termination(ABC):
@@ -28,7 +30,13 @@ class Error(Exception):
 
 
 class Exited(Exception):
-    pass
+    """The app-server exited before answering: `code` its status (None: not yet reaped) and
+    `stderr` the last line it wrote there.
+    """
+
+    def __init__(self, code: int | None = None, stderr: str = ""):
+        super().__init__(code, stderr)
+        self.code, self.stderr = code, stderr
 
 
 POLL = 0.1
@@ -38,6 +46,10 @@ BLOCK = 1 << 16
 EXIT_WAIT = 5
 
 PROBE_MAX = 1 << 20
+
+STDERR_TAIL = 1 << 16  # the end of a failed app-server's stderr searched for its last line
+
+STDERR_LINE_MAX = 1000
 
 
 class AppServer:
@@ -63,7 +75,7 @@ class AppServer:
         exe: str,
         args: list[str],
         method: str,
-        params: dict | None = None,
+        params: dict[str, object] | None = None,
         *,
         env: dict[str, str],
         wait: float,
@@ -72,40 +84,43 @@ class AppServer:
         termination: Termination | None = None,
         exit_wait: float = EXIT_WAIT,
     ):
-        """Own a single initialized request's process from spawning through cleanup."""
+        """Own a single initialized request's process from spawning through cleanup; its stderr
+        goes to a file, never a pipe it could fill.
+        """
         client = None
         exited = False
-        try:
-            if termination is not None:
-                termination.check()
+        with tempfile.TemporaryFile() as stderr:
             try:
-                proc = subprocess.Popen(
-                    [exe, "app-server", *args],
-                    cwd=cwd,
-                    env=env,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-            except OSError as e:
-                raise Error(f"{exe}: {e.strerror}") from e
-            client = cls(proc, wait, limit, termination, exit_wait)
-            if termination is not None:
-                termination.check()
-            return client._request(method, params)
-        except Exited:
-            exited = True
-            raise
-        finally:
-            if client is not None:
-                client._close()
-            if termination is not None:
-                termination.check()
-            if exited and client is not None:
-                raise Exited(client._proc.returncode)
+                if termination is not None:
+                    termination.check()
+                try:
+                    proc = subprocess.Popen(
+                        [exe, "app-server", *args],
+                        cwd=cwd,
+                        env=env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=stderr,
+                        start_new_session=True,
+                    )
+                except OSError as e:
+                    raise Error(f"{exe}: {e.strerror}") from e
+                client = cls(proc, wait, limit, termination, exit_wait)
+                if termination is not None:
+                    termination.check()
+                return client._request(method, params)
+            except Exited:
+                exited = True
+                raise
+            finally:
+                if client is not None:
+                    client._close()
+                if termination is not None:
+                    termination.check()
+                if exited and client is not None:
+                    raise Exited(client._proc.returncode, _last_line(stderr))
 
-    def _request(self, method: str, params: dict | None):
+    def _request(self, method: str, params: dict[str, object] | None) -> object:
         self._send(
             {
                 "id": 1,
@@ -130,7 +145,7 @@ class AppServer:
         except BrokenPipeError:
             raise Exited from None
 
-    def _answer(self, ident: int, method: str):
+    def _answer(self, ident: int, method: str) -> object:
         while True:
             try:
                 message = json.loads(next(self._lines))
@@ -199,6 +214,16 @@ class Lines:
         del self.buf[: end + 1]
         self.seen = 0
         return line
+
+
+def _last_line(stream: IO[bytes]) -> str:
+    """The last non-blank line in `stream`'s final STDERR_TAIL bytes: printable, STDERR_LINE_MAX
+    characters at most.
+    """
+    stream.seek(max(0, stream.seek(0, os.SEEK_END) - STDERR_TAIL))
+    text = stream.read(STDERR_TAIL).decode(errors="replace")
+    line = next((line for line in reversed(text.splitlines()) if line.strip()), "")
+    return "".join(c for c in line if c.isprintable()).strip()[:STDERR_LINE_MAX]
 
 
 def _polls(deadline: float, termination):

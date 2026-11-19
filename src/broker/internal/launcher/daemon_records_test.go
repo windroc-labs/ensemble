@@ -38,6 +38,21 @@ func TestBuildRecordsUnderItsDaemon(t *testing.T) {
 	}
 }
 
+func TestBuildWithoutDaemonUsesTheDefault(t *testing.T) {
+	e := newBuildEnv(t)
+	down := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, unreachableErr }}
+	got, err := onTwo(e.lookupHost(), e.fake, down).Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil || !got.Rebuilt {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if !exists(filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")) {
+		t.Fatalf("no record under the default daemon's %s", e.imagesDir())
+	}
+	if len(down.calls) != 0 {
+		t.Fatalf("asked the other daemon: %q", down.calls)
+	}
+}
+
 func TestBuildOnAnotherDaemonRebuildsThere(t *testing.T) {
 	e := newBuildEnv(t)
 	first := e.builtImage(t, e.pkg, BuildSpec{Daemon: testDaemon})

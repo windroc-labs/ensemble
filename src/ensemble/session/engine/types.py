@@ -29,6 +29,7 @@ __all__ = [
     "PROCESS_EXIT",
     "ACCOUNT_REJECTED",
     "Blocked",
+    "CLIENT_HOMES",
     "ClientBound",
     "ClientHome",
     "ConfigError",
@@ -339,6 +340,7 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 
 COMMAND = "ensemble-session"
+CLIENT_HOMES = "/home/agent/.ensemble-state"  # in workers
 ACCOUNT_SET_BY = (
     f"{ACCOUNT_ENV} is set by --account, or by [clients.<client>].account in a container"
     " and [clients.<client>].local_account outside one"

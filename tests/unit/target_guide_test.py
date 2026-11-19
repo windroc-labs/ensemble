@@ -1,4 +1,4 @@
-"""The remote Docker target guide: both platforms' preparation, the runner isolation basis, and its links."""
+"""The remote Docker target guide: both platforms' preparation, the egress proxy, the runner isolation basis, and its links."""
 
 from pathlib import Path
 
@@ -17,7 +17,10 @@ class TargetGuideTest(Case):
         text = GUIDE.read_text()
         for heading, extra in (
             ("Linux target", ("sshd_config.d/00-", "sshd -T", "ss -ltnp")),
-            ("Windows target", ("Match", "DefaultShell", 'sshd.exe" -T', "Get-NetTCPConnection")),
+            (
+                "Windows target",
+                ("Match", "cmd.exe", 'sshd.exe" -T', "Get-NetTCPConnection", "Private", "sign in"),
+            ),
         ):
             with self.subTest(heading=heading):
                 body = section(text, heading)
@@ -31,7 +34,20 @@ class TargetGuideTest(Case):
                 ):
                     self.assertIn(want, body)
         self.assertIn("Tailscale", section(text, "Outside the LAN"))
-        self.assertIn("install-target-egress.sh", section(text, "Egress proxy on the target"))
+        egress = section(text, "Egress proxy on the target")
+        for want in (
+            "install-target-egress.sh",
+            "ghcr.io/windroc-labs/egress-proxy",
+            "Public",
+            "exceptions:",
+        ):
+            self.assertIn(want, egress)
+        mac = section(text, "Linux target")
+        for want in ("SSH_AUTH_SOCK", "-F none", "The server may need to be upgraded"):
+            self.assertIn(want, mac)
+        self.assertIn(
+            "gh auth logout -h github.com", section(text, "Nothing to keep on the target")
+        )
 
     def test_windows_guide_changes_no_runner_distro_or_vm(self):
         body = section(GUIDE.read_text(), "Windows target")
@@ -40,7 +56,6 @@ class TargetGuideTest(Case):
             "Docker Desktop",
             "WSL distro",
             "CI runner",
-            "not yet verified",
         ):
             self.assertIn(want, body)
 
@@ -48,10 +63,10 @@ class TargetGuideTest(Case):
         body = section(GUIDE.read_text(), "Sharing Docker Desktop with the CI runner")
         for want in (
             "no Docker socket",
-            "no capabilities",
+            "CapDrop=[]",
             "read-only",
             "docker system prune --volumes",
-            "not checked on the PC",
+            "docker inspect gh-runner-1",
             "github-CI-runners",
         ):
             self.assertIn(want, body)

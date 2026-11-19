@@ -89,15 +89,13 @@ jobs:
           mapfile -t plugins < <(python3 -c 'import tomllib; print(*tomllib.load(open("src/ensemble/session/config.toml", "rb"))["hosts"]["docker"]["plugins"], sep="\n")')
           args=()
           for plugin in "${plugins[@]}"; do args+=(--plugin "$plugin"); done
-          DAEMON=$("$RUNNER_TEMP/ensemble-broker" target | jq -er '.default as $d | .daemons[] | select(.name == $d) | .id')
-          echo "DAEMON=$DAEMON" >> "$GITHUB_ENV"
           umask 077
-          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --daemon "$DAEMON" "${args[@]}" > "$RUNNER_TEMP/build.json"
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "${args[@]}" > "$RUNNER_TEMP/build.json"
           cat "$RUNNER_TEMP/build.json"
           image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/build.json")
           echo "image=$image" >> "$GITHUB_OUTPUT"
           umask 022
-          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --daemon "$DAEMON" "${args[@]}" > "$RUNNER_TEMP/reused.json"
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "${args[@]}" > "$RUNNER_TEMP/reused.json"
           jq -e --arg image "$image" '.image == $image and .rebuilt == false' "$RUNNER_TEMP/reused.json"
       - name: Check image content readability as agent
         if: ${{ steps.inputs.outputs.build != 'false' }}
@@ -262,12 +260,12 @@ jobs:
           docker build --tag ci-worker:definition src/broker/worker
           docker build --build-arg BASE=ci-worker:definition --tag ci-base:ok .github/worker_base
           umask 077
-          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --daemon "$DAEMON" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base.json"
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base.json"
           cat "$RUNNER_TEMP/base.json"
           image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/base.json")
           echo "image=$image" >> "$GITHUB_OUTPUT"
           umask 022
-          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --daemon "$DAEMON" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base-reused.json"
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base-reused.json"
           jq -e --arg image "$image" '.image == $image and .rebuilt == false' "$RUNNER_TEMP/base-reused.json"
           docker run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges "$image" /bin/sh -s < src/broker/internal/launcher/checks/image-content-check
       - name: Smoke-check the base image variant
@@ -293,7 +291,7 @@ jobs:
             want=$1
             shift
             status=0
-            "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --daemon "$DAEMON" "$@" > /dev/null 2> "$RUNNER_TEMP/failed.err" || status=$?
+            "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "$@" > /dev/null 2> "$RUNNER_TEMP/failed.err" || status=$?
             cat "$RUNNER_TEMP/failed.err"
             test "$status" = 8
             grep -qF -- "$want" "$RUNNER_TEMP/failed.err"

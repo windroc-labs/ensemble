@@ -44,6 +44,7 @@ from ensemble.session.clients.common import (
 )
 from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
+    CLIENT_HOMES,
     COMMAND,
     ClientHome,
     ConfigError,
@@ -139,7 +140,9 @@ def added_dirs(argv, cwd: str) -> list[str]:
 def absolute_path(path: object, label: str) -> str:
     if not isinstance(path, str) or not path or not os.path.isabs(path) or "\x00" in path:
         raise RecoveryError(f"invalid Codex recovery {label}: expected an absolute path")
-    return os.path.realpath(path)
+    lexical = os.path.normpath(path)
+    # A Docker worker's client home is a path in its container: this machine's links never apply.
+    return lexical if inside(lexical, CLIENT_HOMES) else os.path.realpath(path)
 
 
 def _snapshot(value: object) -> Snapshot:
@@ -767,7 +770,7 @@ def _guard_untrusted_project(
     default_home = os.path.abspath(os.path.expanduser("~/.codex"))
     real_default_home = os.path.realpath(default_home)
     config_home = _config_home(cwd, config_home)
-    real_config_home = os.path.realpath(config_home)
+    real_config_home = absolute_path(config_home, "codex_home")
     if any(
         inside(home, root) or inside(root, home)
         for home, root in ((config_home, workdir), (real_config_home, real_workdir))
