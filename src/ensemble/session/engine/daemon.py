@@ -13,14 +13,20 @@ import tempfile
 import time
 from typing import TypeAlias
 
-from ensemble.session.engine.types import Daemon, DaemonName, DaemonRecord, SessionError, Target
+from ensemble.session.engine.types import (
+    CLIENT_HOMES,
+    Daemon,
+    DaemonName,
+    DaemonRecord,
+    SessionError,
+    Target,
+)
 from ensemble.utils import DOCKER_STATE, read_beneath, save
 
 CLEARED = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
 RUN_TIMEOUT = 10
 OUT_MAX = 8 << 20
 # As the protocol's state-volume.json.
-CLIENT_HOMES = "/home/agent/.ensemble-state"
 STATE_VOLUME_PREFIX = "ensemble-state-"
 STATE_LABEL = "ensemble.state"
 STATE_OWNER_LABEL = "ensemble.state-owner"

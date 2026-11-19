@@ -283,6 +283,33 @@ class StartTest(Base):
                 commands=commands,
             )
 
+    def test_a_second_appserver_exit_fails_the_start_with_its_stderr_line(self):
+        self.prepare()
+        _, commands = self.catalog()
+        for exited, ending in (
+            (
+                tui_start.app_server.Exited(1, "Error: no such home"),
+                "before answering: Error: no such home",
+            ),
+            (tui_start.app_server.Exited(1), "before answering"),
+        ):
+            with (
+                self.subTest(ending=ending),
+                mock.patch("time.sleep"),
+                self.assertRaises(tui_start.StartError) as caught,
+            ):
+                tui_start.hook_trust(
+                    exe="fake",
+                    args=[],
+                    cwd=str(self.cwd),
+                    env={"CODEX_HOME": str(self.codex_home)},
+                    listing=mock.Mock(side_effect=[exited, exited]),
+                    commands=commands,
+                )
+            self.assertEqual(
+                str(caught.exception), f"codex hooks/list: app-server exited 1 {ending}"
+            )
+
     def test_missing_duplicate_foreign_hook_rows_and_disabled_user_hooks(self):
         result, commands = self.catalog()
         rows = result["data"][0]["hooks"]
