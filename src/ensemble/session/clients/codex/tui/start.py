@@ -122,7 +122,10 @@ def hook_trust(
                 termination.check()
             result = listing(exe, args, cwd, env, termination=termination)
     except app_server.Exited as e:
-        raise StartError(f"codex hooks/list: app-server exited {e} before answering") from None
+        said = f": {e.stderr}" if e.stderr else ""
+        raise StartError(
+            f"codex hooks/list: app-server exited {e.code} before answering{said}"
+        ) from None
     finally:
         os.close(fd)
     return trusted(result, cwd, commands)
