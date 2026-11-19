@@ -480,7 +480,6 @@ def main(argv: list[str]) -> int:
     """0 also when another service serves the daemon."""
     if len(argv) != 1 or not daemon.DAEMON.fullmatch(argv[0]):
         return 64
-    os.umask(0o077)
     try:
         bound = bind(argv[0])
     except OSError:
