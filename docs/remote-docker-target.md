@@ -50,14 +50,17 @@ On the Mac:
    ```sh
    key=$(mktemp)
    ssh-keyscan -t ed25519 <host> > "$key"
-   ssh-keygen -lf "$key"            # must print the fingerprint from step 6
+   ssh-keygen -lf "$key"            # must print the fingerprint you noted on the target
    cat "$key" >> ~/.ssh/known_hosts # only after it matched
    rm "$key"
    ```
-2. Check the key login: `ssh <user>@<host> docker version` prints the server version, without asking for a password.
+2. Check the key login as the broker makes it: `ssh -F none <user>@<host> docker version` prints the server version,
+   without asking for a password. The broker ignores `~/.ssh/config` and tries only the default key files and the
+   ssh-agent at `SSH_AUTH_SOCK`: a key elsewhere must be in the agent (`ssh-add <key>`).
 3. Check that passwords are refused:
    `ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive <user>@<host> true`
-   fails with `Permission denied` and asks for no password.
+   fails with `Permission denied` and asks for no password. Against Windows OpenSSH, a warning about post-quantum
+   key exchange ending in "The server may need to be upgraded" comes first; that is expected.
 4. Set the target in `~/.ensemble/config.local.toml`, then install the egress proxy
    ([Egress proxy on the target](#egress-proxy-on-the-target)):
 
@@ -77,35 +80,39 @@ WSL distro or VM and changes nothing in the CI runner's configuration. Run the c
 PowerShell on the PC.
 
 1. Check the Engine: `docker version --format '{{.Server.Version}}'` prints 26 or higher.
-2. Install and start OpenSSH Server: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, then
-   `Start-Service sshd` and `Set-Service sshd -StartupType Automatic`.
-3. Add the Mac's public key. For an administrator account it goes in
+2. In Docker Desktop's settings, turn on "Start Docker Desktop when you sign in to your computer": otherwise the target
+   has no Docker after the PC restarts.
+3. Install OpenSSH Server, without starting it yet: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`.
+   The SSH default shell stays `cmd.exe`, which runs `docker system dial-stdio`; `docker.exe` must be on the system
+   PATH (Docker Desktop adds `C:\Program Files\Docker\Docker\resources\bin`).
+4. Check the firewall rule the install adds: it applies to the Private profile only, so the PC's network must be
+   Private.
+
+   ```powershell
+   Get-NetFirewallRule -Name OpenSSH-Server-In-TCP | Select-Object Enabled, Profile   # True, Private
+   Get-NetConnectionProfile | Select-Object Name, NetworkCategory                     # Private
+   ```
+5. Add the Mac's public key. For an administrator account it goes in
    `C:\ProgramData\ssh\administrators_authorized_keys`, which only Administrators and SYSTEM may read:
    `icacls.exe C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant Administrators:F /grant SYSTEM:F`.
    For any other account it goes in `%USERPROFILE%\.ssh\authorized_keys`.
-4. Set the SSH default shell, so `ssh://` can run docker:
+6. Turn off password login. `C:\ProgramData\ssh\sshd_config` exists only after sshd's first start, and the default
+   allows passwords, so start sshd once and stop it at once: `Start-Service sshd; Stop-Service sshd`. In that file, put
+   `PasswordAuthentication no` and `KbdInteractiveAuthentication no` above the first `Match` line: the default file
+   ends in a `Match Group administrators` block, and a line after it applies only to that group. Then check it, and
+   only then start sshd for good:
 
    ```powershell
-   New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force
-   ```
-
-   `docker.exe` must be on the system PATH (Docker Desktop adds `C:\Program Files\Docker\Docker\resources\bin`).
-   This shell setting is not yet verified on the PC: the acceptance run checks that `docker system dial-stdio` works
-   through it. If it does not, this step changes; installing bash is not part of the fix.
-5. Turn off password login. In `C:\ProgramData\ssh\sshd_config`, put `PasswordAuthentication no` and
-   `KbdInteractiveAuthentication no` above the first `Match` line: the default file ends in a
-   `Match Group administrators` block, and a line after it applies only to that group. Then:
-
-   ```powershell
-   Restart-Service sshd
    & "$env:WINDIR\System32\OpenSSH\sshd.exe" -T | Select-String -Pattern '^(passwordauthentication|kbdinteractiveauthentication) '
+   Start-Service sshd
+   Set-Service sshd -StartupType Automatic
    ```
 
    Both values must print `no`.
-6. Keep the Docker API off the network: in Docker Desktop's settings, "Expose daemon on tcp://localhost:2375 without
+7. Keep the Docker API off the network: in Docker Desktop's settings, "Expose daemon on tcp://localhost:2375 without
    TLS" stays off. `Get-NetTCPConnection -State Listen -LocalPort 2375,2376 -ErrorAction SilentlyContinue` prints
    nothing.
-7. Note the host key's fingerprint: `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`.
+8. Note the host key's fingerprint: `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`.
 
 On the Mac, do the [Linux target](#linux-target)'s Mac steps: compare and add the host key
 (`known_hosts`) from one scan, check the key login, check that `PreferredAuthentications=password,keyboard-interactive` is refused,
@@ -138,10 +145,22 @@ PATH=/usr/local/libexec/ensemble/ssh:$PATH ~/.egress-target/start.sh
 PATH=/usr/local/libexec/ensemble/ssh:$PATH docker --host ssh://<user>@<host> logs egress-proxy
 ```
 
+The policy starts with no exceptions, so workers on the target reach no LAN address. A model provider on the LAN
+needs an `exceptions:` entry for its `host:port`, for example OpenCode's provider at `192.168.1.40:8080`; without one,
+those workers get `Proxy Authentication Required … denied by rule 'Deny: User Configured'`:
+
+```yaml
+networks:
+  workers:
+    mode: denylist
+    exceptions:
+      - 192.168.1.40:8080
+```
+
 The script installs the egress-proxy release it pins, 0.1.2; `--version X.Y.Z --digest sha256:<digest>` installs
 another one. The image is `ghcr.io/windroc-labs/egress-proxy`, and its GitHub package must stay Public: otherwise the
-fetch fails `no access to ghcr.io/windroc-labs/egress-proxy` on a Mac whose `gh` login cannot read the package. `scripts/install.sh --docker` still installs the Mac's
-own proxy, which mini-op workers use.
+fetch fails `no access to ghcr.io/windroc-labs/egress-proxy` on a Mac whose `gh` login cannot read the package.
+`scripts/install.sh --docker` still installs the Mac's own proxy, which mini-op workers use.
 
 ## Workers that stay on the Mac
 
@@ -170,15 +189,20 @@ Preparing the target leaves no GitHub login, no registry login and no Docker cli
 image is loaded, not pulled. The broker on the Mac writes worker credentials into a worker's container, in its tmpfs,
 only while the worker runs.
 
+A GitHub login from before is not removed. On the target, `gh auth status` must report no login, when `gh` is
+installed; log each account out with `gh auth logout -h github.com -u <user>`. With a login left, the remote target's
+[live check](upgrading.md#live-checks) fails.
+
 ## Sharing Docker Desktop with the CI runner
 
 On a PC whose Docker Desktop also runs the GitHub CI runner, workers and runner containers share one daemon. The
 isolation rests on the runner's own configuration
 ([github-CI-runners `compose.yaml`](https://github.com/windroc-labs/github-CI-runners/blob/main/compose.yaml),
 [`docs/isolation.md`](https://github.com/windroc-labs/github-CI-runners/blob/main/docs/isolation.md)): the runner
-container has no Docker socket, a job runs with no capabilities, and its root filesystem is read-only. A CI job
-therefore cannot reach the daemon, worker containers or their volumes. This was read from that repository's
-configuration, not checked on the PC.
+container has no Docker socket and its root filesystem is read-only. It drops no capabilities: on the PC,
+`docker inspect gh-runner-1` shows no socket mount, a read-only root filesystem and `CapDrop=[]`, so a job keeps
+Docker's default capabilities. With no socket and no Docker API on TCP, a CI job still cannot reach the daemon, worker
+containers or their volumes.
 
 Never give a runner the Docker socket. With it, a CI job could read worker credentials and volumes, and delete them
 with `docker system prune --volumes`.
