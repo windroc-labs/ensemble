@@ -6,13 +6,12 @@
 # ENSEMBLE_INSTALL_ROOT prefixes the broker's path; only tests set it.
 set -euo pipefail
 
-# The pin: the egress-proxy release this installs on the Docker target, and the windroc-labs/egress-proxy commit whose
-# egress-install runs, a commit and never a tag, which could move. No release has remote install yet: version and
-# digest stay empty, and the commit is the unreleased remote install's; set all three to that release's together.
-# --version and --digest override the version and digest.
-egress_version=
-egress_digest=
-egress_ref=e466ea01a03bf50d854b2b928cbd8838b5b5e20a
+# The pin: the egress-proxy release this installs on the Docker target, its image index digest, and the
+# windroc-labs/egress-proxy commit whose egress-install runs: that release's tag commit, never the tag, which could
+# move. Set all three to one release's together. --version and --digest override the version and digest.
+egress_version=0.1.2
+egress_digest=sha256:3be6dbebb379a5b36457acfbaedbba3a3342fe0b360d5feadd34cb7a934739eb
+egress_ref=563d139604c56d14ed4f53cabe7cc94af678790c
 
 me=install-target-egress.sh
 root=${ENSEMBLE_INSTALL_ROOT:-}
