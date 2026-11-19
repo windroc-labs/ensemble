@@ -1336,17 +1336,23 @@ class CodecTest(Base):
 
 
 class ContainerHomeTest(Base):
-    """A Docker worker's CODEX_HOME names a path in its container, whatever this machine's links."""
+    """A Docker worker's CODEX_HOME names a path in its container, whatever this machine's links:
+    /home links elsewhere, as on a Mac, for every path outside this test's own files.
+    """
 
     def setUp(self):
         super().setUp()
         real = os.path.realpath
+        scratch_root = real(self.root)
 
         def linked_home(path, *args, **kwargs):
-            found = os.fspath(path)
-            if found == "/home" or found.startswith("/home/"):
-                found = "/System/Volumes/Data" + found
-            return real(found, *args, **kwargs)
+            found = real(path, *args, **kwargs)
+            if (
+                os.path.commonpath((found, "/home")) == "/home"
+                and os.path.commonpath((found, scratch_root)) != scratch_root
+            ):
+                return "/System/Volumes/Data" + found
+            return found
 
         self.enterContext(mock.patch("os.path.realpath", side_effect=linked_home))
         self.container_home = daemon.client_home("codex")

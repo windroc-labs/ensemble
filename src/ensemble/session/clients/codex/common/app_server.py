@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from typing import IO
 
 
 class Termination(ABC):
@@ -74,7 +75,7 @@ class AppServer:
         exe: str,
         args: list[str],
         method: str,
-        params: dict | None = None,
+        params: dict[str, object] | None = None,
         *,
         env: dict[str, str],
         wait: float,
@@ -119,7 +120,7 @@ class AppServer:
                 if exited and client is not None:
                     raise Exited(client._proc.returncode, _last_line(stderr))
 
-    def _request(self, method: str, params: dict | None):
+    def _request(self, method: str, params: dict[str, object] | None) -> object:
         self._send(
             {
                 "id": 1,
@@ -144,7 +145,7 @@ class AppServer:
         except BrokenPipeError:
             raise Exited from None
 
-    def _answer(self, ident: int, method: str):
+    def _answer(self, ident: int, method: str) -> object:
         while True:
             try:
                 message = json.loads(next(self._lines))
@@ -215,7 +216,7 @@ class Lines:
         return line
 
 
-def _last_line(stream) -> str:
+def _last_line(stream: IO[bytes]) -> str:
     """The last non-blank line in `stream`'s final STDERR_TAIL bytes: printable, STDERR_LINE_MAX
     characters at most.
     """
