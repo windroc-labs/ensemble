@@ -11,7 +11,6 @@ import io
 import json
 import os
 import posixpath
-import re
 import secrets
 import select
 import shutil
@@ -22,9 +21,19 @@ import tempfile
 import threading
 import time
 from collections.abc import Generator, Mapping
-from typing import TypedDict, TypeGuard, cast
+from typing import TypeGuard, cast
 
 from ensemble.session.engine import daemon
+from ensemble.session.engine.state_service import (
+    ARCHIVE_SLACK,
+    HEADER_MAX,
+    IMAGE_PYTHON,
+    OWNER,
+    READ_MAX,
+    READER,
+    REPLY_TIMEOUT,
+    header,
+)
 from ensemble.session.engine.types import (
     SESSION_NAME,
     DaemonRecord,
@@ -33,29 +42,13 @@ from ensemble.session.engine.types import (
     SessionError,
     StateEntry,
     StateFile,
+    StateHeader,
     StateKind,
     StateStat,
 )
 
-READ_MAX = 64 << 20
 ENTRIES_MAX = 65536
-HEADER_MAX = 32 << 20
-ARCHIVE_SLACK = 64 << 10  # tar headers and padding
-REPLY_TIMEOUT = 10
-READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
-OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
-IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
-HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
 ARCHIVE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE)
-
-
-class _Header(TypedDict):
-    errno: int | None
-    message: str
-    size: int
-    mtime: float
-    entries: list[object]
-    length: int
 
 
 LOCAL_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
@@ -315,7 +308,7 @@ def _unpack(file: StateFile, payload: bytes, bases: list[str], limit: int, folde
 
 def _ask(
     file: StateFile, request: dict[str, object], bound: int, image: str | None
-) -> tuple[_Header, bytes] | None:
+) -> tuple[StateHeader, bytes] | None:
     """The reply to `request`, payload at most `bound` bytes; None: absent."""
     if request["op"] != "snapshot":
         request = {**request, "path": _path(file)}
@@ -386,7 +379,7 @@ class _Reader:
         self.proc: subprocess.Popen[bytes] | None = None
         self.buffer = bytearray()
 
-    def ask(self, request: dict[str, object], bound: int) -> tuple[_Header, bytes]:
+    def ask(self, request: dict[str, object], bound: int) -> tuple[StateHeader, bytes]:
         line = json.dumps(request).encode() + b"\n"
         with self.lock:
             for attempt in (1, 2):
@@ -467,11 +460,11 @@ class _Reader:
         lines = done.stderr.strip().splitlines()
         raise OSError(errno.EIO, f"docker {args[0]} {args[1]}: {lines[-1] if lines else 'failed'}")
 
-    def _reply(self, proc: subprocess.Popen[bytes], bound: int) -> tuple[_Header, bytes]:
-        header = _header(self._take(proc, until_newline=HEADER_MAX))
-        if header["length"] > bound:
+    def _reply(self, proc: subprocess.Popen[bytes], bound: int) -> tuple[StateHeader, bytes]:
+        head = header(self._take(proc, until_newline=HEADER_MAX))
+        if head["length"] > bound:
             raise OSError(errno.EPROTO, "state reader reply: over its bound")
-        return header, self._take(proc, size=header["length"])
+        return head, self._take(proc, size=head["length"])
 
     def _take(
         self, proc: subprocess.Popen[bytes], *, until_newline: int = 0, size: int = 0
@@ -515,22 +508,3 @@ def _json_object(text: str | bytes) -> dict[str, object]:
     except ValueError:
         return {}
     return cast("dict[str, object]", found) if isinstance(found, dict) else {}
-
-
-def _header(line: bytes) -> _Header:
-    header = _json_object(line)
-    if not _well_formed(header):
-        raise OSError(errno.EPROTO, "state reader reply: bad header")
-    return header
-
-
-def _well_formed(header: dict[str, object]) -> TypeGuard[_Header]:
-    return (
-        set(header) == HEADER_KEYS
-        and (header["errno"] is None or (_count(header["errno"]) and header["errno"] > 0))
-        and isinstance(header["message"], str)
-        and _count(header["size"])
-        and isinstance(header["mtime"], (int, float))
-        and isinstance(header["entries"], list)
-        and _count(header["length"])
-    )

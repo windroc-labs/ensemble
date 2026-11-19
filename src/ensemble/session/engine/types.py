@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, NamedTuple, Protocol, Self
+from typing import Any, ClassVar, NamedTuple, Protocol, Self, TypedDict
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -227,6 +227,17 @@ class StateKind(StrEnum):
     DIR = "dir"
     FILE = "file"
     OTHER = "other"
+
+
+class StateHeader(TypedDict):
+    """A state reader reply's header line; `length` payload bytes follow it."""
+
+    errno: int | None
+    message: str
+    size: int
+    mtime: float
+    entries: list[object]
+    length: int
 
 
 class StateEntry(NamedTuple):

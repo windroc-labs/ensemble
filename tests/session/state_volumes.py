@@ -1,5 +1,6 @@
-"""Fake Docker for client_state: a session's volume is its dir under DOCKER_STATE, its reader
-state_reader.answer over pipes, with no process.
+"""Fake Docker for client_state and state_service: a session's volume is its dir under DOCKER_STATE,
+a reader state_reader.answer over pipes, with no process; a reader mounting sessions at
+/state/<session> answers ENOENT for a path in a session it does not mount.
 """
 
 import contextlib
@@ -25,14 +26,17 @@ OWNER = "1001:1002"
 
 
 class ReaderProc:
-    """A reader's docker run; `reply`: raw bytes sent instead; `hang`: no answer."""
+    """A reader's docker run; `mounted`: its sessions (None: one volume at the root); `reply`:
+    raw bytes sent instead; `hang`: no answer; `leave`: exits at its next request.
+    """
 
-    def __init__(self, argv, root, *, reply=None, hang=False):
+    def __init__(self, argv, root, *, mounted=None, reply=None, hang=False, leave=False):
         self.args, self.root, self.reply, self.hang = argv, root, reply, hang
+        self.mounted = mounted
         stdout_read, sink = os.pipe()
         self.stdout = os.fdopen(stdout_read, "rb")
         self.stdin = _Stdin(self)
-        self.killed, self.leave = False, False
+        self.killed, self.leave = False, leave
         self.replies: queue.Queue = queue.Queue()
         self.thread = threading.Thread(target=self._write, args=(sink,))
         self.thread.daemon = True
@@ -48,8 +52,15 @@ class ReaderProc:
         if self.reply is not None:
             self.replies.put(self.reply)
             return
-        header, payload = state_reader.answer(self.root, line)
+        if self.mounted is not None and _first_part(line) not in self.mounted:
+            header, payload = state_reader.answer(self.root, b"{}")
+            header.update(errno=errno.ENOENT, message="not mounted")
+        else:
+            header, payload = state_reader.answer(self.root, line)
         self.replies.put(json.dumps({**header, "length": len(payload)}).encode() + b"\n" + payload)
+
+    def poll(self):
+        return 0 if self.killed else None
 
     def _write(self, sink: int) -> None:
         try:
@@ -93,14 +104,27 @@ class _Stdin:
         self.proc.kill()
 
 
+def _first_part(line: bytes) -> str:
+    request = json.loads(line)
+    path = (request.get("paths") or [None])[0] if request.get("op") == "snapshot" else None
+    return str(path or request.get("path", "")).split("/", 1)[0]
+
+
 class Volumes:
-    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr."""
+    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr;
+    `owners`: a session's owner label in place of `owner`; `foreign`: sessions whose volume
+    names another session; `hold`: an event each `volume ls` waits for; `leave`: new readers
+    exit at their first request.
+    """
 
     def __init__(self):
         self.calls, self.readers = [], []
         self.volumes: set[str] | None = None
         self.reply: bytes | None = None
-        self.hang, self.error, self.owner = False, "", OWNER
+        self.hang, self.error, self.owner, self.leave = False, "", OWNER, False
+        self.owners: dict[str, str] = {}
+        self.foreign: set[str] = set()
+        self.hold: threading.Event | None = None
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -116,6 +140,8 @@ class Volumes:
         if self.error and args[:1] != ["run"]:
             return FakeProc(argv, b"", self.error.encode(), 1)
         if args[:2] == ["volume", "ls"]:
+            if self.hold is not None:
+                self.hold.wait(10)
             volume = args[args.index("--filter") + 1].removeprefix("name=")
             session = volume.removeprefix("ensemble-state-")
             return FakeProc(argv, f"{volume}\n".encode() if self.exists(session) else b"")
@@ -123,12 +149,20 @@ class Volumes:
             session = args[-1].removeprefix("ensemble-state-")
             if not self.exists(session):
                 return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
-            labels = {"ensemble.state": session, "ensemble.state-owner": self.owner}
+            owner = self.owners.get(session, self.owner)
+            named = "other" if session in self.foreign else session
+            labels = {"ensemble.state": named, "ensemble.state-owner": owner}
             return FakeProc(argv, json.dumps(labels).encode() + b"\n")
         if args[:1] == ["run"]:
-            mount = args[args.index("--mount") + 1]
-            session = mount.split("source=ensemble-state-", 1)[1].split(",", 1)[0]
-            reader = ReaderProc(argv, self.root(session), reply=self.reply, hang=self.hang)
+            mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
+            sessions = [m.split("source=ensemble-state-", 1)[1].split(",", 1)[0] for m in mounts]
+            if mounts[0].split("target=", 1)[1].startswith("/state,"):
+                root, mounted = self.root(sessions[0]), None
+            else:
+                root, mounted = os.path.expanduser(DOCKER_STATE), set(sessions)
+            reader = ReaderProc(
+                argv, root, mounted=mounted, reply=self.reply, hang=self.hang, leave=self.leave
+            )
             self.readers.append(reader)
             return reader
         raise AssertionError(f"unexpected docker call {argv}")
