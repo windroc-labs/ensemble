@@ -88,7 +88,7 @@ func TestWorkspaceRmClean(t *testing.T) {
 	if want := []string{"volume inspect", "image ls", "image inspect", "run --rm", "ps --all", "volume rm", "volume rm"}; !slices.Equal(d.verbs(), want) {
 		t.Fatalf("%q", d.calls)
 	}
-	readers := []string{"ps", "--all", "--quiet", "--filter", "label=ensemble.state-reader=worker_1"}
+	readers := []string{"ps", "--all", "--quiet", "--filter", "volume=" + stateVol, "--filter", "label=ensemble.state-reader"}
 	if !slices.Equal(d.calls[4], readers) || !slices.Equal(d.calls[5], []string{"volume", "rm", stateVol}) || !slices.Equal(d.calls[6], []string{"volume", "rm", volume}) {
 		t.Fatalf("state before workspace: %q", d.calls[4:])
 	}

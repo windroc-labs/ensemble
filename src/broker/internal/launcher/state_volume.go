@@ -57,10 +57,11 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 	return true, nil
 }
 
-// removeStateVolume removes the readers first: they mount the volume.
+// removeStateVolume removes the readers that mount the volume first; one reader serves many
+// sessions, so a reader of other volumes only is left running.
 func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string, code protocol.Code) error {
 	v := volumesOf(name).State
-	out, err := d.Runner.Run(ctx, []string{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=" + name}, nil)
+	out, err := d.Runner.Run(ctx, readersOf(v), nil)
 	if err != nil {
 		return failure(err, code, "Cannot list the readers of "+v+".")
 	}
@@ -73,4 +74,8 @@ func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string, code
 		return diagnosed(err, code, "Deleting volume "+v+" failed.")
 	}
 	return nil
+}
+
+func readersOf(volume string) []string {
+	return []string{"ps", "--all", "--quiet", "--filter", "volume=" + volume, "--filter", "label=" + readerLabel}
 }
