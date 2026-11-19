@@ -138,9 +138,10 @@ PATH=/usr/local/libexec/ensemble/ssh:$PATH ~/.egress-target/start.sh
 PATH=/usr/local/libexec/ensemble/ssh:$PATH docker --host ssh://<user>@<host> logs egress-proxy
 ```
 
-Until egress-proxy publishes a release with remote install, the script has no pinned version: pass one with
-`--version X.Y.Z --digest sha256:<digest>`. `scripts/install.sh --docker` still installs the Mac's own proxy, which
-mini-op workers use.
+The script installs the egress-proxy release it pins, 0.1.2; `--version X.Y.Z --digest sha256:<digest>` installs
+another one. The image is `ghcr.io/windroc-labs/egress-proxy`, and its GitHub package must stay Public: otherwise the
+fetch fails `no access to ghcr.io/windroc-labs/egress-proxy` on a Mac whose `gh` login cannot read the package. `scripts/install.sh --docker` still installs the Mac's
+own proxy, which mini-op workers use.
 
 ## Workers that stay on the Mac
 
