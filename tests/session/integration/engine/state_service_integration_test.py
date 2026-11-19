@@ -118,7 +118,8 @@ class StateServiceTest(Case):
         self.assertNotEqual(replaced, service)
 
     def test_two_simultaneous_spawns_leave_one_service(self):
-        argv = [sys.executable, "-P", "-s", "-m", state_service.__name__, self.daemon_id]
+        path = state_service.socket_path(self.daemon_id)
+        argv = [sys.executable, "-P", "-s", "-m", state_service.__name__, self.daemon_id, path]
         spawned = [subprocess.Popen(argv, stdin=subprocess.DEVNULL) for _ in range(2)]
         for proc in spawned:
             self.addCleanup(self.end, proc)

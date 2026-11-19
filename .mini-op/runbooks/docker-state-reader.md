@@ -1,5 +1,5 @@
 ---
-when: live-checking that every Mac process reads Docker workers' client state through one reader service and one reader container per daemon (WDRC-1100), on the local Docker Desktop and a remote daemon
+when: live-checking that every Mac process reads Docker workers' client state through one reader service per daemon and one reader container per daemon and volume owner (WDRC-1100), on the local Docker Desktop and a remote daemon
 ---
 
 # One state reader per Docker daemon
@@ -11,7 +11,7 @@ Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). 
 1. Install ensemble at the branch or release under test (`install-ensemble.md`), Docker Host on, broker logged in; for the remote cases a remote Docker target reachable over SSH.
 2. Record `docker version --format '{{.Server.Version}}'` and the ensemble commit. Before any worker starts, no service runs: `pgrep -f engine.state_service` prints nothing.
 3. Names: `R` the reader containers, `docker ps --filter label=ensemble.state-reader --format '{{.Names}}'`; `S` the Mac's services, `pgrep -fl engine.state_service`; `D` on the remote host the read connections, `pgrep -fa 'docker system dial-stdio'` while no worker starts or stops.
-4. Run every case on the local daemon, then on the remote one.
+4. Run every case on the local daemon, then on the remote one. The counts below assume every worker's environment has the same agent uid (one volume owner); with `k` owners, `R` is `k`.
 
 ## Cases
 

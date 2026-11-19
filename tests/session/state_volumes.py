@@ -15,7 +15,7 @@ from unittest import mock
 
 from ensemble.session.engine import client_state, daemon, state_reader, state_service
 from ensemble.session.engine.types import Daemon, DaemonRecord
-from ensemble.utils import DOCKER_STATE
+from ensemble.utils import DOCKER_STATE, control_root
 from tests.session.unit.hosts.docker.support import FakeProc
 
 DOCKER = "/usr/local/bin/docker"
@@ -110,7 +110,7 @@ def _first_part(line: bytes) -> str:
 
 
 class Volumes:
-    """Toggles: `volumes`, `error`, `owners`, `foreign`, `hold`, `leave`, `silent`, `spawn_error`."""
+    """Toggles: `volumes`, `error`, `owners`, `foreign`, `leave`, `silent`, `spawn_error`, `start_exit`."""
 
     def __init__(self):
         self.calls, self.readers, self.spawns = [], [], []
@@ -119,8 +119,7 @@ class Volumes:
         self.hang, self.error, self.owner, self.leave = False, "", OWNER, False
         self.owners: dict[str, str] = {}
         self.foreign: set[str] = set()
-        self.hold: threading.Event | None = None
-        self.silent, self.spawn_error = False, None
+        self.silent, self.spawn_error, self.start_exit = False, None, None
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -142,19 +141,22 @@ class Volumes:
         if self.error and args[:1] != ["run"]:
             return FakeProc(argv, b"", self.error.encode(), 1)
         if args[:2] == ["volume", "ls"]:
-            if self.hold is not None:
-                self.hold.wait(10)
-            volume = args[args.index("--filter") + 1].removeprefix("name=")
-            session = volume.removeprefix("ensemble-state-")
-            return FakeProc(argv, f"{volume}\n".encode() if self.exists(session) else b"")
+            named = [
+                args[i + 1].removeprefix("name=") for i, a in enumerate(args) if a == "--filter"
+            ]
+            found = [v for v in named if self.exists(v.removeprefix("ensemble-state-"))]
+            return FakeProc(argv, "".join(f"{v}\n" for v in found).encode())
         if args[:2] == ["volume", "inspect"]:
-            session = args[-1].removeprefix("ensemble-state-")
-            if not self.exists(session):
-                return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
-            owner = self.owners.get(session, self.owner)
-            named = "other" if session in self.foreign else session
-            labels = {"ensemble.state": named, "ensemble.state-owner": owner}
-            return FakeProc(argv, json.dumps(labels).encode() + b"\n")
+            volumes = args[args.index("{{json .Labels}}") + 1 :]
+            lines = []
+            for volume in volumes:
+                session = volume.removeprefix("ensemble-state-")
+                if not self.exists(session):
+                    return FakeProc(argv, b"", f"Error: no such volume: {volume}".encode(), 1)
+                owner = self.owners.get(session, self.owner)
+                named = "other" if session in self.foreign else session
+                lines.append(json.dumps({"ensemble.state": named, "ensemble.state-owner": owner}))
+            return FakeProc(argv, "".join(f"{line}\n" for line in lines).encode())
         if args[:1] == ["run"]:
             mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
             sessions = [m.split("source=ensemble-state-", 1)[1].split(",", 1)[0] for m in mounts]
@@ -174,7 +176,8 @@ class Volumes:
         self.spawns.append((list(argv), kw))
         if self.spawn_error is not None:
             raise self.spawn_error
-        path = state_service.socket_path(argv[5])
+        path = argv[6]
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         if path not in LISTENING and not self.silent:
             service, listener = state_service.Service(argv[5]), Listener(path)
             thread = threading.Thread(
@@ -182,13 +185,33 @@ class Volumes:
             )
             thread.start()
             SERVICES.append((service, listener, thread))
-        return FakeProc(argv)
+        return Started(self.start_exit)
 
     def kill_services(self):
         stop_services()
 
 
 SPAWN = ["-P", "-s", "-m", state_service.__name__]
+DEVNULL = subprocess.DEVNULL
+
+
+class Started:
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+    def wait(self, timeout=None):
+        return self.code
+
+
+def dial(path):
+    client = Dialer()
+    client.connect(path)
+    return client
+
+
 SERVICES: list[tuple[state_service.Service, "Listener", threading.Thread]] = []
 
 
@@ -294,6 +317,7 @@ def serve(sessions=("s1", "v", "w")):
     volumes = Volumes()
     for session in sessions:
         record(session)
+    os.makedirs(control_root(), mode=0o700, exist_ok=True)
     with mock.patch.object(subprocess, "Popen", volumes), sockets():
         try:
             yield volumes

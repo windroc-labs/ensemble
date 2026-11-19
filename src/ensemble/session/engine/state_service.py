@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import FrameType
 from typing import TypeGuard, cast
 
 from ensemble.session.engine import daemon
@@ -36,6 +37,7 @@ POLL = 0.5
 SOCKET_PATH_MAX = 103  # bytes: macOS's AF_UNIX sun_path holds 104 with its NUL, Linux's 108
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
 OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
+SOCKET_NAME = re.compile(r"sr-[0-9a-f]{16}-[0-9a-f]{8}\.sock")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
 READS = {"read", "stat", "entries", "snapshot"}
@@ -63,13 +65,24 @@ def socket_path(daemon_id: str) -> str:
     return path
 
 
-def lock_path(daemon_id: str) -> str:
-    return _base(daemon_id) + ".lock"
+def lock_path(socket_file: str) -> str:
+    return socket_file.removesuffix(".sock") + ".lock"
 
 
 def _base(daemon_id: str) -> str:
     key = hashlib.sha256(daemon_id.encode()).hexdigest()[:16]
     return os.path.join(control_root(), f"sr-{key}-{code_digest()}")
+
+
+def check_private(folder: str) -> None:
+    """EPERM: `folder` is not a directory of this user's alone (a link, another owner, mode)."""
+    info = os.lstat(folder)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise OSError(errno.EPERM, "not a private directory", folder)
 
 
 def header(line: bytes) -> StateHeader:
@@ -288,60 +301,71 @@ class Service:
 
     def _restart(self, record: DaemonRecord, session: str, image: str) -> _Container:
         """Mounts `session`, its owner's mounted and waiting sessions, each verified: a run creates a missing volume."""
-        owner = self._verify(record, session)
+        for reader in list(self.readers.values()):
+            if not reader.alive():
+                self._lose(reader)
+        with self._wanted_lock:
+            wanted = set(self.wanted)
+        mounted = {s for reader in self.readers.values() for s in reader.mounted}
+        owners = self._owners(record, sorted({session} | wanted | mounted))
+        if session not in owners:
+            raise FileNotFoundError(errno.ENOENT, "no state volume", daemon.state_volume(session))
+        owner = owners[session]
         if owner is None:
             raise OSError(errno.EIO, "state volume has no owner", daemon.state_volume(session))
         current = self.readers.get(owner)
-        if current is not None and not current.alive():
-            self._lose(current)
-            current = None
-        with self._wanted_lock:
-            others = set(self.wanted)
-        others |= current.mounted if current else frozenset()
-        mounts = {session}
-        for other in sorted(others - mounts):
-            with contextlib.suppress(FileNotFoundError):
-                if self._verify(record, other) == owner:
-                    mounts.add(other)
+        kept = set(current.mounted if current else ()) | wanted | {session}
+        mounts = frozenset(s for s, found in owners.items() if found == owner and s in kept)
         if current is not None:
             self._lose(current)
-        reader = _Container(
-            owner, self._start(record, owner, image, sorted(mounts)), frozenset(mounts)
-        )
+        reader = _Container(owner, self._start(record, owner, image, sorted(mounts)), mounts)
         self.readers[owner] = reader
         return reader
 
     @staticmethod
-    def _verify(record: DaemonRecord, session: str) -> str | None:
-        """The volume's owner, None: none; ENOENT: absent or another session's."""
-        volume = daemon.state_volume(session)
-        listed = _run(record, "volume", "ls", "--filter", f"name={volume}", "--format", "{{.Name}}")
-        if volume not in listed.split():
-            raise FileNotFoundError(errno.ENOENT, "no state volume", volume)
-        labels = _run(record, "volume", "inspect", "--format", "{{json .Labels}}", volume)
-        found = _json_object(labels)
-        if found.get(daemon.STATE_LABEL) != session:
-            raise FileNotFoundError(errno.ENOENT, "not this session's state volume", volume)
-        user = found.get(daemon.STATE_OWNER_LABEL)
-        return user if isinstance(user, str) and OWNER.fullmatch(user) else None
+    def _owners(record: DaemonRecord, sessions: list[str]) -> dict[str, str | None]:
+        """Each session's volume owner (None: none) by one `volume ls` and one `volume inspect`;
+        an absent volume or another session's is left out.
+        """
+        volumes = {daemon.state_volume(session): session for session in sessions}
+        filters = [arg for volume in volumes for arg in ("--filter", f"name={volume}")]
+        listed = set(_run(record, "volume", "ls", *filters, "--format", "{{.Name}}").split())
+        present = [volume for volume in volumes if volume in listed]
+        if not present:
+            return {}
+        found = _run(record, "volume", "inspect", "--format", "{{json .Labels}}", *present)
+        lines = found.splitlines()
+        if len(lines) != len(present):
+            raise OSError(errno.EIO, "docker volume inspect: unexpected output")
+        owners: dict[str, str | None] = {}
+        for volume, line in zip(present, lines, strict=True):
+            labels = _json_object(line)
+            if labels.get(daemon.STATE_LABEL) == volumes[volume]:
+                user = labels.get(daemon.STATE_OWNER_LABEL)
+                owners[volumes[volume]] = (
+                    user if isinstance(user, str) and OWNER.fullmatch(user) else None
+                )
+        return owners
 
     @staticmethod
     def _start(
         record: DaemonRecord, owner: str, image: str, sessions: list[str]
     ) -> subprocess.Popen[bytes]:
-        with open(READER, encoding="utf-8") as f:
-            program = f.read()
         mounts = [
             arg
             for session in sessions
             for arg in (
                 "--mount",
-                f"type=volume,source={daemon.state_volume(session)},target=/state/{session},"
-                "readonly,volume-nocopy",
+                (
+                    f"type=volume,source={daemon.state_volume(session)},target=/state/{session},"
+                    "readonly,volume-nocopy"
+                ),
             )
         ]
         name = f"ensemble-reader-{secrets.token_hex(8)}"
         try:
+            with open(READER, encoding="utf-8") as f:
+                program = f.read()
             argv, env = daemon.docker_call(
                 record.docker,
                 *("run", "--rm", "--interactive", "--name", name),
@@ -435,13 +459,12 @@ def _well_formed(found: dict[str, object]) -> TypeGuard[StateHeader]:
     )
 
 
-def bind(daemon_id: str) -> tuple[socket.socket, int] | None:
-    """The listener and its held lock; None: another service holds it."""
-    path = socket_path(daemon_id)
-    _private(os.path.dirname(path))
-    lock = os.open(
-        lock_path(daemon_id), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
-    )
+def bind(path: str) -> tuple[socket.socket, int] | None:
+    """A listener at `path` and its held lock; None: another service holds it."""
+    folder = os.path.dirname(path)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    check_private(folder)
+    lock = os.open(lock_path(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -465,30 +488,31 @@ def bind(daemon_id: str) -> tuple[socket.socket, int] | None:
     return listener, lock
 
 
-def _private(folder: str) -> None:
-    os.makedirs(folder, mode=0o700, exist_ok=True)
-    info = os.lstat(folder)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.getuid()
-        or stat.S_IMODE(info.st_mode) != 0o700
-    ):
-        raise OSError(errno.EPERM, "not a private directory", folder)
-
-
 def main(argv: list[str]) -> int:
-    """0 also when another service serves the daemon."""
-    if len(argv) != 1 or not daemon.DAEMON.fullmatch(argv[0]):
+    """state_service <daemon id> <socket>: the socket its spawning client dials; 0 also when
+    another service serves it.
+    """
+    if not (
+        len(argv) == 2
+        and daemon.DAEMON.fullmatch(argv[0])
+        and os.path.isabs(argv[1])
+        and SOCKET_NAME.fullmatch(os.path.basename(argv[1]))
+        and len(os.fsencode(argv[1])) <= SOCKET_PATH_MAX
+    ):
         return 64
     try:
-        bound = bind(argv[0])
+        bound = bind(argv[1])
     except OSError:
         return 1
     if bound is None:
         return 0
     listener, lock = bound
     service = Service(argv[0])
-    signal.signal(signal.SIGTERM, lambda *_: service.stop())
+
+    def stop(_signal: int, _frame: FrameType | None) -> None:
+        service.stop()
+
+    signal.signal(signal.SIGTERM, stop)
     try:
         service.serve(listener, idle=IDLE)
     finally:

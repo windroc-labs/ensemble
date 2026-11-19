@@ -369,7 +369,7 @@ class _Connection:
         self.sock: socket.socket | None = None
         self.frames: Frames | None = None
 
-    def ask(self, request: dict[str, object], bound: int) -> tuple[StateHeader, bytes]:
+    def ask(self, request: Mapping[str, object], bound: int) -> tuple[StateHeader, bytes]:
         line = json.dumps(request).encode() + b"\n"
         with self.lock:
             for attempt in (1, 2):
@@ -396,35 +396,43 @@ class _Connection:
             sock.close()
 
     def _connect(self) -> socket.socket:
-        """Starts the service when none listens; EIO: none within SPAWN_WAIT."""
+        """EIO: no service within SPAWN_WAIT; EPERM: its directory is not private."""
         path = state_service.socket_path(self.daemon_id)
-        deadline, spawned = time.monotonic() + SPAWN_WAIT, None
-        while True:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                sock.connect(path)
-                break
-            except (FileNotFoundError, ConnectionRefusedError):
-                sock.close()
-                now = time.monotonic()
-                if now >= deadline:
-                    raise OSError(errno.EIO, "state service did not start") from None
-                if spawned is None or now - spawned >= 1:
-                    _spawn(self.daemon_id)
-                    spawned = now
-                time.sleep(0.05)
-            except BaseException:
-                sock.close()
-                raise
+        deadline, starting, started = time.monotonic() + SPAWN_WAIT, None, 0.0
+        while (sock := _dial(path)) is None:
+            now = time.monotonic()
+            if now >= deadline:
+                raise OSError(errno.EIO, "state service did not start")
+            if starting is None or (starting.poll() is not None and now - started >= 1):
+                starting, started = _spawn(self.daemon_id, path), now
+            time.sleep(0.05)
         self.sock, self.frames = sock, Frames(sock.fileno(), CLIENT_WAIT, "state service")
         return sock
 
 
-def _spawn(daemon_id: str) -> None:
+def _dial(path: str) -> socket.socket | None:
+    try:
+        state_service.check_private(os.path.dirname(path))
+    except FileNotFoundError:
+        return None
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(path)
+    except (FileNotFoundError, ConnectionRefusedError):
+        sock.close()
+        return None
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+def _spawn(daemon_id: str, path: str) -> subprocess.Popen[bytes]:
     roots = module_roots(state_service, ensemble.utils)
     try:
         proc = subprocess.Popen(
-            [os.path.realpath(sys.executable), "-P", "-s", "-m", state_service.__name__, daemon_id],
+            [os.path.realpath(sys.executable), "-P", "-s", "-m", state_service.__name__]
+            + [daemon_id, path],
             env={
                 "PATH": os.defpath,
                 "HOME": os.path.expanduser("~"),
@@ -440,3 +448,4 @@ def _spawn(daemon_id: str) -> None:
     except OSError as error:
         raise OSError(errno.EIO, f"state service: {error}") from None
     threading.Thread(target=proc.wait, daemon=True).start()
+    return proc

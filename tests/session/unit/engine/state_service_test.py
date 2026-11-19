@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import select
-import socket
 import stat
 import threading
 import time
@@ -24,6 +23,7 @@ from tests.session.state_volumes import (
     LOCAL,
     OWNER,
     Listener,
+    dial,
     record,
     serve,
     sockets,
@@ -151,7 +151,6 @@ class RequestTest(ServiceCase):
         self.assertEqual(mounts(run), [mount("v")])
 
     def test_two_waiting_requests_keep_their_session_wanted_until_both_exit(self):
-        self.volumes.hold = threading.Event()
         found: dict[int, bytes] = {}
         targets = ("s1", "v", "v")
 
@@ -159,12 +158,10 @@ class RequestTest(ServiceCase):
             found[index] = self.ask(targets[index])[1]
 
         threads = [threading.Thread(target=ask, args=(i,)) for i in range(len(targets))]
-        threads[0].start()
-        self.wait_for(lambda: self.volumes.calls)
-        for thread in threads[1:]:
-            thread.start()
-        self.wait_for(lambda: self.service.wanted == {"s1": 1, "v": 2})
-        self.volumes.hold.set()
+        with self.service.lock:
+            for thread in threads:
+                thread.start()
+            self.wait_for(lambda: self.service.wanted == {"s1": 1, "v": 2})
         for thread in threads:
             thread.join(10)
         self.assertEqual(found, {0: b"s1", 1: b"v", 2: b"v"})
@@ -184,6 +181,10 @@ class SharedReaderTest(ServiceCase):
         self.assertEqual(mounts(first), [mount("s1")])
         self.assertEqual(mounts(second), [mount("s1"), mount("v")])
         self.assertEqual(len(self.alive()), 1)
+        self.assertEqual(self.ask("w")[1], b"w")
+        checks = [call[3:5] for call in self.volumes.calls if call[3] == "volume"]
+        self.assertEqual(checks, [["volume", "ls"], ["volume", "inspect"]] * 3)
+        self.assertEqual(mounts(self.runs()[-1]), [mount(s) for s in sorted(SESSIONS)])
 
     def test_sessions_with_two_owners_get_a_reader_each(self):
         self.volumes.owners = {"v": "2001:2002"}
@@ -197,7 +198,6 @@ class SharedReaderTest(ServiceCase):
         self.assertEqual(len(self.alive()), 2)
 
     def test_concurrent_first_reads_coalesce_into_one_start(self):
-        self.volumes.hold = threading.Event()
         found, errors = {}, []
 
         def ask(index: int) -> None:
@@ -208,10 +208,10 @@ class SharedReaderTest(ServiceCase):
                 errors.append(error)
 
         threads = [threading.Thread(target=ask, args=(i,)) for i in range(10)]
-        for thread in threads:
-            thread.start()
-        self.wait_for(lambda: set(self.service.wanted) == set(SESSIONS))
-        self.volumes.hold.set()
+        with self.service.lock:
+            for thread in threads:
+                thread.start()
+            self.wait_for(lambda: set(self.service.wanted) == set(SESSIONS))
         for thread in threads:
             thread.join(10)
         self.assertEqual((errors, found), ([], dict.fromkeys(range(10), True)))
@@ -330,7 +330,8 @@ class SocketPathTest(Case):
             state_service.socket_path("daemon-a"), os.path.join(folder, f"sr-{key}-{digest}.sock")
         )
         self.assertEqual(
-            state_service.lock_path("daemon-a"), os.path.join(folder, f"sr-{key}-{digest}.lock")
+            state_service.lock_path(state_service.socket_path("daemon-a")),
+            os.path.join(folder, f"sr-{key}-{digest}.lock"),
         )
         self.assertNotEqual(
             state_service.socket_path("daemon-b"), state_service.socket_path("daemon-a")
@@ -397,15 +398,25 @@ class BindTest(Case):
     def setUp(self):
         self.enterContext(mock.patch("socket.socket", Bindable))
         self.folder = os.path.join(self.home, f"eg-{os.getuid()}")
+        self.path = state_service.socket_path(LOCAL.id)
 
     def bound(self):
-        found = state_service.bind(LOCAL.id)
+        found = state_service.bind(self.path)
         assert found is not None
         self.addCleanup(os.close, found[1])
         return found
 
     def test_main_refuses_a_bad_argument_list(self):
-        for argv in ([], ["daemon-a", "x"], ["../x"]):
+        socket_name = os.path.basename(self.path)
+        for argv in (
+            [],
+            ["daemon-a"],
+            ["../x", self.path],
+            ["daemon-a", socket_name],
+            ["daemon-a", os.path.join(self.folder, "other.sock")],
+            ["daemon-a", os.path.join(self.home, "x" * 100, socket_name)],
+            ["daemon-a", self.path, "x"],
+        ):
             with self.subTest(argv=argv):
                 self.assertEqual(state_service.main(argv), 64)
 
@@ -414,7 +425,7 @@ class BindTest(Case):
         self.assertEqual(listener.path, state_service.socket_path(LOCAL.id))
         modes = [
             stat.S_IMODE(os.lstat(path).st_mode)
-            for path in (self.folder, listener.path, state_service.lock_path(LOCAL.id))
+            for path in (self.folder, listener.path, state_service.lock_path(self.path))
         ]
         self.assertEqual(modes, [0o700, 0o600, 0o600])
 
@@ -427,23 +438,23 @@ class BindTest(Case):
     def test_a_held_lock_binds_nothing(self):
         listener, _ = self.bound()
         os.unlink(listener.path)
-        self.assertIsNone(state_service.bind(LOCAL.id))
-        self.assertEqual(state_service.main([LOCAL.id]), 0)
+        self.assertIsNone(state_service.bind(self.path))
+        self.assertEqual(state_service.main([LOCAL.id, self.path]), 0)
         self.assertFalse(os.path.lexists(listener.path))
 
     def test_a_shared_or_linked_dir_is_refused_without_a_socket(self):
         os.makedirs(self.folder)
         os.chmod(self.folder, 0o755)
         with self.assertRaises(OSError) as caught:
-            state_service.bind(LOCAL.id)
+            state_service.bind(self.path)
         self.assertEqual(caught.exception.errno, errno.EPERM)
-        self.assertEqual(state_service.main([LOCAL.id]), 1)
+        self.assertEqual(state_service.main([LOCAL.id, self.path]), 1)
         self.assertEqual(os.listdir(self.folder), [])
         os.rmdir(self.folder)
         elsewhere = os.path.join(self.home, "elsewhere")
         os.mkdir(elsewhere, 0o700)
         os.symlink(elsewhere, self.folder)
-        self.assertEqual(state_service.main([LOCAL.id]), 1)
+        self.assertEqual(state_service.main([LOCAL.id, self.path]), 1)
         self.assertEqual(os.listdir(elsewhere), [])
 
 
@@ -462,13 +473,12 @@ class LifecycleTest(ServiceCase):
         self.addCleanup(self.service.stop)
         return thread
 
-    def client(self) -> socket.socket:
-        found = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    def client(self):
+        found = dial(state_service.socket_path(LOCAL.id))
         self.addCleanup(found.close)
-        found.connect(state_service.socket_path(LOCAL.id))
         return found
 
-    def exchange(self, client: socket.socket, session: str) -> bytes:
+    def exchange(self, client, session: str) -> bytes:
         client.sendall(line(session, read(session)))
         frames = state_service.Frames(client.fileno(), 10, "test")
         head = json.loads(frames.line(1 << 20))

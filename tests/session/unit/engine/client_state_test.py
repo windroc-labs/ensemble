@@ -11,7 +11,6 @@ import os
 import select
 import sqlite3
 import stat as stat_module
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -29,7 +28,16 @@ from ensemble.session.engine.types import (
     StateStat,
 )
 from tests.session.case import Case
-from tests.session.state_volumes import DOCKER, HOST, IMAGE, LOCAL, record, serve, started
+from tests.session.state_volumes import (
+    DEVNULL,
+    DOCKER,
+    HOST,
+    IMAGE,
+    LOCAL,
+    record,
+    serve,
+    started,
+)
 from tests.session.unit.hosts.docker.support import ssh_dir
 
 HOME_DIR = "app"
@@ -579,13 +587,14 @@ class ConnectionTest(StateCase):
                 "-m",
                 state_service.__name__,
                 "daemon-a",
+                state_service.socket_path("daemon-a"),
             ],
         )
         self.assertLessEqual(set(kw["env"]), {"PATH", "HOME", "PYTHONPATH", "SSH_AUTH_SOCK"})
         self.assertEqual((kw["env"]["PATH"], kw["env"]["HOME"]), (os.defpath, self.home))
         self.assertEqual((kw["cwd"], kw["start_new_session"]), ("/", True))
         for stream in ("stdin", "stdout", "stderr"):
-            self.assertEqual(kw[stream], subprocess.DEVNULL)
+            self.assertEqual(kw[stream], DEVNULL)
 
     def test_a_killed_service_is_replaced_and_the_read_repeated(self):
         self.assertEqual(STORE.read(at("a/t")), b"abc")
@@ -600,13 +609,33 @@ class ConnectionTest(StateCase):
             self.assertEqual(STORE.read(at("a/t")), b"abc")
             self.assertIsNot(client_state._connection("daemon-a"), parent)
 
-    def test_a_service_that_never_listens_is_an_io_error_after_respawns(self):
+    def never_listening(self) -> OSError:
         self.volumes.silent = True
         clock = iter(float(n) / 4 for n in range(1000))
         with mock.patch("time.monotonic", lambda: next(clock)), mock.patch("time.sleep"):
             error = self.refused("read", at("a/t"))
         self.assertEqual((error.errno, error.strerror), (errno.EIO, "state service did not start"))
-        self.assertGreaterEqual(len(self.volumes.spawns), client_state.SPAWN_WAIT)
+        return error
+
+    def test_a_start_still_running_is_waited_for_not_repeated(self):
+        self.never_listening()
+        self.assertEqual(len(self.volumes.spawns), 1)
+
+    def test_a_start_that_ended_is_repeated_each_second(self):
+        self.volumes.start_exit = 0
+        self.never_listening()
+        self.assertEqual(len(self.volumes.spawns), client_state.SPAWN_WAIT)
+
+    def test_a_socket_dir_not_this_users_alone_is_refused_before_dialing(self):
+        folder = os.path.join(self.home, f"eg-{os.getuid()}")
+        os.chmod(folder, 0o755)
+        self.assertEqual(self.refused("read", at("a/t")).errno, errno.EPERM)
+        os.rmdir(folder)
+        elsewhere = os.path.join(self.home, "elsewhere")
+        os.mkdir(elsewhere, 0o700)
+        os.symlink(elsewhere, folder)
+        self.assertEqual(self.refused("read", at("a/t")).errno, errno.EPERM)
+        self.assertEqual(self.volumes.spawns, [])
 
     def test_a_service_that_cannot_start_is_an_io_error(self):
         self.volumes.spawn_error = PermissionError(errno.EACCES, "denied")

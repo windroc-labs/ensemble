@@ -81,8 +81,8 @@ type world struct {
 	volumeRmErr     error
 	prefetchErr     error  // the prefetch helper's run
 	state           string // the state volume: "" absent, "matching" or "foreign"
-	readers         string // ps output of the readers that mount readerMounts
-	readerMounts    string // the volume they mount; "": stateVol
+	readers         string
+	readerMounts    string // "": stateVol
 	readersErr      error
 	stateHelperErr  error // the state volume's chown or mkdir helper
 }
