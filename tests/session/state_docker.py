@@ -19,13 +19,15 @@ def main(argv: list[str]) -> int:
     home = os.environ["HOME"]
     root = os.path.join(home, ".ensemble", "docker-state")
     if args[:2] == ["volume", "ls"]:
-        volume = args[args.index("--filter") + 1].removeprefix("name=")
-        if os.path.isdir(os.path.join(root, volume.removeprefix("ensemble-state-"))):
-            print(volume)
+        for index, arg in enumerate(args):
+            volume = args[index + 1].removeprefix("name=") if arg == "--filter" else ""
+            if volume and os.path.isdir(os.path.join(root, volume.removeprefix("ensemble-state-"))):
+                print(volume)
         return 0
     if args[:2] == ["volume", "inspect"]:
-        session = args[-1].removeprefix("ensemble-state-")
-        print(json.dumps({"ensemble.state": session, "ensemble.state-owner": "1001:1002"}))
+        for volume in args[args.index("--format") + 2 :]:
+            session = volume.removeprefix("ensemble-state-")
+            print(json.dumps({"ensemble.state": session, "ensemble.state-owner": "1001:1002"}))
         return 0
     if args[:1] == ["run"]:
         with open(os.path.join(home, "docker-runs"), "a", encoding="utf-8") as f:

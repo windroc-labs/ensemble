@@ -66,10 +66,8 @@ class StateServiceTest(Case):
         listed = subprocess.run(
             ["ps", "-ww", "-eo", "pid=,args="], capture_output=True, text=True, check=True
         ).stdout
-        marker = f"-m {state_service.__name__} {self.daemon_id}"
-        return [
-            int(line.split()[0]) for line in listed.splitlines() if line.rstrip().endswith(marker)
-        ]
+        marker = f"-m {state_service.__name__} {self.daemon_id} "
+        return [int(line.split()[0]) for line in listed.splitlines() if marker in line]
 
     def runs(self) -> list[int]:
         path = os.path.join(self.home, "docker-runs")

@@ -3,6 +3,7 @@ tests/session/state_volumes.py: request checks, one container per owner mounting
 session, restarts, losses and broken replies, and its socket path.
 """
 
+import contextlib
 import errno
 import hashlib
 import json
@@ -343,6 +344,14 @@ class SocketPathTest(Case):
             with open(os.path.abspath(module.__file__ or ""), "rb") as f:
                 found.update(f.read())
         self.assertEqual(state_service.code_digest(), found.hexdigest()[:8])
+
+    def test_a_relative_control_root_gives_an_absolute_socket(self):
+        with (
+            contextlib.chdir(self.home),
+            mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": "rel"}),
+        ):
+            path = state_service.socket_path("daemon-a")
+        self.assertEqual(os.path.dirname(path), os.path.join(self.home, "rel", f"eg-{os.getuid()}"))
 
     def test_a_path_over_the_af_unix_limit_is_refused(self):
         long = os.path.join(self.home, "x" * 100)

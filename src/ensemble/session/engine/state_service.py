@@ -71,7 +71,7 @@ def lock_path(socket_file: str) -> str:
 
 def _base(daemon_id: str) -> str:
     key = hashlib.sha256(daemon_id.encode()).hexdigest()[:16]
-    return os.path.join(control_root(), f"sr-{key}-{code_digest()}")
+    return os.path.join(os.path.abspath(control_root()), f"sr-{key}-{code_digest()}")
 
 
 def check_private(folder: str) -> None:
