@@ -1,19 +1,21 @@
-"""Fake Docker for client_state: a session's volume is its dir under DOCKER_STATE, its reader
-state_reader.answer over pipes, with no process.
+"""Fake Docker: volumes are dirs under DOCKER_STATE, readers state_reader.answer, services
+threads over in-process sockets.
 """
 
+import _socket
 import contextlib
 import errno
 import json
 import os
 import queue
+import socket
 import subprocess
 import threading
 from unittest import mock
 
-from ensemble.session.engine import client_state, daemon, state_reader
+from ensemble.session.engine import client_state, daemon, state_reader, state_service
 from ensemble.session.engine.types import Daemon, DaemonRecord
-from ensemble.utils import DOCKER_STATE
+from ensemble.utils import DOCKER_STATE, control_root
 from tests.session.unit.hosts.docker.support import FakeProc
 
 DOCKER = "/usr/local/bin/docker"
@@ -25,14 +27,15 @@ OWNER = "1001:1002"
 
 
 class ReaderProc:
-    """A reader's docker run; `reply`: raw bytes sent instead; `hang`: no answer."""
+    """A reader's docker run over `mounted` sessions; `reply`, `hang`, `leave`: misbehaviours."""
 
-    def __init__(self, argv, root, *, reply=None, hang=False):
+    def __init__(self, argv, root, *, mounted, reply=None, hang=False, leave=False):
         self.args, self.root, self.reply, self.hang = argv, root, reply, hang
+        self.mounted = mounted
         stdout_read, sink = os.pipe()
         self.stdout = os.fdopen(stdout_read, "rb")
         self.stdin = _Stdin(self)
-        self.killed, self.leave = False, False
+        self.killed, self.leave = False, leave
         self.replies: queue.Queue = queue.Queue()
         self.thread = threading.Thread(target=self._write, args=(sink,))
         self.thread.daemon = True
@@ -48,8 +51,15 @@ class ReaderProc:
         if self.reply is not None:
             self.replies.put(self.reply)
             return
-        header, payload = state_reader.answer(self.root, line)
+        if _first_part(line) not in self.mounted:
+            header, payload = state_reader.answer(self.root, b"{}")
+            header.update(errno=errno.ENOENT, message="not mounted")
+        else:
+            header, payload = state_reader.answer(self.root, line)
         self.replies.put(json.dumps({**header, "length": len(payload)}).encode() + b"\n" + payload)
+
+    def poll(self):
+        return 0 if self.killed else None
 
     def _write(self, sink: int) -> None:
         try:
@@ -93,14 +103,23 @@ class _Stdin:
         self.proc.kill()
 
 
+def _first_part(line: bytes) -> str:
+    request = json.loads(line)
+    path = (request.get("paths") or [None])[0] if request.get("op") == "snapshot" else None
+    return str(path or request.get("path", "")).split("/", 1)[0]
+
+
 class Volumes:
-    """`volumes`: sessions with a volume (default: each dir); `error`: every call's stderr."""
+    """Toggles: `volumes`, `error`, `owners`, `foreign`, `leave`, `silent`, `spawn_error`, `start_exit`."""
 
     def __init__(self):
-        self.calls, self.readers = [], []
+        self.calls, self.readers, self.spawns = [], [], []
         self.volumes: set[str] | None = None
         self.reply: bytes | None = None
-        self.hang, self.error, self.owner = False, "", OWNER
+        self.hang, self.error, self.owner, self.leave = False, "", OWNER, False
+        self.owners: dict[str, str] = {}
+        self.foreign: set[str] = set()
+        self.silent, self.spawn_error, self.start_exit = False, None, None
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -110,28 +129,168 @@ class Volumes:
             return session in self.volumes
         return os.path.isdir(self.root(session))
 
+    @staticmethod
+    def handles(argv) -> bool:
+        return argv[3:4] in (["volume"], ["run"]) or argv[1:5] == SPAWN
+
     def __call__(self, argv, **kw):
+        if argv[1:5] == SPAWN:
+            return self.spawn(argv, kw)
         self.calls.append(list(argv))
         args = argv[3:]
         if self.error and args[:1] != ["run"]:
             return FakeProc(argv, b"", self.error.encode(), 1)
         if args[:2] == ["volume", "ls"]:
-            volume = args[args.index("--filter") + 1].removeprefix("name=")
-            session = volume.removeprefix("ensemble-state-")
-            return FakeProc(argv, f"{volume}\n".encode() if self.exists(session) else b"")
+            named = [
+                args[i + 1].removeprefix("name=") for i, a in enumerate(args) if a == "--filter"
+            ]
+            found = [v for v in named if self.exists(v.removeprefix("ensemble-state-"))]
+            return FakeProc(argv, "".join(f"{v}\n" for v in found).encode())
         if args[:2] == ["volume", "inspect"]:
-            session = args[-1].removeprefix("ensemble-state-")
-            if not self.exists(session):
-                return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
-            labels = {"ensemble.state": session, "ensemble.state-owner": self.owner}
-            return FakeProc(argv, json.dumps(labels).encode() + b"\n")
+            volumes = args[args.index("{{json .Labels}}") + 1 :]
+            lines = []
+            for volume in volumes:
+                session = volume.removeprefix("ensemble-state-")
+                if not self.exists(session):
+                    return FakeProc(argv, b"", f"Error: no such volume: {volume}".encode(), 1)
+                owner = self.owners.get(session, self.owner)
+                named = "other" if session in self.foreign else session
+                lines.append(json.dumps({"ensemble.state": named, "ensemble.state-owner": owner}))
+            return FakeProc(argv, "".join(f"{line}\n" for line in lines).encode())
         if args[:1] == ["run"]:
-            mount = args[args.index("--mount") + 1]
-            session = mount.split("source=ensemble-state-", 1)[1].split(",", 1)[0]
-            reader = ReaderProc(argv, self.root(session), reply=self.reply, hang=self.hang)
+            mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
+            sessions = [m.split("source=ensemble-state-", 1)[1].split(",", 1)[0] for m in mounts]
+            reader = ReaderProc(
+                argv,
+                os.path.expanduser(DOCKER_STATE),
+                mounted=set(sessions),
+                reply=self.reply,
+                hang=self.hang,
+                leave=self.leave,
+            )
             self.readers.append(reader)
             return reader
         raise AssertionError(f"unexpected docker call {argv}")
+
+    def spawn(self, argv, kw):
+        self.spawns.append((list(argv), kw))
+        if self.spawn_error is not None:
+            raise self.spawn_error
+        path = argv[6]
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        if path not in LISTENING and not self.silent:
+            service, listener = state_service.Service(argv[5]), Listener(path)
+            thread = threading.Thread(
+                target=service.serve, args=(listener,), kwargs={"idle": 60}, daemon=True
+            )
+            thread.start()
+            SERVICES.append((service, listener, thread))
+        return Started(self.start_exit)
+
+    def kill_services(self):
+        stop_services()
+
+
+SPAWN = ["-P", "-s", "-m", state_service.__name__]
+DEVNULL = subprocess.DEVNULL
+
+
+class Started:
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+    def wait(self, timeout=None):
+        return self.code
+
+
+def dial(path):
+    client = Dialer()
+    client.connect(path)
+    return client
+
+
+SERVICES: list[tuple[state_service.Service, "Listener", threading.Thread]] = []
+
+
+def stop_services():
+    while SERVICES:
+        service, listener, thread = SERVICES.pop()
+        service.stop()
+        listener.waiting.put(WAKE)
+        thread.join(10)
+
+
+_SOCKET = socket.socket
+
+
+class Listener:
+    """A bound service socket; connect() reaches it while in LISTENING."""
+
+    def __init__(self, path):
+        self.path, self.timeout, self.waiting = path, None, queue.Queue()
+        LISTENING[path] = self
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def getsockname(self):
+        return self.path
+
+    def accept(self):
+        try:
+            found = self.waiting.get(timeout=self.timeout)
+        except queue.Empty:
+            raise TimeoutError from None
+        if found is WAKE:
+            raise TimeoutError
+        return found, self.path
+
+    def close(self):
+        if LISTENING.get(self.path) is self:
+            del LISTENING[self.path]
+
+
+LISTENING: dict[str, Listener] = {}
+WAKE = object()
+
+
+class Dialer:
+    """socket.socket whose connect() gets a pair with a Listener."""
+
+    def __init__(self, *_args, **_kw):
+        self.sock = None
+
+    def connect(self, path):
+        listener = LISTENING.get(path)
+        if listener is None:
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+        mine, theirs = (
+            _SOCKET(socket.AF_UNIX, socket.SOCK_STREAM, 0, end.detach())
+            for end in _socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        )
+        listener.waiting.put(theirs)
+        self.sock = mine
+
+    def close(self):
+        if self.sock is not None:
+            self.sock.close()
+
+    def __getattr__(self, name):
+        if self.sock is None:
+            raise OSError(errno.ENOTCONN, "not connected")
+        return getattr(self.sock, name)
+
+
+@contextlib.contextmanager
+def sockets():
+    with mock.patch("socket.socket", Dialer):
+        try:
+            yield
+        finally:
+            LISTENING.clear()
 
 
 def stored(session, client):
@@ -158,7 +317,8 @@ def serve(sessions=("s1", "v", "w")):
     volumes = Volumes()
     for session in sessions:
         record(session)
-    with mock.patch.object(subprocess, "Popen", volumes):
+    os.makedirs(control_root(), mode=0o700, exist_ok=True)
+    with mock.patch.object(subprocess, "Popen", volumes), sockets():
         try:
             yield volumes
         finally:
@@ -166,6 +326,8 @@ def serve(sessions=("s1", "v", "w")):
 
 
 def reset():
-    """No reader left from an earlier test."""
-    client_state._close_readers()
-    client_state._READERS.clear()
+    """No service, reader or connection left from an earlier test."""
+    stop_services()
+    for connection in list(client_state._CONNECTIONS.values()):
+        connection.close()
+    client_state._CONNECTIONS.clear()

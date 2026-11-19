@@ -8,15 +8,17 @@ import errno
 import io
 import json
 import os
+import select
 import sqlite3
 import stat as stat_module
+import sys
 import tarfile
 import tempfile
 import threading
 import time
 from unittest import mock
 
-from ensemble.session.engine import client_state, daemon
+from ensemble.session.engine import client_state, daemon, state_service
 from ensemble.session.engine.types import (
     Daemon,
     DaemonRecord,
@@ -26,7 +28,16 @@ from ensemble.session.engine.types import (
     StateStat,
 )
 from tests.session.case import Case
-from tests.session.state_volumes import DOCKER, HOST, IMAGE, LOCAL, serve, started
+from tests.session.state_volumes import (
+    DEVNULL,
+    DOCKER,
+    HOST,
+    IMAGE,
+    LOCAL,
+    record,
+    serve,
+    started,
+)
 from tests.session.unit.hosts.docker.support import ssh_dir
 
 HOME_DIR = "app"
@@ -379,10 +390,10 @@ class ReaderTest(StateCase):
             ["--cap-drop", "ALL"],
             ["--security-opt", "no-new-privileges"],
             ["--user", "1001:1002"],
-            ["--label", "ensemble.state-reader=s1"],
+            ["--label", "ensemble.state-reader=1"],
             [
                 "--mount",
-                "type=volume,source=ensemble-state-s1,target=/state,readonly,volume-nocopy",
+                "type=volume,source=ensemble-state-s1,target=/state/s1,readonly,volume-nocopy",
             ],
         ):
             self.assertTrue(
@@ -391,7 +402,7 @@ class ReaderTest(StateCase):
         self.assertIn("--read-only", run)
         self.assertIn("--rm", run)
         self.assertEqual(run[run.index(IMAGE) + 1 : run.index(IMAGE) + 3], ["-I", "-c"])
-        with open(client_state.READER, encoding="utf-8") as f:
+        with open(state_service.READER, encoding="utf-8") as f:
             self.assertEqual(run[run.index(IMAGE) + 3], f.read())
 
     def test_a_store_with_an_image_runs_its_reader_on_that_image(self):
@@ -504,18 +515,139 @@ class ReaderTest(StateCase):
         os.truncate(path, client_state.READ_MAX)
         started = time.monotonic()
         self.assertEqual(len(STORE.read(at("big")) or b""), client_state.READ_MAX)
-        self.assertLess(time.monotonic() - started, client_state.REPLY_TIMEOUT)
+        self.assertLess(time.monotonic() - started, state_service.REPLY_TIMEOUT)
 
     def test_a_silent_reader_times_out_and_is_stopped(self):
         self.put("a/t", b"abc")
         file = at("a/t")
         self.assertEqual(STORE.read(file), b"abc")
         self.volumes.readers[0].hang = True
-        clock = iter([0.0, *[client_state.REPLY_TIMEOUT + 1.0] * 4])
-        with mock.patch("time.monotonic", lambda: next(clock)):
+        wait = select.select
+
+        def short(readable, writable, broken, timeout=None):
+            if timeout == state_service.REPLY_TIMEOUT:
+                timeout = 0.05
+            return wait(readable, writable, broken, timeout)
+
+        with mock.patch("select.select", short):
             self.assertEqual(self.refused("read", file).errno, errno.ETIMEDOUT)
         self.assertTrue(self.volumes.readers[0].killed)
         self.assertEqual(STORE.read(file), b"abc")
+
+
+class SharedReaderTest(StateCase):
+    def setUp(self):
+        super().setUp()
+        self.put("a/t", b"s1")
+        os.makedirs(os.path.join(self.state, "v", HOME_DIR, "a"))
+        with open(os.path.join(self.state, "v", HOME_DIR, "a", "t"), "wb") as f:
+            f.write(b"v")
+
+    def alive(self) -> list:
+        return [reader for reader in self.volumes.readers if not reader.killed]
+
+    def test_two_sessions_on_one_daemon_share_one_reader(self):
+        other = client_state.VolumeHome("v", HOME_DIR)
+        for _ in range(3):
+            self.assertEqual(STORE.read(at("a/t")), b"s1")
+            self.assertEqual(other.read(at("a/t")), b"v")
+        self.assertEqual(len(self.volumes.spawns), 1)
+        self.assertEqual(len([c for c in self.volumes.calls if c[3] == "run"]), 2)
+        self.assertEqual(len(self.alive()), 1)
+
+    def test_sessions_on_two_daemons_get_a_service_and_reader_each(self):
+        record("v", LOCAL._replace(id="daemon-b"))
+        self.assertEqual(STORE.read(at("a/t")), b"s1")
+        self.assertEqual(client_state.VolumeHome("v", HOME_DIR).read(at("a/t")), b"v")
+        self.assertEqual([argv[5] for argv, _ in self.volumes.spawns], ["daemon-a", "daemon-b"])
+        self.assertEqual(len(self.alive()), 2)
+
+    def test_a_link_into_another_sessions_volume_is_refused(self):
+        os.symlink(
+            os.path.join("..", "..", "..", "v", HOME_DIR, "a", "t"),
+            os.path.join(self.client, "a", "x"),
+        )
+        self.assertEqual(self.refused("read", at("a/x")).errno, errno.ELOOP)
+
+
+class ConnectionTest(StateCase):
+    def setUp(self):
+        super().setUp()
+        self.put("a/t", b"abc")
+
+    def test_the_service_starts_detached_with_a_minimal_environment(self):
+        self.assertEqual(STORE.read(at("a/t")), b"abc")
+        ((argv, kw),) = self.volumes.spawns
+        self.assertEqual(
+            argv,
+            [
+                os.path.realpath(sys.executable),
+                "-P",
+                "-s",
+                "-m",
+                state_service.__name__,
+                "daemon-a",
+                state_service.socket_path("daemon-a"),
+            ],
+        )
+        self.assertLessEqual(set(kw["env"]), {"PATH", "HOME", "PYTHONPATH", "SSH_AUTH_SOCK"})
+        self.assertEqual((kw["env"]["PATH"], kw["env"]["HOME"]), (os.defpath, self.home))
+        self.assertEqual((kw["cwd"], kw["start_new_session"]), ("/", True))
+        for stream in ("stdin", "stdout", "stderr"):
+            self.assertEqual(kw[stream], DEVNULL)
+
+    def test_a_killed_service_is_replaced_and_the_read_repeated(self):
+        self.assertEqual(STORE.read(at("a/t")), b"abc")
+        self.volumes.kill_services()
+        self.assertEqual(STORE.read(at("a/t")), b"abc")
+        self.assertEqual(len(self.volumes.spawns), 2)
+
+    def test_a_forked_child_makes_its_own_connection(self):
+        STORE.read(at("a/t"))
+        parent = client_state._connection("daemon-a")
+        with mock.patch("os.getpid", return_value=os.getpid() + 1):
+            self.assertEqual(STORE.read(at("a/t")), b"abc")
+            self.assertIsNot(client_state._connection("daemon-a"), parent)
+
+    def never_listening(self) -> OSError:
+        self.volumes.silent = True
+        clock = iter(float(n) / 4 for n in range(1000))
+        with mock.patch("time.monotonic", lambda: next(clock)), mock.patch("time.sleep"):
+            error = self.refused("read", at("a/t"))
+        self.assertEqual((error.errno, error.strerror), (errno.EIO, "state service did not start"))
+        return error
+
+    def test_a_start_still_running_is_waited_for_not_repeated(self):
+        self.never_listening()
+        self.assertEqual(len(self.volumes.spawns), 1)
+
+    def test_a_start_that_ended_is_repeated_each_second(self):
+        self.volumes.start_exit = 0
+        self.never_listening()
+        self.assertEqual(len(self.volumes.spawns), client_state.SPAWN_WAIT)
+
+    def test_a_socket_dir_not_this_users_alone_is_refused_before_dialing(self):
+        folder = os.path.join(self.home, f"eg-{os.getuid()}")
+        os.chmod(folder, 0o755)
+        self.assertEqual(self.refused("read", at("a/t")).errno, errno.EPERM)
+        os.rmdir(folder)
+        elsewhere = os.path.join(self.home, "elsewhere")
+        os.mkdir(elsewhere, 0o700)
+        os.symlink(elsewhere, folder)
+        self.assertEqual(self.refused("read", at("a/t")).errno, errno.EPERM)
+        self.assertEqual(self.volumes.spawns, [])
+
+    def test_a_service_that_cannot_start_is_an_io_error(self):
+        self.volumes.spawn_error = PermissionError(errno.EACCES, "denied")
+        error = self.refused("read", at("a/t"))
+        self.assertEqual(error.errno, errno.EIO)
+        self.assertIn("state service: [Errno 13] denied", error.strerror)
+
+    def test_an_over_long_socket_path_is_refused_without_a_service(self):
+        long = os.path.join(self.home, "x" * 100)
+        with mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": long}):
+            self.assertEqual(self.refused("read", at("a/t")).errno, errno.EIO)
+        self.assertEqual(self.volumes.spawns, [])
 
 
 class DaemonRecordTest(Case):

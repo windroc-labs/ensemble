@@ -87,7 +87,7 @@ func TestNewStateReplacesTheVolume(t *testing.T) {
 	}
 	helpers := stateHelpers("claude")
 	order := [][]string{
-		{"ps", "--all", "--quiet", "--filter", "label=" + readerLabel + "=worker_1"},
+		readersOf(stateVol),
 		{"rm", "--force", "r1", "r2"},
 		{"volume", "rm", stateVol},
 		{"volume", "create", "--label", "ensemble.state=worker_1", "--label", "ensemble.state-owner=1001:1002", stateVol},
@@ -188,5 +188,20 @@ func TestAPrefetchingStartWhoseStateVolumeFailsRemovesItsNewWorkspace(t *testing
 	}
 	if !called(d, []string{"volume", "rm", volume}) || !called(d, []string{"volume", "rm", stateVol}) {
 		t.Fatalf("volumes kept: %q", d.calls)
+	}
+}
+
+func TestNewStateLeavesReadersOfOtherVolumes(t *testing.T) {
+	h, d := startHost(&world{labels: goodLabels(), state: "matching", readers: "r9\n", readerMounts: "ensemble-state-other"}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !called(d, readersOf(stateVol)) || !called(d, []string{"volume", "rm", stateVol}) {
+		t.Fatalf("no reader list or state removal: %q", d.calls)
+	}
+	for _, c := range d.calls {
+		if c[0] == "rm" && slices.Contains(c, "r9") {
+			t.Fatalf("removed a reader of another volume: %q", c)
+		}
 	}
 }

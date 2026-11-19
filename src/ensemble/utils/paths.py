@@ -13,6 +13,12 @@ STATE = "~/.ensemble"
 DOCKER_STATE = f"{STATE}/docker-state"
 
 
+def control_root() -> str:
+    """This user's dir for local sockets, short for AF_UNIX's path limit."""
+    root = os.environ.get("ENSEMBLE_CONTROL_ROOT", "/tmp")  # never macOS's long $TMPDIR
+    return os.path.join(root, f"eg-{os.getuid()}")
+
+
 def module_roots(*packages: ModuleType) -> tuple[str, ...]:
     roots = []
     for package in packages:

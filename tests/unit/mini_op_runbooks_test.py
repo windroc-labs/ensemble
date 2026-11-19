@@ -28,6 +28,7 @@ NAMES = {
     "test-accounts",
     "gotchas",
     "docker-guard-main-process",
+    "docker-state-reader",
     "host-gh-refresh",
 }
 SECRET_READERS = (
