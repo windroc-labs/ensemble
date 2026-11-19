@@ -474,7 +474,7 @@
       "type": "object",
       "properties": {
         "argv": {
-          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
+          "$comment": "Then an optional --daemon ID (absent: the default daemon target reports), then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
           "type": "array",
           "prefixItems": [
             {
@@ -485,23 +485,21 @@
             },
             {
               "$ref": "#/$defs/path"
-            },
-            {
-              "const": "--daemon"
-            },
-            {
-              "$ref": "#/$defs/daemon"
             }
           ],
           "items": {
             "anyOf": [
               {
                 "enum": [
+                  "--daemon",
                   "--base-image",
                   "--plugin",
                   "--image-plugin",
                   "--max-age"
                 ]
+              },
+              {
+                "$ref": "#/$defs/daemon"
               },
               {
                 "$ref": "#/$defs/plugin"
@@ -518,9 +516,13 @@
               }
             ]
           },
-          "minItems": 5,
+          "minItems": 3,
           "anyOf": [
             {
+              "maxItems": 3
+            },
+            {
+              "minItems": 5,
               "maxItems": 5
             },
             {

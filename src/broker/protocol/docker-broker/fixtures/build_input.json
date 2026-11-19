@@ -201,6 +201,22 @@
   },
   {
     "name": "build-input-no-daemon",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble"
+      ]
+    }
+  },
+  {
+    "name": "build-input-no-daemon-max-age-missing",
     "valid": false,
     "expected": {
       "stage": "schema",
@@ -211,7 +227,8 @@
       "argv": [
         "build",
         "--ensemble",
-        "/opt/ensemble"
+        "/opt/ensemble",
+        "--max-age"
       ]
     }
   }

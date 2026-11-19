@@ -70,6 +70,13 @@ func TestLoadTarget(t *testing.T) {
 	if _, err := LoadTarget(home); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("oversized file: %v", err)
 	}
+	unreadable := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(unreadable, SettingFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadTarget(unreadable); !errors.As(err, new(*Unreachable)) || !strings.Contains(err.Error(), "invalid target setting (") {
+		t.Fatalf("unreadable file: %v", err)
+	}
 }
 
 // TestTargetSettings: the broker reads only [docker], whatever else the shared config file holds.

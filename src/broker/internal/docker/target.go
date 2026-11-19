@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -103,76 +104,92 @@ func validHost(host string) bool {
 // the local target. Keys are compared exactly: TOML keys are case-sensitive.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, SettingFile)
-	invalid := func(format string, args ...any) (Target, error) {
-		return Target{}, &Unreachable{Endpoint: path + " [" + SettingTable + "]",
-			Reason: "invalid target setting (" + fmt.Sprintf(format, args...) + ")"}
-	}
-	data, err := readSetting(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return Target{}, nil
+	table, err := settingTable(path)
+	target := Target{}
+	if err == nil && table != nil {
+		target, err = parseTarget(table)
 	}
 	if err != nil {
-		return invalid("%v", err)
+		return Target{}, &Unreachable{Endpoint: path + " [" + SettingTable + "]", Reason: "invalid target setting (" + err.Error() + ")"}
+	}
+	return target, nil
+}
+
+// settingTable is nil when path or its SettingTable is absent.
+func settingTable(path string) (map[string]any, error) {
+	data, err := readSetting(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	if len(data) > maxSetting {
-		return invalid("larger than %d bytes", maxSetting)
+		return nil, fmt.Errorf("larger than %d bytes", maxSetting)
 	}
 	var file map[string]any
 	if err := toml.Unmarshal(data, &file); err != nil {
-		return invalid("%v", err)
+		return nil, err
 	}
 	found, ok := file[SettingTable]
 	if !ok {
-		return Target{}, nil
+		return nil, nil
 	}
 	table, ok := found.(map[string]any)
 	if !ok {
-		return invalid("[%s] is not a table", SettingTable)
+		return nil, fmt.Errorf("[%s] is not a table", SettingTable)
 	}
-	keys := make([]string, 0, len(table))
-	for key := range table {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	for _, key := range keys {
+	return table, nil
+}
+
+func parseTarget(table map[string]any) (Target, error) {
+	for _, key := range slices.Sorted(maps.Keys(table)) {
 		if key != "host" && key != "local_secrets" {
-			return invalid("unknown key %q", key)
+			return Target{}, fmt.Errorf("unknown key %q", key)
 		}
 	}
 	value, ok := table["host"]
 	if !ok {
-		return invalid("no host")
+		return Target{}, errors.New("no host")
 	}
 	host, ok := value.(string)
 	if !ok {
-		return invalid("host is not a string")
+		return Target{}, errors.New("host is not a string")
 	}
 	if !validHost(host) {
-		return invalid("host %q is not ssh://[user@]host[:port]", host)
+		return Target{}, fmt.Errorf("host %q is not ssh://[user@]host[:port]", host)
 	}
-	value, ok = table["local_secrets"]
+	secrets, err := localSecrets(table)
+	if err != nil {
+		return Target{}, err
+	}
+	return Target{Host: host, LocalSecrets: secrets}, nil
+}
+
+func localSecrets(table map[string]any) ([]string, error) {
+	value, ok := table["local_secrets"]
 	if !ok {
-		return invalid("no local_secrets")
+		return nil, errors.New("no local_secrets")
 	}
 	items, ok := value.([]any)
 	if !ok {
-		return invalid("local_secrets is not an array")
+		return nil, errors.New("local_secrets is not an array")
 	}
 	if len(items) > maxLocalSecrets {
-		return invalid("more than %d local_secrets", maxLocalSecrets)
+		return nil, fmt.Errorf("more than %d local_secrets", maxLocalSecrets)
 	}
 	secrets := make([]string, 0, len(items))
 	for _, value := range items {
 		item, ok := value.(string)
 		if !ok || !ValidEnvItem(item) {
-			return invalid("local_secrets item %q is not %s<name>", fmt.Sprint(value), EnvItemPrefix)
+			return nil, fmt.Errorf("local_secrets item %q is not %s<name>", fmt.Sprint(value), EnvItemPrefix)
 		}
 		if slices.Contains(secrets, item) {
-			return invalid("local_secrets item %q repeated", item)
+			return nil, fmt.Errorf("local_secrets item %q repeated", item)
 		}
 		secrets = append(secrets, item)
 	}
-	return Target{Host: host, LocalSecrets: secrets}, nil
+	return secrets, nil
 }
 
 func SSHArgs(args []string) []string {
