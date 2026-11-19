@@ -10,7 +10,6 @@ import os
 import re
 import runpy
 import shlex
-import shutil
 import signal
 import stat
 import sys
@@ -24,11 +23,22 @@ from unittest import mock
 
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.daemon import (
+    CLEARED,
+    RECORD_FILE,
+    RUN_TIMEOUT,
+    client_home,
+    docker_call,
+    load_record,
+    save_record,
+)
 from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
     ConfigError,
     Container,
+    Daemon,
+    DaemonRecord,
     EnvironmentSpec,
     Launch,
     Liveness,
@@ -37,27 +47,31 @@ from ensemble.session.engine.types import (
     SessionBusy,
     SessionError,
     StatusState,
+    Target,
     Unanswered,
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
+    BROKER,
     TIMEOUT,
     BrokerError,
+    BrokerMissing,
     client_keys,
 )
-from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.hosts.docker.host import (
     FILES_STAGE,
     KEPT_RETRY,
+    PS_FORMAT,
     DockerHost,
 )
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
-from tests.session.unit.hosts.docker.support import BETA, UPDRAFT
+from tests.session.state_volumes import Volumes, reset
+from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, FakePopen, ssh_dir
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
@@ -76,6 +90,10 @@ PYTHON = "/opt/ensemble/venv/bin/python"
 IMAGE = "ensemble-worker:" + "a" * 64
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 DIGEST = "sha256:" + "c" * 64
+LOCAL_DAEMON = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+REMOTE = "ssh://u@pc"
+REMOTE_DAEMON = "PC-ID"
 HOME = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
 BAD_RECORDS = {
     "deep json": "[" * 2000 + "0" + "]" * 2000,
@@ -95,19 +113,38 @@ def done(rc=0, out="", err=""):
 
 
 class FakeDocker:
-    """The docker CLI: `ps` prints `ps`, `volume ls` prints `volumes`; an exec answers from `replies`, {command prefix: (rc, out,
-    err), an exception or a callable of the command}, the first matching prefix; else success.
+    """One daemon's docker CLI at `ep`: `ps` prints `ps`, `volume ls` prints `volumes` (by name: the
+    asked state volume when in `states`, None: any); an exec answers from `replies`, {command prefix:
+    (rc, out, err), an exception or a callable of the command}, the first matching prefix; else
+    success. `down`: every call fails as Docker does when it cannot reach its daemon. `others`:
+    another daemon's endpoint → its FakeDocker; a call to any other endpoint fails the test.
     """
 
     def __init__(self, ep, order):
         self.ep, self.order, self.ps, self.replies, self.inputs = ep, order, [], {}, []
-        self.volumes = []
+        self.volumes, self.down, self.states = [], False, None
+        self.readers, self.volume_rm, self.calls = [], (0, "", ""), []
+        self.others = {}
 
     def __call__(self, argv, env, *, input=None, timeout):
-        assert argv[:3] == [DOCKER, "--host", self.ep], argv
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
+        if argv[:2] == [DOCKER, "--host"] and argv[2] in self.others:
+            return self.others[argv[2]](argv, env, input=input, timeout=timeout)
+        assert argv[:3] == [DOCKER, "--host", self.ep], argv
         self.order.append(argv[3:])
         self.inputs.append(input)
+        self.calls.append((argv[3:], input))
+        if self.down:
+            return done(
+                1, "", f"Cannot connect to the Docker daemon at {self.ep}. Is it running?\n"
+            )
+        if argv[3:5] == ["ps", "--all"]:
+            return done(0, "".join(f"{reader}\n" for reader in self.readers))
+        if argv[3:5] == ["volume", "rm"]:
+            return done(*self.volume_rm)
+        if argv[3:6] == ["volume", "ls", "--filter"] and argv[6].startswith("name="):
+            volume = argv[6].removeprefix("name=")
+            return done(0, f"{volume}\n" if self.states is None or volume in self.states else "")
         if argv[3] in ("ps", "volume"):
             rows = self.ps if argv[3] == "ps" else self.volumes
             return done(0, "".join(f"{line}\n" for line in rows))
@@ -124,19 +161,31 @@ class FakeDocker:
 
 
 class FakeBroker:
-    """`failing`: {command: the error it raises}."""
+    """`failing`: {command: the error it raises}; `found`: the target it lists, counted in
+    `targets`; the daemon IDs build, close and workspace-rm were sent, in `built_daemons`,
+    `close_daemons` and `rm_daemons`.
+    """
 
-    def __init__(self, order, started):
+    def __init__(self, order, started, found):
         self.order, self.started, self.error, self.closed = order, started, None, []
         self.failing, self.refreshed = {}, threading.Event()
+        self.found, self.targets = found, 0
+        self.built_daemons, self.close_daemons, self.rm_daemons = [], [], []
 
     def version(self):
         self.order.append("version")
         if "version" in self.failing:
             raise self.failing["version"]
 
-    def build(self, package, *, plugins=(), **environment):
+    def target(self):
+        self.targets += 1
+        if "target" in self.failing:
+            raise self.failing["target"]
+        return self.found
+
+    def build(self, package, *, daemon, plugins=(), **environment):
         self.order.append(("build", package))
+        self.built_daemons.append(daemon)
         self.plugins, self.built = plugins, environment
         if "build" in self.failing:
             raise self.failing["build"]
@@ -155,12 +204,16 @@ class FakeBroker:
             raise self.failing["maintain"]
         return Maintained([], None, self.started.deadline)
 
-    def close(self, container):
+    def close(self, container, *, daemon):
         self.order.append(("close", container))
         self.closed.append(container)
+        self.close_daemons.append(daemon)
+        if "close" in self.failing:
+            raise self.failing["close"]
         return True
 
-    def workspace_rm(self, volume, *, force=False):
+    def workspace_rm(self, volume, *, force=False, daemon):
+        self.rm_daemons.append(daemon)
         self.order.append(
             ("workspace_rm", volume, "--force") if force else ("workspace_rm", volume)
         )
@@ -186,21 +239,21 @@ class Base(Case):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.ep = f"unix://{self.account}/.docker/run/docker.sock"
-        os.makedirs(os.path.dirname(self.ep.removeprefix("unix://")))
-        open(self.ep.removeprefix("unix://"), "w").close()
         self.cwd = os.path.join(self.account, "src", "repo")
         os.makedirs(self.cwd)
         self.order = []
         self.docker = FakeDocker(self.ep, self.order)
+        self.local = Daemon("local", self.ep, remote=False, path=SYSTEM_PATH, id=LOCAL_DAEMON)
         started = Started(
             CONTAINER,
             self.ep,
+            LOCAL_DAEMON,
             "sha256:" + "b" * 64,
             {},
             env={},
             deadline=None,
         )
-        self.broker = FakeBroker(self.order, started)
+        self.broker = FakeBroker(self.order, started, Target("local", (self.local,)))
         self.host = DockerHost(
             "docker",
             {"docker": DOCKER},
@@ -212,6 +265,27 @@ class Base(Case):
         popen = mock.patch("subprocess.Popen")
         self.spawn_mock = popen.start()
         self.addCleanup(popen.stop)
+
+    def targets(self, default, *daemons):
+        """The broker's target from now on, as the Host asks it afresh."""
+        self.broker.found = Target(default, daemons)
+        self.host._found = None
+
+    def remote_daemon(self):
+        """The remote daemon REMOTE, its broker ssh wrapper first on its PATH."""
+        path = f"{ssh_dir(self.home)}{os.pathsep}{SYSTEM_PATH}"
+        return Daemon("remote", REMOTE, remote=True, path=path, id=REMOTE_DAEMON)
+
+    def two_daemons(self, default="remote"):
+        """REMOTE, answered by `self.remote`, beside the local Docker Desktop."""
+        self.remote = FakeDocker(REMOTE, self.order)
+        self.docker.others[REMOTE] = self.remote
+        self.pc = self.remote_daemon()
+        self.targets(default, self.pc, self.local)
+
+    def recorded(self, name, found):
+        """Session `name`'s daemon record: `found`."""
+        save_record(name, DaemonRecord(found, DOCKER))
 
     def tui_session(self, name, gen=GEN):
         """The tui mode's session.json for `name`, as start writes it before the Host runs."""
@@ -372,10 +446,18 @@ class ClientEnvTest(Base):
     def test_resume_gets_the_same_env_and_touches_no_file(self):
         self.assertEqual(
             self.host._client_env("w", "agent", HOME, resume=True),
-            {"AGENT_HOME": os.path.join(self.home, ".ensemble", "docker-state", "w", "agent")},
+            {"AGENT_HOME": "/home/agent/.ensemble-state/agent"},
         )
         self.assertFalse(os.path.exists(self.state))
         self.assertFalse(self.host._inherit_env)
+
+    def test_home_store_is_the_sessions_state_volume(self):
+        self.assertEqual(
+            self.host.home_store("w", HOME).persisted(),
+            {"kind": "volume", "session": "w", "client": "agent"},
+        )
+        with self.assertRaisesRegex(ConfigError, "not supported on the Docker Host yet"):
+            self.host.home_store("w", None)
 
     def test_resume_argv_names_the_session(self):
         self.assertEqual(self.host._resume_argv("w"), ("ensemble-session", "resume", "w"))
@@ -461,11 +543,14 @@ class StartBase(Base):
 
     def setUp(self):
         super().setUp()
-        self.home_dir = os.path.join(self.state, "agent")
+        self.home_dir = client_home("agent")
+        self.volume_dir = os.path.join(self.state, "agent")  # the fake state volume's agent dir
         self.execs, self.handle = [], None
         popen = mock.patch("subprocess.Popen", side_effect=self.guard_popen)
         self.popen_mock = popen.start()
         self.addCleanup(popen.stop)
+        self.state_volumes = Volumes()
+        self.addCleanup(reset)
         self.launch = Launch(
             ("agent", "--flag"),
             cwd=self.cwd,
@@ -473,6 +558,8 @@ class StartBase(Base):
         )
 
     def guard_popen(self, argv, **kw):
+        if argv[3:4] in (["volume"], ["image"], ["run"]):
+            return self.state_volumes(argv, **kw)
         if argv[3:4] == ["attach"]:
             self.order.append("guard")
             proc = GuardAttach(argv)
@@ -522,22 +609,39 @@ class StartBase(Base):
         self.docker.replies[(PYTHON, "-I", worker_module.GUARD, "--probe")] = (rc, word + "\n", "")
 
     def history(self):
-        """A native transcript in the home, which the launch names."""
-        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript))
-        with open(transcript, "w") as f:
+        """A native transcript in the home, which the launch names; its file in the fake volume."""
+        stored = os.path.join(self.volume_dir, "projects", "p", "s1.jsonl")
+        os.makedirs(os.path.dirname(stored))
+        with open(stored, "w") as f:
             f.write("{}\n")
+        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
         self.launch = replace(self.launch, transcript=transcript)
-        return transcript
+        return stored
 
-    def refused_untouched(self, error, pattern):
-        """start(resume="1") fails with `pattern`, before any broker call, file or supervisor."""
+    def refused_before_start(self, error, pattern):
+        """start(resume="1") fails with `pattern`, after its build, before its start, manifest or
+        supervisor.
+        """
         self.order.clear()
         with self.assertRaisesRegex(error, pattern):
             self.start(resume="1")
-        self.assertNotIn("version", self.order)
+        self.assertIn(("build", REPO), self.order)
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
         self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
-        self.popen_mock.assert_not_called()
+        self.assertEqual(self.spawned(), [])
+
+    def spawned(self):
+        """Processes started other than the state reader's docker calls."""
+        return [
+            call.args[0]
+            for call in self.popen_mock.call_args_list
+            if call.args[0][3:4] not in (["volume"], ["image"], ["run"])
+        ]
+
+    def staged(self):
+        """The files the last start staged with FILES_STAGE, by container path."""
+        found = [json.loads(stdin) for call, stdin in self.docker.calls if FILES_STAGE in call]
+        return found[-1] if found else {}
 
 
 class StartTest(StartBase):
@@ -561,7 +665,7 @@ class StartTest(StartBase):
                     ),
                     self.assertRaises(SessionError) as raised,
                 ):
-                    self.host._stage_files(CONTAINER, {"runtime_files": files})
+                    self.host._stage_files(CONTAINER, {"runtime_files": files}, self.local)
                 self.assertNotIn("private", str(raised.exception))
 
     def test_runtime_projection_and_initial_expiry_are_staged_before_client(self):
@@ -569,13 +673,13 @@ class StartTest(StartBase):
         self.broker.started = replace(self.broker.started, deadline=expiry)
         files = json.dumps({"/run/ensemble/agent-store/" + "a" * 64 + ".json": "{}"})
         self.start(runtime_files=files, home_persistent='["sessions"]')
-        self.assertTrue(os.path.isdir(os.path.join(self.home_dir, "sessions")))
         self.assertIn(files, self.docker.inputs)
         with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
             self.assertEqual(json.load(f), expiry)
         with open(os.path.join(self.state, f"{GEN}.plan.json")) as f:
             self.assertEqual(
-                json.load(f)["mounts"], [{"path": self.home_dir + "/sessions", "rw": True}]
+                json.load(f)["mounts"],
+                [{"path": self.home_dir + "/sessions", "rw": True, "volume": "ensemble-state-w"}],
             )
 
     def test_staged_files_are_written_in_the_container_before_the_guard(self):
@@ -619,7 +723,7 @@ class StartTest(StartBase):
                 ),
                 self.assertRaisesRegex(SessionError, want) as raised,
             ):
-                self.host._stage_staged_files(CONTAINER, metadata)
+                self.host._stage_staged_files(CONTAINER, metadata, {}, self.local)
             self.assertNotIn("private", str(raised.exception))
 
     def test_a_failed_stage_rolls_the_start_back(self):
@@ -648,9 +752,6 @@ class StartTest(StartBase):
         self.assertEqual(self.broker.plugins, (UPDRAFT, BETA))
 
     def test_start_order(self):
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "old"), "w"):
-            pass
         process = self.start()
         manifest = os.path.join(self.state, f"{GEN}.json")
         ps = ["ps", "-a", "--filter", "label=ensemble.session", "--format"]
@@ -667,17 +768,19 @@ class StartTest(StartBase):
                 "guard",
             ],
         )
-        self.assertEqual(os.listdir(self.home_dir), [])
-        self.assertEqual(stat.S_IMODE(os.stat(self.home_dir).st_mode), 0o700)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertFalse(os.path.exists(self.volume_dir))
         with open(manifest) as f:
             self.assertEqual(
                 json.load(f),
                 {
                     "name": "w",
                     "generation": GEN,
+                    "daemon": LOCAL_DAEMON,
                     "image": IMAGE,
                     "cwd": self.cwd,
                     "workspace": "ensemble-ws-w",
+                    "state": "new",
                     "client": "agent",
                     "agent_dir": self.home_dir,
                     "hook_path": os.path.join(REPO, "bin", "ensemble-session"),
@@ -700,11 +803,12 @@ class StartTest(StartBase):
         )
         self.assertIsInstance(process, worker_module.DockerWorker)
 
-    def test_a_fresh_home_gets_the_clients_files(self):
+    def test_a_fresh_home_gets_the_clients_files_through_the_container(self):
         self.start(home_files=json.dumps({"settings.json": '{"model": "opus"}'}))
-        self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
-        with open(os.path.join(self.home_dir, "settings.json")) as f:
-            self.assertEqual(f.read(), '{"model": "opus"}')
+        self.assertEqual(
+            self.staged(), {os.path.join(self.home_dir, "settings.json"): '{"model": "opus"}'}
+        )
+        self.assertFalse(os.path.exists(self.volume_dir))
 
     CODEX = {
         "client": "codex",
@@ -714,40 +818,72 @@ class StartTest(StartBase):
         "home_persistent": '["sessions"]',
     }
 
-    def used(self, home, *kept):
-        """A home a closed session of the name left: an old file and tree in it and each `kept`
-        dir; a check that each of these dirs is still the same one (an open fd pins its inode).
-        """
-        dirs = [home, *(os.path.join(home, d) for d in kept)]
-        fds = []
-        for path in dirs:
-            os.makedirs(os.path.join(path, "old", "deep"), exist_ok=True)
-            with open(os.path.join(path, "old.jsonl"), "w") as f:
-                f.write("{}\n")
-            fds.append(os.open(path, os.O_RDONLY | os.O_DIRECTORY))
-            self.addCleanup(os.close, fds[-1])
-        return lambda: [
-            os.path.samestat(os.fstat(fd), os.lstat(p)) for fd, p in zip(fds, dirs, strict=True)
+    def state_calls(self):
+        """The docker calls this process made on state volumes or their readers."""
+        return [
+            o
+            for o in self.order
+            if isinstance(o, list)
+            and (o[:1] == ["rm"] or o[:2] == ["volume", "rm"] or any("state" in a for a in o))
         ]
 
-    def test_a_reused_codex_name_starts_with_its_bind_source_emptied_in_place(self):
-        """Docker Desktop can report a bind source recreated at a path it saw before as missing."""
-        home = os.path.join(self.state, "codex")
-        sessions = os.path.join(home, "sessions")
-        for run in range(3):
-            with self.subTest(run=run):
-                same = self.used(home, "sessions")
-                self.order.clear()
-                self.start(**self.CODEX, home_files=json.dumps({"sessions/x": "x"}))
-                self.assertEqual(same(), [True, True])
-                self.assertEqual(sorted(os.listdir(home)), ["sessions"])
-                self.assertEqual(os.listdir(sessions), ["x"])
-                os.unlink(os.path.join(sessions, "x"))
-                self.assertEqual(stat.S_IMODE(os.lstat(sessions).st_mode), 0o700)
-                self.assertIn(
-                    ("start", os.path.join(self.state, f"{GEN}.json")),
-                    [o[:2] for o in self.order if isinstance(o, tuple)],
-                )
+    def manifest_state(self):
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            return json.load(f)["state"]
+
+    def test_a_new_start_asks_the_broker_for_a_new_state_volume(self):
+        self.docker.readers = ["r1", "r2"]
+        self.start()
+        self.assertEqual(self.manifest_state(), "new")
+        self.assertEqual(self.state_calls(), [])
+
+    def test_a_failed_new_start_leaves_state_volumes_to_the_broker(self):
+        self.broker.error = BrokerError(10, "start_failed", "boom", "not_needed", None)
+        with self.assertRaises(BrokerError):
+            self.start()
+        self.assertEqual(self.state_calls(), [])
+
+    def test_a_daemon_it_cannot_list_fails_a_new_start_before_the_broker(self):
+        self.docker.down = True
+        with self.assertRaisesRegex(Unanswered, "^docker ps: Cannot connect"):
+            self.start()
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+
+    def test_an_unreachable_chosen_daemon_fails_a_new_start_before_any_build_or_record(self):
+        why = "Docker Desktop is not running"
+        self.targets("local", self.local._replace(id=None, unreachable=why))
+        with self.assertRaises(BrokerError) as raised:
+            self.start()
+        self.assertEqual(
+            (raised.exception.code, raised.exception.exit_code, raised.exception.message),
+            ("docker_unreachable", 7, f"Cannot reach Docker target {self.ep}: {why}."),
+        )
+        self.assertEqual(self.order, [])
+        self.assertIsNone(load_record("w"))
+
+    def test_a_resume_checks_history_with_the_built_image_after_the_build(self):
+        self.history()
+        self.start(resume="1")
+        (run,) = [c for c in self.state_volumes.calls if c[3] == "run"]
+        self.assertIn(DIGEST, run)
+
+    def test_a_resume_keeps_the_state_volume(self):
+        self.history()
+        self.start(resume="1")
+        self.assertEqual(self.manifest_state(), "keep")
+        self.assertEqual(self.state_calls(), [])
+
+    def test_every_start_records_its_daemon_before_its_checks(self):
+        for resume in ("0", "1"):
+            with self.subTest(resume=resume):
+                if resume == "1":
+                    self.history()
+                self.start(resume=resume)
+                self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        os.unlink(os.path.join(self.state, RECORD_FILE))
+        with self.assertRaisesRegex(ConfigError, "no native history"):
+            self.start(resume="1", home_dir="other", home_field="other_dir")
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
 
     def kept(self, resume="0", files=None):
         return self.start(
@@ -756,36 +892,23 @@ class StartTest(StartBase):
             home_files=json.dumps({} if files is None else files),
         )
 
-    def resumable(self, home):
-        transcript = os.path.join(home, "sessions", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        with open(transcript, "w") as f:
+    def resumable(self):
+        """A Codex transcript in the fake state volume, which the launch names."""
+        stored = os.path.join(self.state, "codex", "sessions", "s1.jsonl")
+        os.makedirs(os.path.dirname(stored), exist_ok=True)
+        with open(stored, "w") as f:
             f.write("{}\n")
+        transcript = os.path.join(client_home("codex"), "sessions", "s1.jsonl")
         self.launch = replace(self.launch, transcript=transcript)
 
-    def test_a_private_homes_copy_is_written_on_a_new_start_and_kept_across_resumes(self):
-        copy = os.path.join(self.state, "codex", "config", "config.toml")
+    def test_a_private_homes_copy_is_staged_on_a_new_start_and_never_on_a_resume(self):
+        home = client_home("codex")
         self.kept(files={"config/config.toml": "a = 1"})
-        with open(copy) as f:
-            self.assertEqual(f.read(), "a = 1")
-        self.assertEqual(stat.S_IMODE(os.lstat(os.path.dirname(copy)).st_mode), 0o700)
-        with open(copy, "w") as f:
-            f.write('service_tier = "fast"')
-        self.resumable(os.path.join(self.state, "codex"))
-        self.kept(resume="1")
-        with open(copy) as f:
-            self.assertEqual(f.read(), 'service_tier = "fast"')
-        self.kept(files={"config/config.toml": "b = 2"})
-        with open(copy) as f:
-            self.assertEqual(f.read(), "b = 2")
-
-    def test_a_resume_makes_a_missing_kept_dir_and_writes_nothing_in_it(self):
-        home = os.path.join(self.state, "codex")
-        self.resumable(home)
-        self.kept(resume="1")
-        config = os.path.join(home, "config")
-        self.assertEqual(os.listdir(config), [])
-        self.assertEqual(stat.S_IMODE(os.lstat(config).st_mode), 0o700)
+        self.assertEqual(self.staged(), {os.path.join(home, "config", "config.toml"): "a = 1"})
+        self.resumable()
+        self.docker.calls.clear()
+        self.kept(resume="1", files={"config/config.toml": "b = 2"})
+        self.assertEqual(self.staged(), {})
 
     def test_a_private_home_file_outside_its_kept_dirs_is_refused(self):
         for key in ("config.toml", "other/config.toml"):
@@ -797,58 +920,6 @@ class StartTest(StartBase):
                 ),
             ):
                 self.kept(files={key: "x"})
-
-    def test_a_reused_name_keeps_a_whole_bound_home_and_empties_it(self):
-        same = self.used(self.home_dir)
-        self.start(home_files=json.dumps({"settings.json": "{}"}))
-        self.assertEqual(same(), [True])
-        self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
-
-    def test_a_fresh_start_replaces_links_and_files_in_the_home_never_following_them(self):
-        home = os.path.join(self.state, "codex")
-        sessions = os.path.join(home, "sessions")
-        outside = os.path.join(self.home, "outside")
-        os.makedirs(outside)
-        with open(os.path.join(outside, "keep"), "w") as f:
-            f.write("x")
-        for case in ("home link", "sessions link", "sessions file", "links in sessions"):
-            with self.subTest(case=case):
-                if case == "home link":
-                    os.makedirs(self.state, exist_ok=True)
-                    os.symlink(outside, home)
-                else:
-                    os.makedirs(home, exist_ok=True)
-                    if case == "sessions link":
-                        os.symlink(outside, sessions)
-                    elif case == "sessions file":
-                        open(sessions, "w").close()
-                    else:
-                        os.makedirs(sessions)
-                        os.symlink(outside, os.path.join(sessions, "dir"))
-                        os.symlink(os.path.join(outside, "keep"), os.path.join(sessions, "file"))
-                self.start(**self.CODEX)
-                self.assertFalse(os.path.islink(home) or os.path.islink(sessions))
-                self.assertEqual(os.listdir(home), ["sessions"])
-                self.assertEqual(os.listdir(sessions), [])
-                self.assertEqual(os.listdir(outside), ["keep"])
-                shutil.rmtree(home)
-
-    def test_a_home_it_cannot_empty_fails_the_start_before_the_broker(self):
-        for target in ("shutil.rmtree", "os.unlink"):
-            with self.subTest(target=target):
-                self.used(self.home_dir)
-                self.order.clear()
-                with (
-                    mock.patch(target, side_effect=PermissionError(13, "Permission denied")),
-                    self.assertRaisesRegex(
-                        SessionError,
-                        f"^docker session w: cannot reset {re.escape(self.home_dir)}: Permission denied$",
-                    ),
-                ):
-                    self.start()
-                self.assertFalse(
-                    [o for o in self.order if isinstance(o, tuple) and o[0] == "start"]
-                )
 
     def test_the_manifest_lists_the_clients_providers(self):
         self.start(home_providers='["lab", "strata"]')
@@ -868,11 +939,12 @@ class StartTest(StartBase):
         self.assertNotIn("agent_account", manifest)
 
     def test_codex_resume_after_host_login_preserves_native_history(self):
-        home = os.path.join(self.state, "codex")
+        home = client_home("codex")
+        stored = os.path.join(self.state, "codex", "sessions", "rollout.jsonl")
         transcript = os.path.join(home, "sessions", "rollout.jsonl")
-        os.makedirs(os.path.dirname(transcript))
+        os.makedirs(os.path.dirname(stored))
         native = '{"session_id":"same-native-identity"}\n'
-        with open(transcript, "w") as stream:
+        with open(stored, "w") as stream:
             stream.write(native)
         self.launch = replace(self.launch, transcript=transcript, env={"CODEX_HOME": home})
         metadata = dict(
@@ -896,7 +968,7 @@ class StartTest(StartBase):
         until = {"at": "2100-01-01T00:00:00Z", "action": "close", "reason": "r"}
         self.broker.started = replace(self.broker.started, deadline=until)
         self.start(**metadata)
-        with open(transcript) as stream:
+        with open(stored) as stream:
             self.assertEqual(stream.read(), native)
         self.assertEqual(self.host_record()["sid"], "s1")
         with open(os.path.join(self.state, f"{GEN}.deadline.json")) as stream:
@@ -905,7 +977,7 @@ class StartTest(StartBase):
     def test_resume_keeps_the_home_and_starts_a_new_container(self):
         transcript = self.history()
         process = self.start(resume="1", home_files=json.dumps({"settings.json": "{}"}))
-        self.assertFalse(os.path.exists(os.path.join(self.home_dir, "settings.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.volume_dir, "settings.json")))
         with open(transcript) as f:
             self.assertEqual(f.read(), "{}\n")
         manifest = os.path.join(self.state, f"{GEN}.json")
@@ -942,8 +1014,8 @@ class StartTest(StartBase):
     ):
         old = os.path.join(self.account, "src", "old")
         self.docker.volumes = [f"ensemble-ws-w\t{old}"]
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "keep"), "w"):
+        os.makedirs(self.volume_dir)
+        with open(os.path.join(self.volume_dir, "keep"), "w"):
             pass
         dirty = (
             "Workspace ensemble-ws-w has uncommitted or unpushed work in: src/o/a. Delete it"
@@ -973,11 +1045,11 @@ class StartTest(StartBase):
                 with self.assertRaisesRegex(raised, pattern):
                     self.start()
                 self.assertEqual(self.order[-1], ("workspace_rm", "ensemble-ws-w"))
-                self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                self.assertEqual(os.listdir(self.volume_dir), ["keep"])
                 self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
                 self.popen_mock.assert_not_called()
 
-    def test_resume_without_native_history_fails_before_the_broker(self):
+    def test_resume_without_native_history_fails_before_the_start(self):
         missing = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
         outside = os.path.join(self.cwd, "s1.jsonl")
         with open(outside, "w") as f:
@@ -990,24 +1062,44 @@ class StartTest(StartBase):
         ):
             with self.subTest(case=case):
                 if keep:
-                    os.makedirs(self.home_dir, exist_ok=True)
-                    with open(os.path.join(self.home_dir, "keep"), "w"):
+                    os.makedirs(self.volume_dir, exist_ok=True)
+                    with open(os.path.join(self.volume_dir, "keep"), "w"):
                         pass
                 self.launch = replace(self.launch, transcript=transcript)
-                self.refused_untouched(
+                self.refused_before_start(
                     ConfigError, f"docker session w: no native history to resume in {self.home_dir}"
                 )
                 if keep:
-                    self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                    self.assertEqual(os.listdir(self.volume_dir), ["keep"])
 
-    def test_resume_through_a_link_fails_before_the_broker(self):
+    def test_a_resume_check_docker_cannot_answer_names_its_reason(self):
+        self.history()
+        self.state_volumes.error = "error during connect: ssh: connect to host pc: refused"
+        self.refused_before_start(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}: "
+            "docker volume ls: error during connect: ssh: connect to host pc: refused$",
+        )
+
+    def test_a_transcript_in_another_sessions_home_is_no_history(self):
+        other = os.path.join(os.path.dirname(self.state), "v", "agent", "s1.jsonl")
+        os.makedirs(os.path.dirname(other))
+        with open(other, "w") as f:
+            f.write("{}\n")
+        self.launch = replace(self.launch, transcript=other)
+        self.refused_before_start(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}$",
+        )
+
+    def test_resume_through_a_link_fails_before_the_start(self):
         secret = os.path.join(self.account, "secret.jsonl")
         with open(secret, "w") as f:
             f.write("host only\n")
         transcript = self.history()
         os.remove(transcript)
         os.symlink(secret, transcript)
-        self.refused_untouched(ConfigError, "no native history")
+        self.refused_before_start(ConfigError, "no native history")
         project = os.path.dirname(transcript)
         os.remove(transcript)
         os.rmdir(project)
@@ -1015,11 +1107,11 @@ class StartTest(StartBase):
         os.makedirs(elsewhere)
         os.symlink(secret, os.path.join(elsewhere, "s1.jsonl"))
         os.symlink(elsewhere, project)
-        self.refused_untouched(ConfigError, "no native history")
+        self.refused_before_start(ConfigError, "no native history")
 
     def test_a_missing_or_bad_resume_flag_is_refused_untouched(self):
-        os.makedirs(self.home_dir)
-        with open(os.path.join(self.home_dir, "keep"), "w"):
+        os.makedirs(self.volume_dir)
+        with open(os.path.join(self.volume_dir, "keep"), "w"):
             pass
         for flag in (None, "", "yes", "2"):
             with self.subTest(flag=flag):
@@ -1027,7 +1119,7 @@ class StartTest(StartBase):
                 with self.assertRaisesRegex(SessionError, "docker session w: bad resume flag"):
                     self.start(resume=flag)
                 self.assertEqual([step[0] for step in self.order], ["ps"])
-                self.assertEqual(os.listdir(self.home_dir), ["keep"])
+                self.assertEqual(os.listdir(self.volume_dir), ["keep"])
 
     def test_broker_environment_is_applied_without_interpreting_credentials(self):
         identity = {"ENSEMBLE_PR_AUTHOR": BOT, **GIT_IDENTITY, "FUTURE_IDENTITY": "opaque"}
@@ -1057,6 +1149,7 @@ class StartTest(StartBase):
         self.broker.started = Started(
             CONTAINER,
             self.ep,
+            LOCAL_DAEMON,
             "sha256:" + "b" * 64,
             {"claude": "2.1.0"},
             env={},
@@ -1165,7 +1258,9 @@ class StartTest(StartBase):
                         "image": IMAGE,
                         "image_digest": DIGEST,
                         "workspace": {"volume": "ensemble-ws-w", "path": self.cwd},
-                        "mounts": [{"path": self.home_dir, "rw": True}],
+                        "mounts": [
+                            {"path": self.home_dir, "rw": True, "volume": "ensemble-state-w"}
+                        ],
                         "credential": "agent-token",
                     },
                 )
@@ -1175,7 +1270,7 @@ class StartTest(StartBase):
                     [
                         f"{head} image {IMAGE} {DIGEST}",
                         f"{head} workspace ensemble-ws-w at {self.cwd} rw",
-                        f"{head} mounts {self.home_dir} rw",
+                        f"{head} mounts {self.home_dir} rw (ensemble-state-w)",
                         f"{head} credential agent-token",
                     ],
                 )
@@ -1241,7 +1336,7 @@ class StartTest(StartBase):
             ),
         ):
             self.start()
-        self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
+        self.broker.close.assert_called_once_with(f"ensemble-w-{old}", daemon=LOCAL_DAEMON)
 
     def test_an_unrecognised_container_of_the_name_refuses_start_naming_it(self):
         self.docker.ps = [f"ensemble-w-{GEN.upper()}\tw\t{GEN.upper()}\trunning"]
@@ -1262,17 +1357,27 @@ class StartTest(StartBase):
             found = json.load(f)
         self.assertEqual((found["cwd"], found["workspace"]), (cwd, "ensemble-ws-w"))
 
-    def test_a_foreign_container_or_endpoint_rolls_back(self):
-        for changes in (
-            {"container": f"ensemble-x-{GEN}"},
-            {"endpoint": "unix:///x/.docker/run/docker.sock"},
-        ):
-            with self.subTest(changes=changes):
-                self.broker.started = Started(**{**vars(self.broker.started), **changes})
-                with self.assertRaisesRegex(SessionError, "broker: started"):
-                    self.start()
-                self.assertEqual(self.order[-1], ("close", CONTAINER))
-                self.assertNotIn("guard", self.order)
+    def test_a_reply_at_another_address_of_the_same_daemon_is_accepted(self):
+        self.broker.started = Started(
+            **{**vars(self.broker.started), "endpoint": "ssh://u@pc.tail1234.ts.net"}
+        )
+        self.start()
+        self.assertIn("guard", self.order)
+
+    def test_a_foreign_container_rolls_back_on_the_chosen_daemon(self):
+        self.broker.started = Started(
+            **{**vars(self.broker.started), "container": f"ensemble-x-{GEN}"}
+        )
+        with self.assertRaisesRegex(SessionError, "broker: started"):
+            self.start()
+        self.assertEqual(self.order[-1], ("close", CONTAINER))
+        self.assertEqual(self.broker.close_daemons, [LOCAL_DAEMON])
+        self.assertNotIn("guard", self.order)
+
+    def test_the_reply_s_daemon_is_the_broker_s_to_check(self):
+        self.broker.started = Started(**{**vars(self.broker.started), "daemon": "ABCD:EFGH:IJKL"})
+        self.start()
+        self.assertIn("guard", self.order)
 
     def test_cleanup_failed_retries_close(self):
         self.broker.error = BrokerError(9, "start_failed", "no", "failed", CONTAINER)
@@ -1329,7 +1434,9 @@ class StartTest(StartBase):
     def test_a_signal_during_the_broker_start_closes_its_container(self):
         for signum in STOPS:
             with self.subTest(signum=signum):
-                self.broker = self.host.broker = FakeBroker(self.order, self.broker.started)
+                self.broker = self.host.broker = FakeBroker(
+                    self.order, self.broker.started, self.broker.found
+                )
                 self.stopped_at("start", signum)
                 self.assertEqual(self.broker.closed, [CONTAINER])
                 self.popen_mock.assert_not_called()
@@ -1628,6 +1735,133 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.closed, [])
 
 
+class ResumeDaemonTest(StartBase):
+    """A resume runs on the daemon its record names, found by ID; with no record, the local one."""
+
+    OLD = Daemon(
+        "remote", "ssh://u@old", remote=True, path=f"/nowhere{os.pathsep}{SYSTEM_PATH}", id="A"
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+        self.history()
+
+    def closed(self, found):
+        """A started, then closed session w recorded on `found`."""
+        self.recorded("w", found)
+        self.start(resume="1")
+        self.close_quietly(self.handle)
+        self.handle = None
+        self.order.clear()
+        self.broker.built_daemons.clear()
+
+    def refused(self, error, pattern):
+        """Each resume path fails with `pattern` before any build or start, the record kept; the
+        start lists its daemons, the checks run no docker command.
+        """
+        with open(os.path.join(self.state, RECORD_FILE), "rb") as f:
+            before = f.read()
+        metadata = {**self.METADATA, "resume": "1"}
+        for check in (
+            lambda: self.host._preflight("w", self.launch, metadata),
+            lambda: self.host._validate("w", self.launch, metadata),
+            lambda: self.start(resume="1"),
+        ):
+            self.order.clear()
+            with self.assertRaisesRegex(error, pattern):
+                check()
+            self.assertEqual([o for o in self.order if not isinstance(o, list)], [])
+            self.assertEqual([o for o in self.order if o[:2] != ["ps", "-a"]], [])
+        with open(os.path.join(self.state, RECORD_FILE), "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.broker.built_daemons, [])
+
+    def test_resume_where_no_daemon_has_its_id_is_refused_naming_both_targets(self):
+        self.recorded("w", self.OLD)
+        self.refused(
+            ConfigError,
+            "^"
+            + re.escape(
+                "docker session w: cannot resume it here: its Docker target is ssh://u@old (daemon"
+                f" A), the current target is {REMOTE} (daemon {REMOTE_DAEMON}); set the Docker"
+                " target back to ssh://u@old to resume it"
+            )
+            + "$",
+        )
+
+    def test_a_local_session_is_refused_once_the_local_daemon_is_another(self):
+        self.recorded("w", self.local._replace(id="OLD-DESKTOP"))
+        self.refused(
+            ConfigError,
+            "^docker session w: cannot resume it here: its Docker target is the local Docker"
+            rf" Desktop \({re.escape(self.ep)}\) \(daemon OLD-DESKTOP\), the current target is"
+            rf" {REMOTE} \(daemon {REMOTE_DAEMON}\)",
+        )
+
+    def test_a_miss_while_a_daemon_is_unreachable_is_that_daemon_s_unreachable_error(self):
+        self.recorded("w", self.OLD)
+        why = "ssh: connect to host pc port 22: Connection refused"
+        self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        self.refused(BrokerError, f"^broker: Cannot reach Docker target {REMOTE}: {why}\\.$")
+
+    def test_resume_at_another_address_of_the_same_daemon_starts_there(self):
+        self.closed(self.pc._replace(endpoint="ssh://u@pc.old"))
+        self.assertEqual(self.broker.built_daemons, [])
+        self.start(resume="1")
+        self.assertIn("guard", self.order)
+        self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON])
+        [(argv, _, _), *_] = reversed(self.execs)
+        self.assertEqual(argv[:3], [DOCKER, "--host", REMOTE])
+        self.assertEqual(load_record("w").daemon.endpoint, "ssh://u@pc.old")
+
+    def test_a_session_with_no_record_resumes_on_the_local_daemon_and_records_it(self):
+        self.assertFalse(os.path.exists(os.path.join(self.state, RECORD_FILE)))
+        self.start(resume="1")
+        self.assertIn("guard", self.order)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            self.assertEqual(json.load(f)["daemon"], LOCAL_DAEMON)
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        self.assertEqual([call for call, _ in self.remote.calls if call[:2] != ["ps", "-a"]], [])
+        [(argv, _, _)] = self.execs
+        self.assertEqual(argv[:3], [DOCKER, "--host", self.ep])
+
+    def test_a_session_with_no_record_and_the_local_daemon_down_is_its_unreachable_error(self):
+        why = "Docker Desktop is not running"
+        self.targets("remote", self.pc, self.local._replace(id=None, unreachable=why))
+        metadata = {**self.METADATA, "resume": "1"}
+        for check in (
+            lambda: self.host._preflight("w", self.launch, metadata),
+            lambda: self.host._validate("w", self.launch, metadata),
+            lambda: self.start(resume="1"),
+        ):
+            with self.assertRaisesRegex(
+                BrokerError, f"^broker: Cannot reach Docker target {re.escape(self.ep)}: {why}\\.$"
+            ):
+                check()
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertIsNone(load_record("w"))
+
+    def test_a_malformed_record_fails_a_resume_naming_it(self):
+        path = os.path.join(self.state, RECORD_FILE)
+        with open(path, "w") as f:
+            f.write("{")
+        metadata = {**self.METADATA, "resume": "1"}
+        for check in (
+            lambda: self.host._preflight("w", self.launch, metadata),
+            lambda: self.host._validate("w", self.launch, metadata),
+            lambda: self.start(resume="1"),
+        ):
+            with self.assertRaisesRegex(
+                SessionError, f"^docker session w: daemon record: .*{re.escape(path)}"
+            ):
+                check()
+        self.assertEqual(self.broker.built_daemons, [])
+        with open(path) as f:
+            self.assertEqual(f.read(), "{")
+
+
 class PreflightTest(Base):
     def validate(self):
         self.host.validate("w", Launch(("agent",), cwd=self.cwd, env={}))
@@ -1817,7 +2051,7 @@ class SweepTest(Base):
         self.docker.ps = [self.row("a"), self.row("b")]
         closes = iter([SessionError("broker: boom"), True])
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             found = next(closes)
             if isinstance(found, BaseException):
@@ -1853,9 +2087,12 @@ class ReclaimTest(Base):
             step[1] for step in self.order if isinstance(step, tuple) and step[0] == "workspace_rm"
         ]
 
+    def kept_marker(self, volume):
+        return os.path.join(self.kept, f"{volume}@{LOCAL_DAEMON}")
+
     def marker(self, volume, text="", age=0):
         os.makedirs(self.kept, exist_ok=True)
-        path = os.path.join(self.kept, volume)
+        path = self.kept_marker(volume)
         with open(path, "w") as f:
             f.write(text)
         then = time.time() - age
@@ -1894,7 +2131,7 @@ class ReclaimTest(Base):
                 self.order.clear()
                 self.broker.failing = {}
 
-                def remove(volume, code=code):
+                def remove(volume, code=code, **_):
                     self.order.append(("workspace_rm", volume))
                     if volume == self.GONE:
                         raise BrokerError(12, code, "kept", "not_needed", None)
@@ -1904,7 +2141,7 @@ class ReclaimTest(Base):
                 with self.assertLogs("session", "WARNING"):
                     self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [self.GONE, "ensemble-ws-gone"])
-                os.unlink(os.path.join(self.kept, self.GONE))
+                os.unlink(self.kept_marker(self.GONE))
 
     def test_a_failed_batch_warns_once_per_volume(self):
         self.docker.volumes.append(f"ensemble-ws-gone\t{self.account}/gone/w")
@@ -1937,26 +2174,54 @@ class ReclaimTest(Base):
         thread.assert_called_once()
         self.assertEqual(self.order, [])
 
+    def test_background_reclaim_passes_a_set_ssh_agent_socket(self):
+        self.spawn_mock.side_effect = None
+        with (
+            mock.patch("threading.Thread"),
+            mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/private/agent.sock"}),
+        ):
+            self.host._spawn_reclaim()
+        env = self.spawn_mock.call_args.kwargs["env"]
+        self.assertEqual(set(env), {"PATH", "HOME", "PYTHONPATH", "SSH_AUTH_SOCK"})
+        self.assertEqual(env["SSH_AUTH_SOCK"], "/private/agent.sock")
+
     def test_a_background_spawn_failure_warns_and_returns(self):
         self.spawn_mock.side_effect = OSError("cannot spawn")
         with self.assertLogs("session", "WARNING") as logs:
             self.host._spawn_reclaim()
         self.assertIn("docker reclaim: cannot spawn", logs.output[0])
 
-    def test_the_background_entrypoint_skips_without_a_daemon(self):
+    def test_the_background_entrypoint_asks_no_unreachable_daemon(self):
         module = sys.modules[DockerHost.__module__]
-        os.unlink(self.ep.removeprefix("unix://"))
+        down = {
+            "default": "local",
+            "daemons": [
+                {
+                    "name": "local",
+                    "endpoint": self.ep,
+                    "remote": False,
+                    "path": SYSTEM_PATH,
+                    "unreachable": "Docker Desktop is not running",
+                }
+            ],
+        }
+        popen = FakePopen(
+            (b'{"protocol_version": "43"}\n', b"", 0), (json.dumps(down).encode(), b"", 0)
+        )
+        self.spawn_mock.side_effect = popen
         with mock.patch("sys.argv", [module.__file__, DOCKER]):
             runpy.run_path(module.__file__, run_name="__main__")
+        self.assertEqual(
+            [argv for argv, _, _ in popen.calls], [[BROKER, "version"], [BROKER, "target"]]
+        )
         self.assertEqual(self.order, [])
-        self.spawn_mock.assert_not_called()
 
     def test_a_workers_removal_schedules_reclaim_after_closing_the_container(self):
         def spawn():
             self.order.append("reclaim")
 
         with mock.patch.object(self.host, "_spawn_reclaim", side_effect=spawn):
-            self.host._remove(CONTAINER)
+            self.host._remove(CONTAINER, self.local)
         self.assertEqual(self.order, [("close", CONTAINER), "reclaim"])
 
     def test_unsaved_work_keeps_the_volume_and_warns_once_for_good(self):
@@ -1969,7 +2234,7 @@ class ReclaimTest(Base):
         self.assertEqual(
             logs.output, [f"WARNING:session:docker workspace {self.GONE} kept: {message}"]
         )
-        marker = os.path.join(self.kept, self.GONE)
+        marker = self.kept_marker(self.GONE)
         self.assertTrue(os.path.isfile(marker))
         old = time.time() - 10 * KEPT_RETRY
         os.utime(marker, (old, old))
@@ -1990,7 +2255,7 @@ class ReclaimTest(Base):
                     self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [self.GONE])
                 self.assertIn(f"docker workspace {self.GONE} kept: ", logs.output[0])
-                marker = os.path.join(self.kept, self.GONE)
+                marker = self.kept_marker(self.GONE)
                 with open(marker) as f:
                     self.assertEqual(f.read(), "failed")
                 self.order.clear()
@@ -2008,7 +2273,9 @@ class ReclaimTest(Base):
             self.marker(name)
         self.docker.volumes = self.docker.volumes[1:]
         self.host.reclaim_volumes()
-        self.assertEqual(sorted(os.listdir(self.kept)), [".lock", "ensemble-ws-here"])
+        self.assertEqual(
+            sorted(os.listdir(self.kept)), [".lock", f"ensemble-ws-here@{LOCAL_DAEMON}"]
+        )
         self.assertEqual(self.removed(), [])
 
     def test_a_held_lock_or_no_daemon_socket_skips_reclaim(self):
@@ -2019,16 +2286,21 @@ class ReclaimTest(Base):
         self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [])
         fcntl.flock(busy, fcntl.LOCK_UN)
-        os.remove(self.ep.removeprefix("unix://"))
+        self.docker.down = True
+        self.order.clear()
+        with self.assertLogs("session", "WARNING"):
+            self.host.reclaim_volumes()
+        self.assertEqual([step[:2] for step in self.order], [["volume", "ls"]])
+        self.targets("local", self.local._replace(id=None, unreachable="not running"))
         self.order.clear()
         self.host.reclaim_volumes()
-        self.assertEqual(self.order, [])
+        self.assertEqual((self.order, self.removed()), ([], []))
 
     def test_without_the_daemon_or_the_cli_a_kept_marker_stays(self):
         marker = self.marker(self.GONE)
-        os.remove(self.ep.removeprefix("unix://"))
+        self.docker.down = True
         self.host.reclaim_volumes()
-        open(self.ep.removeprefix("unix://"), "w").close()
+        self.docker.down = False
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "No such file", DOCKER))
         self.host.reclaim_volumes()
         self.assertTrue(os.path.exists(marker))
@@ -2088,13 +2360,95 @@ class RemoveWorkspacesTest(Base):
         )
 
     def test_remove_workspaces_without_docker_refuses(self):
-        os.remove(self.ep.removeprefix("unix://"))
-        with self.assertRaisesRegex(SessionError, "workspaces unknown"):
+        self.targets("local", self.local._replace(id=None, unreachable="not running"))
+        with self.assertRaisesRegex(
+            SessionError, f"workspaces unknown .*Docker target {re.escape(self.ep)} unreachable"
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.targets("local", self.local)
+        self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "No such file", DOCKER))
+        with self.assertRaisesRegex(SessionError, "workspaces unknown .*no Docker CLI"):
             self.host.remove_workspaces(self.agent)
         self.assertEqual(self.removals(), [])
 
     def test_no_workspace_of_the_cwd_removes_none(self):
         self.assertEqual(self.host.remove_workspaces(os.path.join(self.account, "none")), [])
+        self.assertEqual(self.removals(), [])
+
+    def session(self, name, cwd, found=None):
+        """Session `name`'s Mac records: its generation's manifest at `cwd`, and its daemon record
+        `found` if any.
+        """
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "kind": "tui"}, f)
+        with open(os.path.join(state, f"{GEN}.json"), "w") as f:
+            json.dump({"name": name, "generation": GEN, "cwd": cwd}, f)
+        if found is not None:
+            self.recorded(name, found)
+
+    def test_a_session_on_an_unlisted_daemon_is_removed_by_its_recorded_id(self):
+        gone = self.local._replace(id="GONE-ID")
+        self.session("reviewer-bbbb", self.agent, gone)
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            removed,
+            [
+                "ensemble-ws-engineer-TASK-1-0b6f2c1e",
+                "ensemble-ws-pm-TASK-1-1a2b3c4d",
+                "ensemble-ws-reviewer-bbbb",
+            ],
+        )
+        self.assertEqual(self.broker.rm_daemons, [LOCAL_DAEMON, LOCAL_DAEMON, "GONE-ID"])
+
+    def test_a_session_on_a_daemon_no_longer_configured_fails_naming_its_id(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent, self.local._replace(id="GONE-ID"))
+        real = self.broker.workspace_rm
+
+        def workspace_rm(volume, *, force=False, daemon):
+            real(volume, force=force, daemon=daemon)
+            if daemon == "GONE-ID":
+                message = "Docker daemon GONE-ID is not configured."
+                raise BrokerError(7, "docker_unreachable", message, "not_needed", None)
+            return True
+
+        self.broker.workspace_rm = workspace_rm
+        with self.assertRaisesRegex(
+            SessionError,
+            "^docker workspace ensemble-ws-pm-TASK-1-1a2b3c4d kept: broker: Docker daemon GONE-ID"
+            " is not configured.$",
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            list(zip([step[1] for step in self.removals()], self.broker.rm_daemons, strict=True)),
+            [
+                ("ensemble-ws-engineer-TASK-1-0b6f2c1e", LOCAL_DAEMON),
+                ("ensemble-ws-pm-TASK-1-1a2b3c4d", "GONE-ID"),
+            ],
+        )
+
+    def test_a_session_with_no_record_is_the_local_daemon_s(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent)
+        self.session("legacy", self.agent)
+        self.session("elsewhere", os.path.join(self.account, "none"), self.local._replace(id="X"))
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            removed, ["ensemble-ws-engineer-TASK-1-0b6f2c1e", "ensemble-ws-pm-TASK-1-1a2b3c4d"]
+        )
+        self.assertEqual(self.broker.rm_daemons, [LOCAL_DAEMON, LOCAL_DAEMON])
+
+    def test_a_malformed_record_fails_naming_it_and_removes_nothing(self):
+        self.session("pm-TASK-1-1a2b3c4d", self.agent)
+        path = os.path.join(
+            self.home, ".ensemble", "docker-state", "pm-TASK-1-1a2b3c4d", RECORD_FILE
+        )
+        with open(path, "w") as f:
+            json.dump({"name": "local", "id": "../x"}, f)
+        with self.assertRaisesRegex(
+            SessionError, f"^docker session pm-TASK-1-1a2b3c4d: daemon record: .*{re.escape(path)}"
+        ):
+            self.host.remove_workspaces(self.agent)
         self.assertEqual(self.removals(), [])
 
 
@@ -2134,6 +2488,22 @@ class LastLinesTest(Base):
 
 
 class ListTest(Base):
+    def test_without_a_broker_nothing_is_listed_and_admission_fails(self):
+        self.broker.failing["target"] = BrokerMissing("broker /usr/local/libexec/x: missing")
+        self.assertEqual(self.host.list(), [])
+        self.assertEqual(self.host.rows(), [])
+        with self.assertRaisesRegex(SessionError, "inventory unavailable .*x: missing"):
+            self.host._capacity_rows()
+        self.assertEqual(self.docker.order, [])
+
+    def test_a_failing_target_is_reported_not_hidden(self):
+        self.broker.failing["target"] = SessionError("broker: invalid target setting")
+        with self.assertRaisesRegex(SessionError, "invalid target setting"):
+            self.host.list()
+        with self.assertLogs("session", "WARNING") as logs:
+            self.assertEqual(self.host.rows(), [])
+        self.assertIn("docker rows: broker: invalid target setting", logs.output[0])
+
     def test_damaged_records_leave_healthy_inventory_available(self):
         self.listed("bad", "w")
         self.guarded_record()
@@ -2150,9 +2520,16 @@ class ListTest(Base):
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         with self.assertRaisesRegex(SessionError, "inventory unavailable"):
             self.host._capacity_rows()
-        os.unlink(self.ep.removeprefix("unix://"))
         self.host.run = self.docker
-        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+        self.targets("local", self.local._replace(id=None, unreachable="not running"))
+        with self.assertRaisesRegex(
+            SessionError, f"inventory unavailable .*Docker target {re.escape(self.ep)} unreachable"
+        ):
+            self.host._capacity_rows()
+        self.assertEqual(self.order, [])
+        self.targets("local", self.local)
+        self.docker.down = True
+        with self.assertRaisesRegex(Unanswered, "^docker ps: Cannot connect"):
             self.host._capacity_rows()
 
     def test_admission_inventory_reads_successful_empty_and_populated_results(self):
@@ -2239,13 +2616,14 @@ class ListTest(Base):
         with self.assertRaisesRegex(SessionError, "docker ps"):
             self.host.list()
 
-    def test_no_daemon_socket_or_cli_lists_nothing(self):
+    def test_an_unreachable_daemon_or_no_cli_lists_nothing(self):
         self.listed("w")
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         self.assertEqual(self.host.list(), [])
-        os.unlink(self.ep.removeprefix("unix://"))
         self.host.run = self.docker
-        self.assertEqual((self.host.list(), self.host.rows(), self.order), ([], [], []))
+        self.targets("local", self.local._replace(id=None, unreachable="not running"))
+        self.assertEqual((self.host.list(), self.host.rows()), ([], []))
+        self.assertEqual(self.order, [])
 
     def test_attach_target_of_an_unknown_or_unguarded_row_is_no_session(self):
         for found in ({}, {"mode": "guard"}, {"kind": "headless"}, {"kind": "tui"}):
@@ -2280,6 +2658,450 @@ class AttachTargetTest(Base):
             self.host.attach_target("x")
 
 
+class TwoDaemonsTest(Base):
+    """REMOTE beside the local Docker Desktop: listing, sweep and liveness on both."""
+
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+
+    def worker(self, docker, name, *, kind="tui"):
+        docker.ps.append(f"ensemble-{name}-{GEN}\t{name}\t{GEN}\trunning")
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "sid": "s1", "client": "agent", "kind": kind}, f)
+        self.recorded(name, self.pc if docker is self.remote else self.local)
+
+    def test_ls_lists_workers_on_both_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rows = self.host.rows()
+        self.assertEqual(([row.name for row in rows], err.getvalue()), (["mini", "w"], ""))
+        self.assertEqual(self.host.list(), ["mini", "w"])
+
+    def test_ls_names_an_unreachable_daemon_and_lists_the_other(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as err,
+            self.assertLogs("session", "WARNING"),
+        ):
+            rows = self.host.rows()
+        self.assertEqual([row.name for row in rows], ["mini"])
+        self.assertIn(f"{REMOTE} unreachable; its workers are not listed", err.getvalue())
+        with self.assertLogs("session", "WARNING"):
+            self.assertEqual(self.host.list(), ["mini"])
+
+    def test_a_daemon_the_target_could_not_reach_is_never_asked(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.targets("remote", self.pc._replace(id=None, unreachable="refused"), self.local)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rows = self.host.rows()
+        self.assertEqual([row.name for row in rows], ["mini"])
+        self.assertIn(f"{REMOTE} unreachable; its workers are not listed", err.getvalue())
+        self.host.sweep("other")
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+        self.assertEqual(self.remote.calls, [])
+        self.assertEqual(self.broker.targets, 1)
+
+    def test_admission_counts_reachable_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        with self.assertLogs("session", "WARNING"):
+            self.assertEqual([row.name for row in self.host._capacity_rows()], ["mini"])
+
+    def test_admission_fails_when_no_daemon_answers(self):
+        self.remote.down = self.docker.down = True
+        with (
+            self.assertLogs("session", "WARNING"),
+            self.assertRaisesRegex(SessionError, "inventory unavailable") as caught,
+        ):
+            self.host._capacity_rows()
+        self.assertIn(REMOTE, str(caught.exception))
+        self.assertIn(self.ep, str(caught.exception))
+
+    def test_sweep_closes_free_rows_on_both_daemons(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.host.sweep("other")
+        self.assertEqual(
+            sorted(zip(self.broker.closed, self.broker.close_daemons, strict=True)),
+            [(f"ensemble-mini-{GEN}", LOCAL_DAEMON), (f"ensemble-w-{GEN}", REMOTE_DAEMON)],
+        )
+
+    def test_a_daemon_that_times_out_is_down_and_the_other_still_answers(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.replies = {}
+        run = self.host.run
+
+        def timing_out(argv, env, **kw):
+            if argv[2] == REMOTE and argv[3:5] == ["ps", "-a"]:
+                raise TimeoutExpired(argv, RUN_TIMEOUT)
+            return run(argv, env, **kw)
+
+        self.host.run = timing_out
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as err,
+            self.assertLogs("session", "WARNING"),
+        ):
+            self.assertEqual([row.name for row in self.host.rows()], ["mini"])
+            self.assertEqual([row.name for row in self.host._capacity_rows()], ["mini"])
+            self.host.sweep("other")
+        self.assertIn(f"{REMOTE} unreachable", err.getvalue())
+        self.assertEqual(self.broker.closed, [f"ensemble-mini-{GEN}"])
+
+    def test_a_worker_on_an_unreachable_daemon_is_not_taken_as_ended(self):
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        with self.assertLogs("session", "WARNING"):
+            self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+
+    def test_a_session_on_a_daemon_the_target_does_not_list_is_unknown_never_absent(self):
+        self.worker(self.docker, "w")
+        self.recorded("w", self.pc._replace(id="GONE-ID"))
+        self.assertEqual(self.host._row_liveness("w", GEN), Liveness.UNKNOWN)
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+        self.docker.ps = []
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+        self.assertEqual(self.docker.execs(), [])
+
+    def test_a_session_s_liveness_looks_only_at_its_own_daemon(self):
+        self.worker(self.remote, "w")
+        self.docker.ps.append(f"ensemble-w-{GEN}\tw\t{GEN}\trunning")
+        self.remote.ps = []
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.ABSENT)
+        self.assertEqual(self.docker.execs(), [])
+
+    def test_sweep_leaves_an_unreachable_daemon_alone(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        with self.assertLogs("session", "WARNING"):
+            self.host.sweep("other")
+        self.assertEqual(
+            (self.broker.closed, self.broker.close_daemons),
+            ([f"ensemble-mini-{GEN}"], [LOCAL_DAEMON]),
+        )
+        self.assertFalse([call for call in self.remote.calls if call[0][0] != "ps"])
+        self.remote.down = False
+        self.assertIn("w", self.host.list())
+
+    def test_a_local_row_s_liveness_and_display_use_the_local_daemon(self):
+        self.worker(self.docker, "mini")
+        self.host.attach_target("mini")
+        view = self.host.attach_target("mini")
+        self.assertEqual(view.argv[view.argv.index(DOCKER) + 2], self.ep)
+        self.host._row_liveness("mini", GEN)
+        self.assertTrue(self.docker.execs())
+        self.assertFalse([c for c in self.remote.calls if c[0][0] == "exec"])
+
+
+class DaemonChoiceTest(StartBase):
+    """A new session's daemon: its environment's, else the target's default (REMOTE)."""
+
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+
+    def manifest(self):
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            return json.load(f)
+
+    def remote_work(self):
+        """The remote daemon's calls other than inventory listings."""
+        return [call for call, _ in self.remote.calls if call[:2] != ["ps", "-a"]]
+
+    def test_an_environment_naming_local_starts_there_throughout(self):
+        handle = self.start(environment=carried(replace(ENVIRONMENT, daemon="local")))
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
+        [(argv, _, _)] = self.execs
+        self.assertEqual(argv[:3], [DOCKER, "--host", self.ep])
+        self.assertEqual(self.remote_work(), [])
+        self.close_quietly(handle)
+        self.handle = None
+        self.assertEqual(self.broker.close_daemons, [LOCAL_DAEMON])
+        self.assertEqual(self.remote_work(), [])
+
+    def test_a_session_without_a_daemon_takes_the_default(self):
+        for environment in (None, carried(ENVIRONMENT)):
+            with self.subTest(environment=environment):
+                self.broker.built_daemons.clear()
+                self.start(environment=environment)
+                self.assertEqual(load_record("w"), DaemonRecord(self.pc, DOCKER))
+                self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON])
+                self.assertEqual(self.manifest()["daemon"], REMOTE_DAEMON)
+                [(argv, _, _), *_] = reversed(self.execs)
+                self.assertEqual(argv[:3], [DOCKER, "--host", REMOTE])
+                os.unlink(os.path.join(self.state, RECORD_FILE))
+
+    def test_a_new_remote_start_runs_only_the_docker_calls_it_needs(self):
+        self.start()
+        ps = ["ps", "-a", "--filter", "label=ensemble.session", "--format", PS_FORMAT]
+        self.assertEqual(
+            [call for call, _ in self.remote.calls],
+            [
+                ps,
+                ps,
+                ps,
+                [
+                    *("volume", "ls", "--filter", "label=ensemble.kind", "--format"),
+                    '{{.Name}}\t{{.Label "ensemble.workspace"}}',
+                ],
+            ],
+        )
+        self.assertEqual([call for call, _ in self.docker.calls], [ps, ps, ps])
+        self.assertFalse([c for c in self.order if isinstance(c, list) and "info" in c])
+        self.assertEqual(self.broker.targets, 1)
+
+    def test_an_unreachable_chosen_daemon_fails_a_new_start_before_any_build(self):
+        why = "host key unknown: not in ~/.ssh/known_hosts"
+        self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        want = f"^broker: Cannot reach Docker target {REMOTE}: {re.escape(why)}\\.$"
+        for check in (
+            lambda: self.host.validate("w", self.launch),
+            lambda: self.host._preflight("w", self.launch, self.METADATA),
+            lambda: self.host._validate("w", self.launch, self.METADATA),
+            self.start,
+        ):
+            with self.assertRaisesRegex(BrokerError, want) as raised:
+                check()
+            self.assertEqual(raised.exception.code, "docker_unreachable")
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+        self.assertIsNone(load_record("w"))
+        self.start(environment=carried(replace(ENVIRONMENT, daemon="local")))
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+
+    def test_a_preflight_builds_on_the_default_and_records_nothing(self):
+        self.host._preflight("w", self.launch, self.METADATA)
+        self.host._validate("w", self.launch, self.METADATA)
+        self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON, REMOTE_DAEMON])
+        self.assertIsNone(load_record("w"))
+
+    def test_a_start_failing_in_transport_closes_on_the_chosen_daemon(self):
+        self.broker.error = SessionError("broker: start timed out after 1800 s")
+        with self.assertRaisesRegex(SessionError, "start timed out"):
+            self.start()
+        self.assertEqual(
+            (self.broker.closed, self.broker.close_daemons), ([CONTAINER], [REMOTE_DAEMON])
+        )
+
+
+class ConfigChangedTest(StartBase):
+    """A session recorded on REMOTE once the target lists only the local Docker Desktop: close
+    and reclaim send its recorded ID, which the broker refuses.
+    """
+
+    NOT_CONFIGURED = BrokerError(
+        7,
+        "docker_unreachable",
+        f"Docker daemon {REMOTE_DAEMON} is not configured; set the Docker target back to reach it.",
+        "not_needed",
+        None,
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+        self.close_quietly(self.start())
+        self.handle = None
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            self.assertEqual(json.load(f)["daemon"], REMOTE_DAEMON)
+        self.targets("local", self.local)
+        self.docker.ps = [f"{CONTAINER}\tw\t{GEN}\trunning"]  # a namesake on the local daemon
+        self.docker.volumes = [f"ensemble-ws-w\t{self.cwd}"]
+        self.order.clear()
+        self.broker.closed.clear()
+        self.broker.close_daemons.clear()
+        self.docker.calls.clear()
+        self.remote.calls.clear()
+
+    def test_release_closes_by_the_recorded_id(self):
+        with mock.patch.object(self.host, "_spawn_reclaim"):
+            self.host._release("w", GEN)
+        self.assertEqual(
+            (self.broker.closed, self.broker.close_daemons), ([CONTAINER], [REMOTE_DAEMON])
+        )
+        self.assertEqual((self.docker.calls, self.remote.calls), ([], []))
+
+    def test_release_fails_naming_the_id_the_broker_refuses(self):
+        self.broker.failing["close"] = self.NOT_CONFIGURED
+        with self.assertRaisesRegex(BrokerError, f"^broker: Docker daemon {REMOTE_DAEMON} is not"):
+            self.host._release("w", GEN)
+        self.assertEqual(self.broker.close_daemons, [REMOTE_DAEMON])
+        self.assertEqual((self.docker.calls, self.remote.calls), ([], []))
+
+    def test_reclaim_removes_by_the_recorded_id(self):
+        self.assertEqual(self.host.remove_workspaces(self.cwd), ["ensemble-ws-w"])
+        self.assertEqual(self.broker.rm_daemons, [REMOTE_DAEMON])
+
+    def test_reclaim_fails_naming_the_id_the_broker_refuses(self):
+        self.broker.failing["workspace_rm"] = self.NOT_CONFIGURED
+        with self.assertRaisesRegex(
+            SessionError,
+            f"^docker workspace ensemble-ws-w kept: broker: Docker daemon {REMOTE_DAEMON} is not"
+            " configured",
+        ):
+            self.host.remove_workspaces(self.cwd)
+        self.assertEqual(self.broker.rm_daemons, [REMOTE_DAEMON])
+        listing = ["volume", "ls", "--filter", "label=ensemble.kind"]
+        self.assertEqual([call[:4] for call, _ in self.docker.calls], [listing])
+        self.assertEqual(self.remote.calls, [])
+
+    def test_its_liveness_is_unknown_and_its_namesake_untouched(self):
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+        self.assertEqual(self.docker.execs(), [])
+
+    def test_a_malformed_record_fails_release_naming_it(self):
+        path = os.path.join(self.state, RECORD_FILE)
+        with open(path, "w") as f:
+            f.write("{}")
+        with self.assertRaisesRegex(
+            SessionError, f"^docker session w: daemon record: .*{re.escape(path)}"
+        ):
+            self.host._release("w", GEN)
+        self.assertEqual(self.broker.closed, [])
+        self.assertEqual(self.docker.calls, [])
+
+
+class TwoDaemonWorkspacesTest(Base):
+    """Workspaces on REMOTE and on the local Docker Desktop beside it."""
+
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+        self.agent = os.path.join(self.account, "work", "TASK-1", "agent")
+        os.makedirs(self.agent)
+        self.kept = os.path.join(self.home, ".ensemble", "docker-state", ".kept")
+
+    def session(self, name, found):
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": GEN, "kind": "tui"}, f)
+        manifest = {"name": name, "generation": GEN, "cwd": self.agent, "daemon": found.id}
+        with open(os.path.join(state, f"{GEN}.json"), "w") as f:
+            json.dump(manifest, f)
+        self.recorded(name, found)
+
+    def removals(self):
+        return list(
+            zip(
+                [step[1] for step in self.order if step[:1] == ("workspace_rm",)],
+                self.broker.rm_daemons,
+                strict=True,
+            )
+        )
+
+    def test_removes_each_session_s_volume_on_its_own_daemon(self):
+        self.session("mini-a", self.local)
+        self.session("pm-b", self.pc)
+        self.docker.volumes = [f"ensemble-ws-mini-a\t{self.agent}"]
+        self.remote.volumes = [f"ensemble-ws-pm-b\t{self.agent}"]
+        removed = self.host.remove_workspaces(self.agent)
+        self.assertEqual(sorted(removed), ["ensemble-ws-mini-a", "ensemble-ws-pm-b"])
+        self.assertEqual(
+            sorted(self.removals()),
+            [("ensemble-ws-mini-a", LOCAL_DAEMON), ("ensemble-ws-pm-b", REMOTE_DAEMON)],
+        )
+
+    def test_keeps_a_volume_on_a_daemon_its_session_is_not_recorded_on(self):
+        self.session("pm-c", self.pc)
+        self.docker.volumes = [f"ensemble-ws-pm-c\t{self.agent}"]
+        self.assertEqual(self.host.remove_workspaces(self.agent), [])
+        self.assertEqual(self.removals(), [])
+
+    def test_an_unreachable_daemon_s_workspaces_are_unknown(self):
+        self.targets("remote", self.pc._replace(id=None, unreachable="refused"), self.local)
+        with self.assertRaisesRegex(SessionError, f"workspaces unknown .*{REMOTE} unreachable"):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_reclaim_leaves_an_unreachable_daemon_s_volumes_and_markers(self):
+        gone = os.path.join(self.account, "gone")
+        self.docker.volumes = [f"ensemble-ws-local-gone\t{gone}"]
+        self.remote.volumes = [f"ensemble-ws-remote-gone\t{gone}"]
+        os.makedirs(self.kept)
+        stale = os.path.join(self.kept, f"ensemble-ws-remote-kept@{REMOTE_DAEMON}")
+        with open(stale, "w") as f:
+            f.write("dirty")
+        self.targets("remote", self.pc._replace(id=None, unreachable="refused"), self.local)
+        self.host.reclaim_volumes()
+        self.assertEqual(self.removals(), [("ensemble-ws-local-gone", LOCAL_DAEMON)])
+        self.assertTrue(os.path.exists(stale))
+        self.assertEqual(self.remote.calls, [])
+        self.targets("remote", self.pc, self.local)
+        self.order.clear()
+        self.broker.rm_daemons.clear()
+        self.host.reclaim_volumes()
+        self.assertEqual(
+            sorted(self.removals()),
+            [("ensemble-ws-local-gone", LOCAL_DAEMON), ("ensemble-ws-remote-gone", REMOTE_DAEMON)],
+        )
+        self.assertFalse(os.path.exists(stale))
+
+    def test_a_kept_volume_s_marker_is_its_daemon_s_whatever_the_default(self):
+        gone = os.path.join(self.account, "gone")
+        self.docker.volumes = [f"ensemble-ws-same\t{gone}"]
+        self.remote.volumes = [f"ensemble-ws-same\t{gone}"]
+        self.broker.failing = {
+            "workspace_rm": BrokerError(13, "workspace_dirty", "unsaved", "not_needed", None)
+        }
+        markers = [
+            ".lock",
+            f"ensemble-ws-same@{LOCAL_DAEMON}",
+            f"ensemble-ws-same@{REMOTE_DAEMON}",
+        ]
+        with self.assertLogs("session", "WARNING"):
+            self.host.reclaim_volumes()
+        self.assertEqual(sorted(os.listdir(self.kept)), markers)
+        self.assertEqual(
+            sorted(self.removals()),
+            [("ensemble-ws-same", LOCAL_DAEMON), ("ensemble-ws-same", REMOTE_DAEMON)],
+        )
+        self.order.clear()
+        self.broker.rm_daemons.clear()
+        self.host = DockerHost("docker", {"docker": DOCKER}, run=self.docker, broker=self.broker)
+        self.targets("local", self.pc, self.local)
+        with self.assertNoLogs("session", "WARNING"):
+            self.host.reclaim_volumes()
+        self.assertEqual(sorted(os.listdir(self.kept)), markers)
+        self.assertEqual(self.removals(), [])
+
+
+class RemoteAttachTargetTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.two_daemons()
+
+    def test_attach_target_on_a_remote_daemon_carries_its_path(self):
+        self.remote.ps = [f"{CONTAINER}\tw\t{GEN}\trunning"]
+        self.guarded_record()
+        self.recorded("w", self.pc)
+        argv = [
+            *(DOCKER, "--host", REMOTE, "exec", "-it", CONTAINER, PYTHON, "-I"),
+            *(worker_module.GUARD, "--attach", f"/run/ensemble/guard/{GEN}/display"),
+        ]
+        cleared = tuple(arg for key in CLEARED for arg in ("-u", key))
+        path = f"PATH={self.pc.path}"
+        for sock, entries in (
+            ("/private/agent.sock", (path, "SSH_AUTH_SOCK=/private/agent.sock")),
+            ("", (path,)),
+        ):
+            with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": sock, "PATH": "/tmux/server"}):
+                view = self.host.attach_target("w")
+            self.assertEqual(view.argv, ("/usr/bin/env", *cleared, *entries, *argv))
+            self.assertEqual(view.printed, shlex.join(argv))
+
+
 class GuardedStartTest(StartBase):
     def test_the_guard_takes_the_hosts_hidden_size(self):
         self.host = DockerHost(
@@ -2301,7 +3123,7 @@ class GuardedStartTest(StartBase):
         self.assertEqual(
             argv, [DOCKER, "--host", self.ep, "attach", "--sig-proxy=false", CONTAINER]
         )
-        self.assertEqual(kw["env"], docker_call(DOCKER)[1])
+        self.assertEqual(kw["env"], docker_call(DOCKER, daemon=self.local)[1])
         self.assertEqual(
             proc.handoff,
             {
@@ -2372,7 +3194,7 @@ class WorkerLivenessTest(StartBase):
         self.record()
         self.listed("w")
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             self.docker.ps = []
             return True
@@ -2427,7 +3249,7 @@ class WorkerLivenessTest(StartBase):
         self.docker.ps = []
         self.listed("w", gen=old)
 
-        def close(container):
+        def close(container, **_):
             self.broker.closed.append(container)
             self.docker.ps = []
             return True
@@ -2719,8 +3541,8 @@ class HeadlessWorkerTest(StartBase):
         expired = threading.Event()
         original = self.broker.close
 
-        def close(container):
-            result = original(container)
+        def close(container, *, daemon):
+            result = original(container, daemon=daemon)
             expired.set()
             return result
 

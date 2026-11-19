@@ -16,20 +16,28 @@ from functools import partial
 from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
-from ensemble.session.clients.claude.common import HOME
+from ensemble.session.clients.claude import common as claude_common
+from ensemble.session.clients.claude.common import HOME, WALK_DEPTH, WALK_ENTRIES
+from ensemble.session.clients.claude.tui import on_hook
 from ensemble.session.clients.claude.usage import NO_PANEL
+from ensemble.session.engine.client_state import LocalHome, VolumeHome, home_path
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import (
     Access,
     ConfigError,
+    HomePath,
+    HomeStore,
+    HookCall,
     Launch,
     Mode,
     Permission,
+    Reply,
     SessionInfo,
     SessionStatus,
 )
-from ensemble.utils import LOCAL_ENV_VARS, docker_home
+from ensemble.utils import LOCAL_ENV_VARS
 from tests.session.case import SPAWNS, Case, packaged_hosts
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.claude.support import (
     CEILING,
     CONFIG,
@@ -44,11 +52,13 @@ from tests.session.unit.clients.claude.support import (
     ClaudeCommon,
     Spec,
     fixture,
+    homed,
     reference,
+    said,
     store,
     tui_launch,
 )
-from tests.session.unit.clients.support import holds, packaged_table
+from tests.session.unit.clients.support import holds, opened_below, packaged_table
 
 PLUGIN = '{"enabledPlugins": {"ensemble@windroc": false}}'
 
@@ -331,7 +341,7 @@ class HomeFilesTest(Base):
             f.write(text if isinstance(text, bytes) else text.encode())
 
     def container_settings(self):
-        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files().items()
+        ((name, text),) = ClaudeClient(CONFIG).tui().home().files().items()
         self.assertEqual(name, "settings.json")
         return json.loads(text)
 
@@ -374,7 +384,7 @@ class HomeFilesTest(Base):
 
     def test_the_home_is_claudes_whatever_the_docker_config(self):
         self.assertEqual(
-            dataclasses.replace(ClaudeClient(CONFIG).tui()._home(), files=HOME.files), HOME
+            dataclasses.replace(ClaudeClient(CONFIG).tui().home(), files=HOME.files), HOME
         )
 
     def test_an_explicit_model_or_effort_flag_still_wins(self):
@@ -402,8 +412,8 @@ class SettingSourcesTest(Base):
                 )
                 client = ClaudeClient({})
                 for launch in (
-                    lambda client=client, spec=spec: client.headless().launch(spec),
-                    lambda client=client, spec=spec: client.tui().launch(spec, HOOK),
+                    lambda client=client, spec=spec: homed(client.headless()).launch(spec),
+                    lambda client=client, spec=spec: homed(client.tui()).launch(spec, HOOK),
                 ):
                     with self.subTest(flags=flags, resume=resume):
                         self.refused(
@@ -423,8 +433,8 @@ class ReadRulesTest(Base):
         )
         client = ClaudeClient({} if config is None else config)
         return (
-            lambda client=client, spec=spec: client.headless().launch(spec),
-            lambda client=client, spec=spec: client.tui().launch(spec, HOOK),
+            lambda client=client, spec=spec: homed(client.headless()).launch(spec),
+            lambda client=client, spec=spec: homed(client.tui()).launch(spec, HOOK),
         )
 
     def both(self, *, resume=False, config=None, **access) -> list[tuple[str, ...]]:
@@ -572,8 +582,8 @@ class EnvTest(Base):
             )
             client = ClaudeClient({**config, "accounts": {"w": {"dir": "/w"}}})
             for launch in (
-                client.headless().launch(spec),
-                client.tui().launch(spec, HOOK),
+                homed(client.headless()).launch(spec),
+                homed(client.tui()).launch(spec, HOOK),
                 client._usage_probes()["w"],
             ):
                 with self.subTest(resume=resume, argv=launch.argv):
@@ -624,9 +634,9 @@ class EnvTest(Base):
         for launch, defaults in (
             (self.launch(config=config, access=access), CEILING),
             (
-                ClaudeClient(config)
-                .tui()
-                .launch(Spec(workdir=self.work, sid=SID, access=access, prompt="hi"), HOOK),
+                homed(ClaudeClient(config).tui()).launch(
+                    Spec(workdir=self.work, sid=SID, access=access, prompt="hi"), HOOK
+                ),
                 TUI_DEFAULTS,
             ),
         ):
@@ -779,7 +789,7 @@ class ResumeTest(Base):
 
     def committed(self, mode="headless", **fields):
         spec = dataclasses.replace(self.spec, **fields)
-        run = getattr(self.client, mode)()
+        run = homed(getattr(self.client, mode)())
         launch = run.launch(spec) if mode == "headless" else run.launch(spec, HOOK)
         run.commit()
         return launch
@@ -819,7 +829,9 @@ class ResumeTest(Base):
                 self.assertEqual(launch.resume, reference(self.cwd))
         env = {**self.spec.access.env, **self.spec.env}
         status = self.client.session_status(
-            SessionInfo(sid=SID, cwd=self.cwd, project=False, transcript="", resume=""), env=env
+            SessionInfo(sid=SID, cwd=self.cwd, project=False, transcript="", resume=""),
+            env=env,
+            home=LocalHome(),
         )
         self.assertEqual(status.resume_command, reference(self.cwd))
         for text in (*texts, status.resume_command):
@@ -1095,6 +1107,221 @@ class ResumeTest(Base):
         self.assertEqual(len(execute), 1)
 
 
+def local(path: HomePath) -> str:
+    """`path` as this machine names it."""
+    return os.path.join(path.root, *path.rel.split("/"))
+
+
+def write(path: str, data: bytes = b"{}\n", mtime: float | None = None) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+
+
+class DockerStateReadTest(Base):
+    """Reads of a Docker session's Claude home go through its state volume's store."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(serve())
+        self.store = VolumeHome("w", "claude")
+        self.path = HomePath(stored("w", "claude"), f"projects/p/{SID}.jsonl")
+        write(local(self.path), b"0123456789")
+
+    def test_a_transcript_there_is_read_and_sized(self):
+        self.assertEqual(claude_common.read(self.store, self.path), b"0123456789")
+        self.assertEqual(claude_common.read(self.store, self.path, offset=7), b"789")
+        self.assertEqual(claude_common.size(self.store, self.path), 10)
+
+    def test_a_linked_transcript_is_neither_read_nor_sized(self):
+        outside = os.path.join(self.tmp, "outside.jsonl")
+        write(outside, b"secret")
+        link = self.path._replace(rel="projects/p/link.jsonl")
+        os.symlink(outside, local(link))
+        self.assertIsNone(claude_common.read(self.store, link))
+        self.assertEqual(claude_common.size(self.store, link), 0)
+
+
+PROMPT = {"type": "user", "message": {"content": "go"}}
+
+
+class HomeStoreReadsTest(Base):
+    """Every read of a Claude home, by the tui, its hook and the status check, goes through the
+    session's home-store: on Docker nothing below the session's Claude home on this machine is
+    opened, stat'ed or listed; on tmux the home is opened by its root only, each part below it
+    from there.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.events = os.path.join(self.tmp, "events")
+        write(self.events, b"")
+
+    def hook(self, run, label, path, **payload):
+        call = HookCall(
+            label,
+            {"session_id": SID, "transcript_path": path, **payload},
+            SID,
+            self.work,
+            self.events,
+            run.hook_callback().state,
+        )
+        return on_hook(call)
+
+    def reads(self, store, root, *, itself):
+        """The tui's launch, replies, hooks and status over `store`, a home at `root`: what
+        they gave and the paths opened by name under `root`.
+        """
+        env = {"CLAUDE_CONFIG_DIR": root}
+        self.env(env)
+        run = homed(ClaudeClient({}).tui(), store)
+        spec = Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID, name="w-1")
+        with opened_below(root, itself=itself) as touched:
+            path = run.launch(spec, HOOK).transcript
+            run.hook_events("SessionStart", {"session_id": SID})
+            self.hook(run, "UserPromptSubmit", path, prompt="go")
+        write(
+            path,
+            b"".join(
+                json.dumps(r).encode() + b"\n"
+                for r in (PROMPT, said("m1", {"type": "text", "text": "A"}))
+            ),
+        )
+        os.utime(path, (1000, 1000))
+        write(os.path.join(path[: -len(".jsonl")], "subagents", "a.jsonl"), mtime=3000)
+        with opened_below(root, itself=itself) as more:
+            found = (
+                run.observe(),
+                self.hook(run, "Stop", path, last_assistant_message="A"),
+                run.common.session_status(SID, self.work, transcript=path, env=env, home=store),
+            )
+        return found, touched + more
+
+    def assert_read(self, found):
+        replies, stop, status = found
+        self.assertEqual(replies, [Reply("A")])
+        self.assertEqual(stop["last_assistant_message"], "A")
+        self.assertEqual(status, SessionStatus("yes", 3000.0, reference(self.work)))
+
+    def test_docker_reads_open_no_mac_path(self):
+        self.enterContext(serve())
+        found, touched = self.reads(VolumeHome("w", "claude"), stored("w", "claude"), itself=True)
+        self.assert_read(found)
+        self.assertEqual(touched, [])
+
+    def test_local_reads_through_home_store(self):
+        found, touched = self.reads(LocalHome(), self.config_dir, itself=False)
+        self.assert_read(found)
+        self.assertEqual(touched, [])
+
+
+class ActivityTest(Base):
+    """One walk over a home-store's stat and entries gives a session's newest mtime, the same for
+    a local home and a state volume, within its depth and entry caps.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(serve())
+        self.common = ClaudeCommon({})
+        self.stores = (
+            (LocalHome(), self.config_dir),
+            (VolumeHome("w", "claude"), stored("w", "claude")),
+        )
+
+    def newest(self, files: dict[str, float]) -> list[float | None]:
+        """Each store's last_active once `files` (below the session's folder, "" itself) are in it."""
+        found = []
+        for reader, root in self.stores:
+            env = {"CLAUDE_CONFIG_DIR": root}
+            path = self.common.transcript(self.work, SID, env)
+            for rel, mtime in files.items():
+                write(os.path.join(path[: -len(".jsonl")], rel) if rel else path, mtime=mtime)
+            found.append(
+                self.common.session_status(SID, self.work, env=env, home=reader).last_active
+            )
+        return found
+
+    def test_activity_walks_one_way_for_both_stores(self):
+        files = {
+            "": 1000,
+            "subagents/a.jsonl": 3000,
+            "subagents/b.jsonl": 2000,
+            "/".join(["d"] * WALK_DEPTH + ["ok.jsonl"]): 2500,
+            "/".join(["d"] * (WALK_DEPTH + 1) + ["deep.jsonl"]): 9000,
+        }
+        self.assertEqual(self.newest(files), [3000.0, 3000.0])
+
+    def test_the_walk_stops_at_its_entry_cap_for_both_stores(self):
+        files = {"": 1000, "a/new.jsonl": 9000}
+        files.update({f"b/{n}.jsonl": 500 for n in range(WALK_ENTRIES)})
+        self.assertEqual(self.newest(files), [1000.0, 1000.0])
+
+
+class DockerStateStatusTest(Base):
+    """session_status over a Docker session's Claude home."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(serve())
+        self.common = ClaudeCommon({})
+        self.env_vars = {"CLAUDE_CONFIG_DIR": stored("w", "claude")}
+        self.path = self.common.transcript(self.work, SID, self.env_vars)
+        self.resume = reference(self.work)
+
+    def write(self, path, mtime):
+        write(path, mtime=mtime)
+
+    def status(self, transcript="") -> SessionStatus:
+        return self.common.session_status(
+            SID, self.work, transcript=transcript, env=self.env_vars, home=VolumeHome("w", "claude")
+        )
+
+    def test_resumable_with_the_newest_subagent_file(self):
+        self.assertEqual(self.status(), SessionStatus("no", None, self.resume))
+        self.write(self.path, 1000)
+        self.assertEqual(self.status(), SessionStatus("yes", 1000.0, self.resume))
+        folder = self.path[: -len(".jsonl")]
+        self.write(os.path.join(folder, "subagents", "a.jsonl"), 3000)
+        self.write(os.path.join(folder, "subagents", "b.jsonl"), 2000)
+        self.assertEqual(self.status(), SessionStatus("yes", 3000.0, self.resume))
+
+    def test_links_under_the_session_folder_count_for_nothing(self):
+        self.write(self.path, 1000)
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, "x.jsonl"), 9000)
+        folder = self.path[: -len(".jsonl")]
+        os.makedirs(folder)
+        os.symlink(outside, os.path.join(folder, "linked"))
+        os.symlink(os.path.join(outside, "x.jsonl"), os.path.join(folder, "x.jsonl"))
+        self.assertEqual(self.status(), SessionStatus("yes", 1000.0, self.resume))
+
+    def test_a_linked_transcript_is_unknown(self):
+        outside = os.path.join(self.tmp, "outside.jsonl")
+        self.write(outside, 9000)
+        os.makedirs(os.path.dirname(self.path))
+        os.symlink(outside, self.path)
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
+
+    def test_a_linked_project_dir_is_unknown(self):
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{SID}.jsonl"), 9000)
+        os.makedirs(os.path.dirname(os.path.dirname(self.path)))
+        os.symlink(outside, os.path.dirname(self.path))
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
+
+    def test_a_recorded_transcript_counts_only_in_the_same_project_folder(self):
+        self.write(self.path, 1000)
+        sibling = os.path.join(os.path.dirname(self.path), "other.jsonl")
+        self.write(sibling, 4000)
+        elsewhere = os.path.join(os.path.dirname(os.path.dirname(self.path)), "q", "o.jsonl")
+        self.write(elsewhere, 5000)
+        self.assertEqual(self.status(sibling), SessionStatus("yes", 4000.0, self.resume))
+        self.assertEqual(self.status(elsewhere), SessionStatus("yes", 1000.0, self.resume))
+
+
 class SessionStatusTest(Base):
     def setUp(self):
         super().setUp()
@@ -1103,13 +1330,10 @@ class SessionStatusTest(Base):
         self.resume = reference(self.work)
 
     def write(self, path, mtime):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("{}\n")
-        os.utime(path, (mtime, mtime))
+        write(path, mtime=mtime)
 
-    def status(self, sid=SID) -> SessionStatus:
-        return self.common.session_status(sid, self.work)
+    def status(self, sid=SID, **fields) -> SessionStatus:
+        return self.common.session_status(sid, self.work, home=LocalHome(), **fields)
 
     def test_a_transcript_is_resumable_with_its_mtime(self):
         self.write(self.path, 1000)
@@ -1123,7 +1347,7 @@ class SessionStatusTest(Base):
         for recorded in ("", path):
             with self.subTest(recorded=recorded):
                 self.assertEqual(
-                    self.common.session_status(SID, self.work, transcript=recorded, env=env),
+                    self.status(transcript=recorded, env=env),
                     SessionStatus("yes", 3000.0, self.resume),
                 )
         self.assertEqual(self.status(), SessionStatus("no", None, self.resume))
@@ -1144,6 +1368,7 @@ class SessionStatusTest(Base):
         os.symlink(self.tmp, parent_link)
         for path in (
             outside,
+            link,
             directory,
             fifo,
             os.path.join(parent_link, "outside.jsonl"),
@@ -1153,21 +1378,14 @@ class SessionStatusTest(Base):
         ):
             with self.subTest(path=path):
                 self.assertEqual(
-                    self.common.session_status(SID, self.work, transcript=path),
-                    SessionStatus("yes", 1000.0, self.resume),
+                    self.status(transcript=path), SessionStatus("yes", 1000.0, self.resume)
                 )
-        self.assertEqual(
-            self.common.session_status(SID, self.work, transcript=link),
-            SessionStatus("yes", 8000.0, self.resume),
-        )
+        self.assertEqual(self.status(transcript=inside), SessionStatus("yes", 8000.0, self.resume))
 
     def test_a_recorded_filename_without_a_suffix_keeps_the_scan_inside_the_store(self):
         path = os.path.join(os.path.dirname(self.path), "a")
         self.write(path, 2000)
-        self.assertEqual(
-            self.common.session_status(SID, self.work, transcript=path),
-            SessionStatus("yes", 2000.0, self.resume),
-        )
+        self.assertEqual(self.status(transcript=path), SessionStatus("yes", 2000.0, self.resume))
 
     def test_a_symlink_session_directory_cannot_expand_the_activity_scan(self):
         self.write(self.path, 1000)
@@ -1175,6 +1393,12 @@ class SessionStatusTest(Base):
         self.write(os.path.join(outside, "child.jsonl"), 9000)
         os.symlink(outside, os.path.splitext(self.path)[0])
         self.assertEqual(self.status(), SessionStatus("yes", 1000.0, self.resume))
+
+    def test_symlinked_transcript_is_unknown(self):
+        inside = os.path.join(os.path.dirname(self.path), "other.jsonl")
+        self.write(inside, 8000)
+        os.symlink(inside, self.path)
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
 
     def test_the_newest_file_under_the_session_dir_wins(self):
         self.write(self.path, 1000)
@@ -1218,9 +1442,17 @@ LAST = "2f8fad5b-d9cb-469f-a165-70867728950e"
 class ContinuationTest(Base):
     def setUp(self):
         super().setUp()
+        self.enterContext(serve())
+        self.store: HomeStore = LocalHome()
         self.common = ClaudeCommon({})
         self.path = self.common.transcript(self.work, SID)
         self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
+
+    def at(self, path: str) -> HomePath:
+        return home_path(self.config_dir, path)
+
+    def walk(self):
+        return self.common.walk(self.store, self.at(self.path), SID)
 
     def write(self, path, *records):
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1235,11 +1467,17 @@ class ContinuationTest(Base):
             "timestamp": timestamp,
         }
 
+    def launches(self, spec):
+        client = ClaudeClient({})
+        return (
+            homed(client.headless(), self.store).launch(spec),
+            homed(client.tui(), self.store).launch(spec, HOOK),
+        )
+
     def test_walk_keeps_a_missing_target(self):
         self.write(self.path, self.marker())
         self.assertEqual(
-            self.common.walk(self.path, SID, self.config_dir),
-            [(SID, self.path, None), (NEXT, None, "2026-10-15T12:00:00Z")],
+            self.walk(), [(SID, self.at(self.path), None), (NEXT, None, "2026-10-15T12:00:00Z")]
         )
 
     def test_walk_crosses_projects_then_stops_at_a_cycle(self):
@@ -1248,8 +1486,8 @@ class ContinuationTest(Base):
         self.write(self.target, self.marker(NEXT, LAST))
         self.write(last, self.marker(LAST, SID))
         self.assertEqual(
-            [hop[:2] for hop in self.common.walk(self.path, SID, self.config_dir)],
-            [(SID, self.path), (NEXT, self.target), (LAST, last)],
+            [hop[:2] for hop in self.walk()],
+            [(SID, self.at(self.path)), (NEXT, self.at(self.target)), (LAST, self.at(last))],
         )
 
     def test_walk_uses_the_last_valid_matching_marker(self):
@@ -1263,36 +1501,30 @@ class ContinuationTest(Base):
             [1],
         )
         self.write(self.target)
-        self.assertEqual(
-            self.common.walk(self.path, SID, self.config_dir)[-1][:2], (NEXT, self.target)
-        )
+        self.assertEqual(self.walk()[-1][:2], (NEXT, self.at(self.target)))
 
-    def test_a_linked_target_under_a_docker_home_is_absent(self):
-        config_dir = docker_home("w", "claude")
-        path = os.path.join(config_dir, "projects", "p", f"{SID}.jsonl")
-        self.write(path, self.marker())
-        inside = os.path.join(config_dir, "projects", "p", "real.jsonl")
+    def test_a_linked_target_is_absent(self):
+        self.write(self.path, self.marker())
+        inside = os.path.join(os.path.dirname(self.path), "real.jsonl")
         outside = os.path.join(self.work, "host.jsonl")
         self.write(inside, self.marker(NEXT, LAST))
         self.write(outside, self.marker(NEXT, LAST))
-        target = os.path.join(config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
-        os.makedirs(os.path.dirname(target))
+        os.makedirs(os.path.dirname(self.target))
         for real in (inside, outside):
             with self.subTest(real=real):
                 with contextlib.suppress(FileNotFoundError):
-                    os.remove(target)
-                os.symlink(real, target)
+                    os.remove(self.target)
+                os.symlink(real, self.target)
                 self.assertEqual(
-                    self.common.walk(path, SID, config_dir),
-                    [(SID, path, None), (NEXT, None, "2026-10-15T12:00:00Z")],
+                    self.walk(),
+                    [(SID, self.at(self.path), None), (NEXT, None, "2026-10-15T12:00:00Z")],
                 )
 
     def test_resume_launch_uses_the_latest_file_in_both_modes(self):
         self.write(self.path, self.marker())
         self.write(self.target)
         spec = Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID, resume=True)
-        client = ClaudeClient({})
-        for launch in (client.headless().launch(spec), client.tui().launch(spec, HOOK)):
+        for launch in self.launches(spec):
             self.assertEqual(launch.argv[launch.argv.index("--resume") + 1], NEXT)
             self.assertEqual(launch.transcript, self.target)
             self.assertEqual(launch.resume, reference(self.work))
@@ -1302,8 +1534,7 @@ class ContinuationTest(Base):
         self.write(self.target)
         worker = os.path.join(self.work, "workers", SID)
         spec = Spec(workdir=worker, access=Access(cwd=self.work), sid=SID, resume=True)
-        client = ClaudeClient({})
-        for launch in (client.headless().launch(spec), client.tui().launch(spec, HOOK)):
+        for launch in self.launches(spec):
             self.assertEqual(launch.argv[launch.argv.index("--resume") + 1], NEXT)
             self.assertEqual(launch.transcript, self.target)
 
@@ -1314,6 +1545,31 @@ class ContinuationTest(Base):
         os.utime(self.target, (1000, 1000))
         for recorded in ("", self.target):
             self.assertEqual(
-                self.common.session_status(SID, self.work, transcript=recorded),
+                self.common.session_status(SID, self.work, transcript=recorded, home=self.store),
                 SessionStatus("yes", 1000.0, reference(self.work)),
             )
+
+
+class DockerContinuationTest(ContinuationTest):
+    """ContinuationTest's walks over a Docker session's Claude home, read through its volume."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = VolumeHome("w", "claude")
+        self.config_dir = stored("w", "claude")
+        self.env({"CLAUDE_CONFIG_DIR": self.config_dir})
+        self.path = self.common.transcript(self.work, SID)
+        self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
+
+    def test_only_real_project_dirs_are_searched(self):
+        self.write(self.path, self.marker())
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{NEXT}.jsonl"), {})
+        projects = os.path.join(self.config_dir, "projects")
+        os.symlink(outside, os.path.join(projects, "linked"))
+        self.write(os.path.join(projects, "file"))
+        self.assertEqual(
+            self.walk(), [(SID, self.at(self.path), None), (NEXT, None, "2026-10-15T12:00:00Z")]
+        )
+        self.write(self.target)
+        self.assertEqual(self.walk()[-1][:2], (NEXT, self.at(self.target)))

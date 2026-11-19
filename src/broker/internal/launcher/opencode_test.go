@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const opencodeDir = home + "/.ensemble/docker-state/worker_1/opencode"
+const opencodeDir = ClientHomes + "/opencode"
 
 // opencodeManifest is fixture manifest-valid for client opencode, edit applied to its fields.
 func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
@@ -199,14 +198,12 @@ func TestStartOpencodeProvidersFail(t *testing.T) {
 
 func TestCheckMountsOpencode(t *testing.T) {
 	m := baseManifest()
-	m.Client, m.ClaudeDir, m.OpencodeDir = "opencode", "", home+"/.ensemble/docker-state/w/opencode"
+	m.Client, m.ClaudeDir, m.OpencodeDir = "opencode", "", ClientHomes+"/opencode"
 	if err := mountHost().checkMounts(m); err != nil {
 		t.Fatal(err)
 	}
-	symlinked := mountHost()
-	symlinked.Safe = func(string) error { return errors.New("symlink component") }
 	wrong, inside := m, m
-	wrong.OpencodeDir = home + "/.ensemble/docker-state/w/claude"
+	wrong.OpencodeDir = ClientHomes + "/claude"
 	inside.CWD = m.OpencodeDir + "/work"
 	for name, tc := range map[string]struct {
 		host   Host
@@ -214,8 +211,7 @@ func TestCheckMountsOpencode(t *testing.T) {
 		reason string
 	}{
 		"wrong dir":  {mountHost(), wrong, "opencode_dir must be " + m.OpencodeDir},
-		"symlinked":  {symlinked, m, "opencode_dir " + m.OpencodeDir + " must be an existing directory without symlinks"},
-		"cwd inside": {mountHost(), inside, "overlaps opencode_dir"},
+		"cwd inside": {mountHost(), inside, "inside the container's /home/agent"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := protoErr(t, tc.host.checkMounts(tc.m))
@@ -238,7 +234,7 @@ func TestStartOpencode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
+		want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Daemon: testDaemon, ImageDigest: digest,
 			Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 		if github {
 			want.Env = map[string]string{"ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]", "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]", "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com", "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]", "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"}
@@ -254,7 +250,7 @@ func TestStartOpencode(t *testing.T) {
 		run := strings.Join(detached(d), " ")
 		for _, needle := range []string{
 			"--env XDG_DATA_HOME=" + opencodeDir, "--env OPENCODE_DISABLE_AUTOUPDATE=1", "--env OPENCODE_DISABLE_LSP_DOWNLOAD=1",
-			"--label ensemble.client=opencode", "--mount type=bind,source=" + opencodeDir + ",target=" + opencodeDir,
+			"--label ensemble.client=opencode", "--mount type=volume,source=ensemble-state-worker_1,target=" + opencodeDir + ",volume-subpath=opencode,volume-nocopy",
 			"--tmpfs /run/ensemble/secrets:rw,noexec,nosuid,nodev,size=65536,mode=0700,uid=1001,gid=1002",
 		} {
 			if !strings.Contains(run, needle) {
@@ -342,7 +338,7 @@ func TestMaintainOpencode(t *testing.T) {
 		tokens := &fakeTokens{}
 		h, _, codexCreds := opencodeHost(&world{labels: goodLabels()}, tokens)
 		h.Home = t.TempDir()
-		dir := filepath.Join(h.Home, ".ensemble/docker-state/worker_1/opencode")
+		dir := ClientHomes + "/opencode"
 		manifest := opencodeManifest(t, func(f map[string]any) {
 			f["opencode_dir"] = dir
 			if github {

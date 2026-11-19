@@ -450,7 +450,17 @@ class Placement:
         try:
             self.tmux.checked(args)
         except TuiError as e:
-            print(f"tui: show: @worker: {e}", file=sys.stderr)
+            if not self._closed(pane):
+                print(f"tui: show: @worker: {e}", file=sys.stderr)
+
+    def _closed(self, pane: str) -> bool:
+        try:
+            res = self.tmux.run(["list-panes", "-a", "-F", "#{pane_id}"])
+        except TuiError:
+            return False
+        if res.returncode:
+            return absent(res)
+        return pane not in res.stdout.split()
 
     def _close_args(
         self,

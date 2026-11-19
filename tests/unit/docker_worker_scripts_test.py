@@ -228,7 +228,7 @@ class CodexBootstrap(Case):
         found = re.search(r"^var codexKept = \[\]string\{(.*)\}$", start, re.MULTILINE)
         self.assertIsNotNone(found)
         self.assertEqual(
-            tuple(json.loads(f"[{found[1]}]")), CodexClient({}).headless()._home().persistent
+            tuple(json.loads(f"[{found[1]}]")), CodexClient({}).headless().home().persistent
         )
 
     def carrier(self, access="one", account="account"):

@@ -16,6 +16,7 @@ import sys
 import tomllib
 import types
 import unittest
+from dataclasses import replace
 from typing import Any
 from unittest import mock
 
@@ -24,9 +25,10 @@ from ensemble.session import Access, Host, Spec
 from ensemble.session.clients import registry
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude import ClaudeClient
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import ConfigError, Hosts, TuiSettings
+from ensemble.session.engine.types import LOCAL_CONTEXT, ConfigError, Hosts, TuiSettings
 from ensemble.utils import load_class
 from tests.session import fake_client, harnesses
 from tests.session.case import HOSTS, SID, Case, configured
@@ -653,7 +655,9 @@ class Committed(Case):
         client = registry_of(configured(committed())).client("claude")
         for flags in ((), ("--settings", '{"model": "x"}')):
             spec = Spec(workdir=tmp, access=Access(cwd=tmp), sid=SID, prompt="hi", flags=flags)
-            for launch in (client.headless().launch(spec), client.tui().launch(spec, ("h",))):
+            tui = client.tui()
+            tui._context = replace(LOCAL_CONTEXT, home=LocalHome())
+            for launch in (client.headless().launch(spec), tui.launch(spec, ("h",))):
                 with self.subTest(flags=flags, argv=launch.argv[1]):
                     argv = launch.argv
                     self.assertEqual(argv.count("--settings"), 1)

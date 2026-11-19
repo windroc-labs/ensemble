@@ -164,7 +164,9 @@ class Install(Case):
         self.assertEqual(
             calls[1], f"sudo install -o root -g wheel -m 0755 {source} {TARGET}/ensemble-broker"
         )
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[2], f"sudo install -d -o root -g wheel -m 0755 {TARGET}/ssh")
+        self.assertEqual(calls[3], f"sudo ln -sfn ../ensemble-broker {TARGET}/ssh/ssh")
+        self.assertEqual(len(calls), 4)
 
     def assert_nothing_installed(self, result):
         self.assertEqual(result.returncode, 1)
@@ -331,7 +333,7 @@ class Install(Case):
         self.assertEqual(seeded.read_text(), (BROKER / "worker/Dockerfile").read_text())
         self.assertTrue(self.seeded.exists())
         calls = self.calls()
-        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 5 + ["sudo"] * 2)
+        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 5 + ["sudo"] * 4)
         out = calls[0].split()[4]
         self.assertEqual(calls[0], f"go build -trimpath -o {out} .")
         self.assertEqual(calls[1], f"{SIGN}{out}")

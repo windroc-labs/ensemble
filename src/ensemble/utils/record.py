@@ -1,8 +1,7 @@
-"""Record v1, one JSON line naming a started thing by its outermost starter (ctl queries it, resume
-resumes it; only a LayerCommand, in the exact form that command prints, so a forged line runs
-nothing else), and Status, the line `<ctl> status` prints per Record (alive: its owner's own;
-state: its sessions' StatusState word, live after an ended owner left one open; hidden: hide closed what show opened; cwd, optional: where the run works). Display is opaque: only the
-session layer interprets it. answer_keys is the one batch rule of every ctl's queries. json_records yields JSON objects from text or byte lines.
+"""Record v1: one JSON line naming a started thing by its outermost starter (ctl queries it, resume
+resumes it); only a LayerCommand as that command prints it, so a forged line runs nothing else.
+Status: `<ctl> status`'s line per Record; state: its sessions' StatusState word, live after an
+ended owner left one open. Display is opaque outside the session layer.
 """
 
 import json
@@ -10,7 +9,7 @@ import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import MISSING, asdict, dataclass, fields
 from enum import StrEnum
-from typing import Self, TextIO, TypeVar
+from typing import Any, Self, TextIO, TypeVar
 
 from ensemble.utils.text import printable
 
@@ -227,7 +226,7 @@ def answer_keys(
     return max(codes)
 
 
-def json_records(lines: Iterable[str | bytes]) -> Iterator[dict]:
+def json_records(lines: Iterable[str | bytes]) -> Iterator[dict[str, Any]]:
     for line in lines:
         try:
             record = json.loads(line)

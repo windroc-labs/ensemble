@@ -39,11 +39,11 @@ func TestStartAndMaintainIgnoreOldStaticFiles(t *testing.T) {
 					m["client"] = client
 					withSecrets([]any{secret("ensemble-broker-env/build-key", "build-key")})(m)
 					if client == "claude" {
-						m["claude_dir"] = filepath.Join(parent, "claude")
+						m["claude_dir"] = ClientHomes + "/claude"
 					} else {
 						delete(m, "claude_dir")
 						delete(m, "claude_account")
-						m["opencode_dir"], m["opencode_providers"] = filepath.Join(parent, "opencode"), []string{"lan"}
+						m["opencode_dir"], m["opencode_providers"] = ClientHomes+"/opencode", []string{"lan"}
 					}
 				})
 				if _, err := h.Start(context.Background(), path); err != nil {

@@ -22,7 +22,7 @@ func refreshCodexHost(t *testing.T, github bool) (Host, string, string, *fakeTok
 		t.Fatal(err)
 	}
 	manifest := codexManifest(t, func(m map[string]any) {
-		m["codex_dir"] = filepath.Join(parent, "codex")
+		m["codex_dir"] = ClientHomes + "/codex"
 		if github {
 			withGitHub(m)
 		}

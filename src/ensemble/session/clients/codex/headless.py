@@ -12,11 +12,12 @@ from ensemble.session.clients.codex.common import (
     reset_at,
 )
 from ensemble.session.clients.codex.common.types import SessionState
-from ensemble.session.clients.common import split_flags
+from ensemble.session.clients.common import home_of, split_flags
 from ensemble.session.engine.types import (
     Activity,
     Blocked,
     ClientBound,
+    ClientHome,
     Launch,
     LimitHit,
     Reply,
@@ -32,7 +33,7 @@ from ensemble.session.modes.client_adapters.headless import JsonHeadless
 class CodexHeadless(JsonHeadless):
     _invalid_output = "codex: invalid JSON event"
 
-    def _home(self):
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def __init__(self, common: CodexCommon):
@@ -44,7 +45,8 @@ class CodexHeadless(JsonHeadless):
 
     def launch(self, spec: Spec):
         resume = spec.resume
-        self.state = self.common.prepare(spec)
+        home = home_of(self._context)
+        self.state = self.common.prepare(spec, home)
         self.limit_sent, self.started, self.last_reply = False, False, ""
         snapshot = self.state.snapshot
         found = self._context.container
@@ -58,6 +60,7 @@ class CodexHeadless(JsonHeadless):
                 interactive=False,
                 mode=mode,
                 configured=self.common.flags,
+                home=home,
                 unattended=found is not None,
                 resume=resume,
             ),
@@ -72,7 +75,7 @@ class CodexHeadless(JsonHeadless):
             unset=self.common.UNSET,
             cwd=snapshot.cwd,
             project=snapshot.project,
-            transcript=self.common.transcript(self.state) if resume else "",
+            transcript=self.common.transcript(self.state, home) if resume else "",
             resume=self.common.resume_command(self.state) if resume else "",
         )
 

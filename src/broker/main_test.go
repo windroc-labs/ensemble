@@ -46,7 +46,10 @@ func recording(calls *[]call) app {
 	return app{build: func(ctx context.Context, k keys, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
 		return build(ctx, k, arg, p)
 	},
-		start: result("start"), close: result("close"),
+		start: result("start"),
+		close: func(ctx context.Context, k keys, container, _ string) (any, error) {
+			return result("close")(ctx, k, container, nil)
+		},
 		maintain: func(ctx context.Context, k keys, container, _ string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
@@ -54,12 +57,13 @@ func recording(calls *[]call) app {
 		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, k, provider+" "+base, nil)
 		},
-		workspaceRm: func(ctx context.Context, k keys, volume string, _ bool) (any, error) {
+		workspaceRm: func(ctx context.Context, k keys, volume string, _ bool, _ string) (any, error) {
 			return workspaceRm(ctx, k, volume, nil)
 		},
 		checkClients: func(ctx context.Context, k keys, p io.Writer) (any, error) {
 			return result("check-clients")(ctx, k, "", p)
-		}}
+		},
+		target: func(ctx context.Context, k keys) (any, error) { return result("target")(ctx, k, "", nil) }}
 }
 
 // invoke runs args on a, with a keychain and an old-name check that find nothing unless a sets its own.
@@ -77,7 +81,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"39"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"43"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -186,7 +190,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "check_clients_input", "target_input") {
 		t.Run(c.Name, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -202,7 +206,7 @@ func TestInputFixtures(t *testing.T) {
 				switch in.Argv[0] {
 				case "probe-provider":
 					want.arg = in.Argv[2] + " " + in.Argv[4]
-				case "version", "status", "check-clients":
+				case "version", "status", "check-clients", "target":
 				default:
 					want.arg = in.Argv[2]
 				}
@@ -249,27 +253,28 @@ func TestUsageErrors(t *testing.T) {
 		{"build", []string{"build", "--ensemble"}},
 		{"build", []string{"build", "--package", "/x"}},
 		{"build", []string{"build", "--ensemble", "relative"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "-1"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1.5"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1234567890"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "x"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-ages", "1"}},
-		{"build", []string{"build", "--ensemble", "/x", "--plugin", "a@"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--plugin", "a"}},
-		{"build", []string{"build", "--ensemble", "/x", "--image-plugin"}},
-		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", ".x"}},
-		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
-		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--image-plugin", "a"}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", "Dummy:test"}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", "localhost:5000/env:1"}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", strings.Repeat("a", 256)}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", "a", "--base-image", "b"}},
-		{"build", []string{"build", "--ensemble", "/x", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--base-image", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "-1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "1.5"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "1234567890"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "1", "x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-ages", "1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--plugin", "a@"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "1", "--plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--image-plugin"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--image-plugin", ".x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--max-age", "1", "--image-plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--base-image", "Dummy:test"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--base-image", "localhost:5000/env:1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--base-image", strings.Repeat("a", 256)}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--base-image", "a", "--base-image", "b"}},
+		{"build", []string{"build", "--ensemble", "/x", "--daemon", "D1", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--base-image", "a"}},
 		{"start", []string{"start", "--manifest", "/bad\npath"}},
 		{"start", []string{"start", "--manifest", "/bad\xffpath"}},
 		{"close", []string{"close", "--container", "other"}},
+		{"close", []string{"close", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
 		{"maintain", []string{"maintain", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
 		{"status", []string{"status", "--cleanup"}},
 		{"close", []string{"close", "--container", "ensemble-x-0123"}},
@@ -509,23 +514,49 @@ func TestBuildOptions(t *testing.T) {
 		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
 		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
 	} {
-		var spec launcher.BuildSpec
-		maxAge := time.Duration(-2)
-		app := app{build: func(_ context.Context, _ keys, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
-			spec, maxAge = s, m
-			return map[string]string{}, nil
+		for _, daemon := range []string{"D1", ""} {
+			var spec launcher.BuildSpec
+			maxAge := time.Duration(-2)
+			app := app{build: func(_ context.Context, _ keys, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
+				spec, maxAge = s, m
+				return map[string]string{}, nil
+			}}
+			argv := []string{"build", "--ensemble", "/pkg"}
+			if daemon != "" {
+				argv = append(argv, "--daemon", daemon)
+			}
+			argv = append(argv, c.args...)
+			if code, _, errOut := invoke(app, argv...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
+				!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge ||
+				spec.Daemon != daemon {
+				t.Fatalf("%q: exit %d spec %+v max age %v: %s", argv, code, spec, maxAge, errOut)
+			}
+		}
+	}
+	for _, args := range [][]string{
+		{"--daemon", "D1", "--secret", "ensemble-broker-env/mini-op-password"},
+		{"--daemon", "D1", "--image-plugin", "z", "--secret", "ensemble-broker-env/a"},
+		{"--daemon"},
+		{"--daemon", "a b"},
+		{"--max-age", "0", "--daemon", "D1"},
+	} {
+		app := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
+			t.Fatalf("%q reached build", args)
+			return nil, nil
 		}}
-		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
-			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
-			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
+		if code, _, _ := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, args...)...); code != protocol.Exit(protocol.Usage) {
+			t.Fatalf("%q: exit %d, want usage", args, code)
 		}
 	}
 }
 
 func TestWorkspaceRmForce(t *testing.T) {
-	for want, args := range map[bool][]string{false: {"workspace-rm", "--volume", "v"}, true: {"workspace-rm", "--volume", "v", "--force"}} {
+	for want, args := range map[bool][]string{false: {"workspace-rm", "--volume", "v", "--daemon", "D1"}, true: {"workspace-rm", "--volume", "v", "--force", "--daemon", "D1"}} {
 		got := !want
-		a := app{workspaceRm: func(_ context.Context, _ keys, volume string, force bool) (any, error) {
+		a := app{workspaceRm: func(_ context.Context, _ keys, volume string, force bool, daemon string) (any, error) {
+			if daemon != "D1" {
+				t.Fatalf("daemon %q", daemon)
+			}
 			got = force
 			return map[string]any{"volume": volume, "removed": true}, nil
 		}}
@@ -538,15 +569,15 @@ func TestWorkspaceRmForce(t *testing.T) {
 func TestChannels(t *testing.T) {
 	failing := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "stage failed")
-	}, close: func(context.Context, keys, string, io.Writer) (any, error) {
+	}, close: func(context.Context, keys, string, string) (any, error) {
 		return nil, errors.New("surprise")
 	}}
-	code, out, errOut := invoke(failing, "build", "--ensemble", "/pkg")
+	code, out, errOut := invoke(failing, "build", "--ensemble", "/pkg", "--daemon", "D1")
 	if code != 8 {
 		t.Fatal(code)
 	}
 	assertError(t, errOut, out, "build", protocol.BuildFailed)
-	code, out, errOut = invoke(failing, "close", "--container", "ensemble-w-0123456789abcdef0123456789abcdef")
+	code, out, errOut = invoke(failing, "close", "--container", "ensemble-w-0123456789abcdef0123456789abcdef", "--daemon", "D1")
 	if code != 70 {
 		t.Fatal(code)
 	}
@@ -603,6 +634,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	switch {
 	case args[0] == "exec" && args[len(args)-1] == docker.SecretsDir+"/github":
 		return []byte(s.tokens), nil
+	case args[0] == "info":
+		return []byte(`"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"` + "\n"), nil
 	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
 		return []byte(proxyID + "\n"), nil
 	case joined == "container inspect "+proxyID:
@@ -615,6 +648,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002","ensemble.claude-version":"2.1.0","ensemble.codex-version":"0.163.0","ensemble.opencode-version":"1.19.3"}}}]`), nil
+	case strings.HasPrefix(joined, "volume inspect") && strings.HasPrefix(args[len(args)-1], "ensemble-state-"):
+		return []byte(`{"ensemble.state":"` + strings.TrimPrefix(args[len(args)-1], "ensemble-state-") + `"}`), nil
 	case strings.HasPrefix(joined, "volume inspect"):
 		return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/Users/example/src/project"}`), nil
 	case strings.HasPrefix(joined, "container inspect"):
@@ -637,12 +672,12 @@ func TestTokenNeverLeaves(t *testing.T) {
 	for _, fail := range []string{"", "/usr/bin/python3", "credential-batch.py"} {
 		d := &scripted{fail: fail, output: []byte(`{"completed":1}`)}
 		h := launcher.Host{
-			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
-			IsDir:  func(string) bool { return true },
-			Safe:   func(string) error { return nil },
-			Docker: d,
-			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
-			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
+			Home:    home,
+			Daemons: []launcher.Daemon{{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Runner: d}},
+			IsDir:   func(string) bool { return true },
+			Safe:    func(string) error { return nil },
+			Creds:   broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
+			GitHub:  broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: func() time.Time { return time.Unix(0, 0) }}},
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
@@ -685,12 +720,12 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 			return result, nil
 		}}
 	}
-	code, out, errOut := invoke(build(false), "build", "--ensemble", "/pkg")
+	code, out, errOut := invoke(build(false), "build", "--ensemble", "/pkg", "--daemon", "D1")
 	want, _ := json.Marshal(result)
 	if code != 0 || out != string(want)+"\n" || errOut != "#1 [1/3] FROM base\n#2 DONE\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	code, out, errOut = invoke(build(true), "build", "--ensemble", "/pkg")
+	code, out, errOut = invoke(build(true), "build", "--ensemble", "/pkg", "--daemon", "D1")
 	progress, envelope, _ := strings.Cut(errOut, "#2 DONE\n")
 	if code != 8 || progress != "#1 [1/3] FROM base\n" {
 		t.Fatalf("%d %q", code, errOut)
@@ -797,11 +832,12 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		}
 		const home = "/Users/example"
 		h := launcher.Host{
-			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
-			IsDir:  func(string) bool { return true },
-			Safe:   func(string) error { return nil },
-			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n", output: []byte(`{"completed":2}`)},
-			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
+			Home: home,
+			Daemons: []launcher.Daemon{{Name: launcher.DaemonLocal, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
+				Runner: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n", output: []byte(`{"completed":2}`)}}},
+			IsDir: func(string) bool { return true },
+			Safe:  func(string) error { return nil },
+			Creds: broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
 			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
 			Audit: rec, Linear: noLinear{},
@@ -812,7 +848,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case "maintain":
 			_, err = h.Maintain(context.Background(), c, path, true)
 		case "close":
-			_, err = h.Close(context.Background(), c)
+			_, err = h.Close(context.Background(), h.Daemons[0], c)
 		}
 		rec.Flush(err)
 		if err != nil {
@@ -1080,11 +1116,12 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		{[]string{"linear-maintain"}, []bool{false}},
 		{[]string{"start", "--manifest", "/m.json"}, []bool{false}},
 		{[]string{"maintain", "--container", container, "--manifest", "/m.json"}, []bool{false}},
-		{[]string{"close", "--container", container}, []bool{false}},
+		{[]string{"close", "--container", container, "--daemon", "D1"}, []bool{false}},
 		{[]string{"status"}, []bool{false}},
-		{[]string{"build", "--ensemble", "/e"}, []bool{false}},
+		{[]string{"build", "--ensemble", "/e", "--daemon", "D1"}, []bool{false}},
 		{[]string{"probe-provider", "--provider", "strata", "--base-url", "https://strata.test/v1"}, []bool{false}},
-		{[]string{"workspace-rm", "--volume", "ensemble-ws-w"}, []bool{false}},
+		{[]string{"workspace-rm", "--volume", "ensemble-ws-w", "--daemon", "D1"}, []bool{false}},
+		{[]string{"target"}, []bool{false}},
 		{[]string{"check-clients"}, []bool{false}},
 		{[]string{"version"}, nil},
 		{[]string{"install-codex", "0.1.0"}, nil},

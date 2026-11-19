@@ -43,7 +43,7 @@ func TestBuildStagesPluginSourcesWithoutHostRecord(t *testing.T) {
 		}
 		return inner(args, stdin)
 	}
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{"beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "updraft@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}}, -1); err != nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: []string{"beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "updraft@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}}, -1); err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
@@ -55,7 +55,7 @@ func TestPluginSourcesChangeTheKeyButHostPluginsDoNot(t *testing.T) {
 	e := newBuildEnv(t)
 	build := func(names ...string) BuildResult {
 		t.Helper()
-		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: names}, -1)
+		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: names}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,11 +76,11 @@ func TestPluginSourcesChangeTheKeyButHostPluginsDoNot(t *testing.T) {
 
 func TestPluginCommitChangesTheKey(t *testing.T) {
 	e := newBuildEnv(t)
-	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{"x@owner/repo#" + strings.Repeat("a", 40)}}, -1)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: []string{"x@owner/repo#" + strings.Repeat("a", 40)}}, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{"x@owner/repo#" + strings.Repeat("b", 40)}}, -1)
+	next, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: []string{"x@owner/repo#" + strings.Repeat("b", 40)}}, -1)
 	if err != nil || first.Image == next.Image {
 		t.Fatalf("commit absent from key: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPluginSourceValidation(t *testing.T) {
 	} {
 		t.Run(strings.Join(tc.names, ","), func(t *testing.T) {
 			e := newBuildEnv(t)
-			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: tc.names}, -1)
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: tc.names}, -1)
 			if err == nil || !strings.Contains(err.Error(), "Plugin") || !strings.Contains(err.Error(), tc.want) ||
 				len(e.fake.calls) != 0 {
 				t.Fatalf("invalid source accepted: %v; %q", err, e.fake.calls)
@@ -140,7 +140,7 @@ func TestConfiguredMarketplacePinsAffectImageKey(t *testing.T) {
 	build := func(pluginRepo, pluginCommit, marketRepo, marketCommit string) BuildResult {
 		t.Helper()
 		value := "widget@" + pluginRepo + "#" + pluginCommit + "::" + marketRepo + "#" + marketCommit
-		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{value}}, -1)
+		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, Plugins: []string{value}}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +199,7 @@ func TestImagePluginDuplicates(t *testing.T) {
 		})
 	}
 	e := newBuildEnv(t)
-	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{ImagePlugins: []string{"../x"}}, -1)
+	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, ImagePlugins: []string{"../x"}}, -1)
 	var pe *protocol.Error
 	if !errors.As(err, &pe) || pe.Code != protocol.BuildFailed || !strings.Contains(pe.Message, "../x") || len(e.fake.calls) != 0 {
 		t.Fatalf("%v %q", err, e.fake.verbs())
@@ -210,7 +210,7 @@ func TestImagePluginsAreInTheKey(t *testing.T) {
 	e := newBuildEnv(t)
 	key := func(names ...string) string {
 		t.Helper()
-		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{ImagePlugins: names}, -1)
+		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon, ImagePlugins: names}, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,7 +244,7 @@ func TestDefaultBuildContextUnchanged(t *testing.T) {
 		}
 		return inner(args, stdin)
 	}
-	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
+	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Daemon: testDaemon}, -1); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(root, []string{"package", "user"}) {

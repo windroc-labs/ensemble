@@ -47,8 +47,11 @@ class Tui(ABC):
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:
         """Launch with `hook + (L,)`, payload on stdin, for hooks, _ready and opening labels L."""
 
-    def _home(self) -> ClientHome | None:
+    def home(self) -> ClientHome | None:
         return None
+
+    def set_context(self, context: ClientContext) -> None:
+        self._context = context
 
     def commit(self) -> None:
         return None

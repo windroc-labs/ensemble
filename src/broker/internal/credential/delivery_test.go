@@ -64,7 +64,7 @@ func TestDeliverErrors(t *testing.T) {
 		unreachable bool
 	}{
 		{&docker.CommandError{Exit: 1, Stderr: "cat: " + secret}, false},
-		{errors.Join(docker.ErrUnreachable, errors.New(secret)), true},
+		{errors.Join(&docker.Unreachable{Endpoint: "ssh://u@pc", Reason: "connection failed"}, errors.New(secret)), true},
 	} {
 		r := &recorded{err: tc.err}
 		err := Deliver(r.exec, File{docker.SecretsDir, "claude", false}, []byte(secret))
@@ -75,6 +75,10 @@ func TestDeliverErrors(t *testing.T) {
 		var ce *docker.CommandError
 		if errors.As(err, &ce) {
 			t.Fatal("Docker stderr kept")
+		}
+		var u *docker.Unreachable
+		if tc.unreachable && (!errors.As(err, &u) || u.Endpoint != "ssh://u@pc" || u.Reason != "connection failed") {
+			t.Fatalf("the unreachable target and reason were dropped: %v", err)
 		}
 	}
 }

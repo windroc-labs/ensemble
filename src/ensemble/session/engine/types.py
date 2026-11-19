@@ -4,11 +4,12 @@ import os
 import re
 import signal
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, NamedTuple, Self
+from typing import Any, ClassVar, NamedTuple, Protocol, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -28,6 +29,7 @@ __all__ = [
     "PROCESS_EXIT",
     "ACCOUNT_REJECTED",
     "Blocked",
+    "CLIENT_HOMES",
     "ClientBound",
     "ClientHome",
     "ConfigError",
@@ -63,6 +65,14 @@ __all__ = [
     "SessionRow",
     "SessionStatus",
     "Spec",
+    "Daemon",
+    "DaemonName",
+    "DaemonRecord",
+    "Target",
+    "StateEntry",
+    "StateFile",
+    "StateKind",
+    "StateStat",
     "Stderr",
     "Tier",
     "TurnEnd",
@@ -177,6 +187,79 @@ def _no_files() -> Mapping[str, str]:
     return {}
 
 
+class DaemonName(StrEnum):
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
+class Daemon(NamedTuple):
+    """One of the broker's target daemons: its ID once reached, else why not."""
+
+    name: str
+    endpoint: str
+    remote: bool
+    path: str
+    id: str | None = None
+    unreachable: str | None = None
+
+
+class Target(NamedTuple):
+    default: str
+    daemons: tuple[Daemon, ...]
+
+
+class DaemonRecord(NamedTuple):
+    daemon: Daemon
+    docker: str
+
+
+class StateFile(NamedTuple):
+    session: str
+    client: str
+    rel: str
+
+
+class StateStat(NamedTuple):
+    size: int
+    mtime: float
+
+
+class StateKind(StrEnum):
+    DIR = "dir"
+    FILE = "file"
+    OTHER = "other"
+
+
+class StateEntry(NamedTuple):
+    name: str
+    kind: StateKind
+    size: int
+    mtime: float
+
+
+class HomePath(NamedTuple):
+    root: str
+    rel: str
+
+
+class HomeStore(Protocol):
+    """A client home its Host picked once: None absent, OSError refused."""
+
+    def read(
+        self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
+    ) -> bytes | None: ...
+
+    def stat(self, path: HomePath) -> StateStat | None: ...
+
+    def entries(self, path: HomePath, *, limit: int = ...) -> tuple[StateEntry, ...] | None: ...
+
+    def snapshot(
+        self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
+    ) -> AbstractContextManager[str | None]: ...
+
+    def persisted(self) -> dict[str, str]: ...
+
+
 @dataclass(frozen=True)
 class ClientHome:
     """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
@@ -214,6 +297,7 @@ class ClientContext:
     host_address: str
     permission: Permission
     container: Container | None = None
+    home: HomeStore | None = None
 
 
 LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)
@@ -226,7 +310,7 @@ class HookCall:
     """
 
     label: str
-    payload: dict
+    payload: dict[str, Any]
     sid: str
     workdir: str
     events: str | None
@@ -247,6 +331,7 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 
 COMMAND = "ensemble-session"
+CLIENT_HOMES = "/home/agent/.ensemble-state"  # in workers
 ACCOUNT_SET_BY = (
     f"{ACCOUNT_ENV} is set by --account, or by [clients.<client>].account in a container"
     " and [clients.<client>].local_account outside one"
@@ -324,6 +409,7 @@ class EnvironmentSpec:
     plugins: tuple[str, ...] = ()
     lock: str | None = None
     prefetch: Mapping[str, str] | None = None
+    daemon: str | None = None
 
     def __post_init__(self):
         plugins = self.plugins
@@ -342,6 +428,7 @@ class EnvironmentSpec:
             or isinstance(self.lock, str)
             and bool(LOCK_NAME.fullmatch(self.lock)),
             "prefetch": self.prefetch is None or _prefetch(self.prefetch),
+            "daemon": self.daemon is None or self.daemon == "local",
         }
         if bad := next((name for name, ok in checks.items() if not ok), None):
             raise ConfigError(f"environment {bad}: {getattr(self, bad)!r:.120} is not valid")
@@ -355,6 +442,7 @@ class EnvironmentSpec:
             "plugins": list(self.plugins),
             "lock": self.lock,
             "prefetch": None if self.prefetch is None else dict(self.prefetch),
+            "daemon": self.daemon,
         }
 
     @classmethod

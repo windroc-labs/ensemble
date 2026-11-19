@@ -6,6 +6,7 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
 from ensemble.session.clients.claude.headless import ClaudeHeadless
 from ensemble.session.clients.claude.tui import ClaudeTui
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     Access,
     ConfigError,
@@ -26,6 +27,7 @@ from tests.session.unit.clients.claude.support import (
     fixture,
     reference,
 )
+from tests.session.unit.clients.support import opened_below
 
 
 class ConfigTest(Base):
@@ -157,7 +159,7 @@ class ClientTest(Base):
             sid=SID, cwd=self.work, project=False, transcript=path, resume="rm -rf ~"
         )
         self.assertEqual(
-            client.session_status(info),
+            client.session_status(info, home=LocalHome()),
             SessionStatus(
                 "yes",
                 os.stat(path).st_mtime,
@@ -172,19 +174,21 @@ class ClientTest(Base):
         with open(path, "w", encoding="utf-8") as stream:
             stream.write("recorded")
         info = SessionInfo(sid=SID, cwd=self.work, project=False, transcript=path, resume="")
-        self.assertEqual(client.session_status(info, env=env).resumable, "yes")
-        self.assertEqual(client.session_status(info).resumable, "no")
+        self.assertEqual(client.session_status(info, env=env, home=LocalHome()).resumable, "yes")
+        self.assertEqual(client.session_status(info, home=LocalHome()).resumable, "no")
 
     def test_session_status(self):
         self.assertEqual(
             ClaudeClient({}).session_status(
-                SessionInfo(sid=SID, cwd=self.work, project=False, transcript="", resume="")
+                SessionInfo(sid=SID, cwd=self.work, project=False, transcript="", resume=""),
+                home=LocalHome(),
             ),
             SessionStatus("no", None, reference(self.work)),
         )
         self.assertEqual(
             ClaudeClient({}).session_status(
-                SessionInfo(sid="x", cwd=self.work, project=False, transcript="", resume="")
+                SessionInfo(sid="x", cwd=self.work, project=False, transcript="", resume=""),
+                home=LocalHome(),
             ),
             SessionStatus("no", None, ""),
         )
@@ -270,3 +274,26 @@ class WritableDirsTest(Base):
                         resume=resume,
                     )
                     self.assertEqual(ClaudeClient(CONFIG).writable_dirs(spec), dirs)
+
+
+class AccountOfTest(Base):
+    def test_a_transcript_names_its_account_by_text_under_the_dir_or_its_target(self):
+        real = os.path.join(self.home, "accounts", "real")
+        linked = os.path.join(self.home, "accounts", "linked")
+        os.makedirs(real)
+        os.symlink(real, linked)
+        client = ClaudeClient({**CONFIG, "accounts": {"a": {"dir": linked}}})
+        for transcript in (f"{linked}/projects/p/s.jsonl", f"{real}/projects/p/s.jsonl"):
+            with self.subTest(transcript=transcript):
+                self.assertEqual(client._account_of(transcript), "a")
+        self.assertEqual(client._account_of(f"{self.home}/accounts/realer/s.jsonl"), "")
+
+    def test_a_docker_transcript_touches_no_path_below_its_home(self):
+        account = os.path.join(self.home, "accounts", "a")
+        os.makedirs(account)
+        client = ClaudeClient({**CONFIG, "accounts": {"a": {"dir": account}}})
+        docker = os.path.join(self.home, ".ensemble", "docker-state", "w", "claude")
+        os.makedirs(os.path.join(docker, "projects", "p"))
+        with opened_below(docker, itself=True) as touched:
+            found = client._account_of(os.path.join(docker, "projects", "p", "s.jsonl"))
+        self.assertEqual((found, touched), ("", []))

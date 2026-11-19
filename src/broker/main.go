@@ -26,10 +26,11 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--daemon ID] [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME --daemon ID | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] --daemon ID | check-clients | target | login linear | linear-maintain (public identity JSON on stdin) | host-gh-login --gh PATH | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
+
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
@@ -44,11 +45,12 @@ type app struct {
 	legacy        func() ([]string, error)                                    // old-name items the one-time rename left (legacy.go)
 	linear        func(ctx context.Context, k keys, enroll bool) (any, error) // bounded identity JSON on stdin
 	build         func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
-	start, close  step
+	start         step
+	close         func(ctx context.Context, k keys, container, daemon string) (any, error)
 	maintain      func(ctx context.Context, k keys, container, manifest string, renew bool) (any, error)
 	status        func(ctx context.Context, k keys) (any, error)
 	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
-	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
+	workspaceRm   func(ctx context.Context, k keys, volume string, force bool, daemon string) (any, error)
 	login         func(k keys, account string, out io.Writer) error                                // login claude NAME
 	loginGitHub   func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
 	loginCodex    func(ctx context.Context, k keys, out io.Writer) error
@@ -58,6 +60,7 @@ type app struct {
 	installCodex  func(context.Context, string, bool) (any, error)
 	hostGH        func(ctx context.Context, k keys, gh string) (any, error) // host-gh-login --gh PATH
 	checkClients  func(ctx context.Context, k keys, progress io.Writer) (any, error)
+	target        func(ctx context.Context, k keys) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -138,10 +141,20 @@ func readEnvValue(r io.Reader) ([]byte, error) {
 }
 
 func main() {
+	if filepath.Base(os.Args[0]) == "ssh" {
+		fmt.Fprintln(os.Stderr, "ensemble-broker ssh:", execSSH(os.Args[1:], syscall.Exec))
+		os.Exit(255)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, system())
 	cancel()
 	os.Exit(code)
+}
+
+// execSSH replaces this process with the system ssh, given the options every connection to a Docker target needs
+// before the docker CLI's own arguments; it returns only when that fails.
+func execSSH(args []string, exec func(path string, argv, env []string) error) error {
+	return exec(docker.SSHPath, append([]string{"ssh"}, docker.SSHArgs(args)...), os.Environ())
 }
 
 func accountHome() (string, error) {
@@ -218,7 +231,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "check-clients":
+		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "check-clients", "target":
 			command = args[0]
 		case "login", "retrust":
 			var login func(keys) error
@@ -299,14 +312,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, k, args[2], args[4])
 		}
-	case command == "close" && len(args) == 3 && args[1] == "--container" && containerPattern.MatchString(args[2]):
-		s, arg = a.close, args[2]
-	case command == "workspace-rm" && (len(args) == 3 || len(args) == 4 && args[3] == "--force") && args[1] == "--volume" &&
-		volumePattern.MatchString(args[2]):
-		force := len(args) == 4
-		s, arg = func(ctx context.Context, k keys, volume string, _ io.Writer) (any, error) {
-			return a.workspaceRm(ctx, k, volume, force)
+	case command == "close" && len(args) == 5 && args[1] == "--container" && containerPattern.MatchString(args[2]) &&
+		args[3] == "--daemon" && launcher.ValidDaemon(args[4]):
+		s, arg = func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
+			return a.close(ctx, k, container, args[4])
 		}, args[2]
+	case command == "workspace-rm" && (len(args) == 5 || len(args) == 6 && args[3] == "--force") && args[1] == "--volume" &&
+		volumePattern.MatchString(args[2]) && args[len(args)-2] == "--daemon" && launcher.ValidDaemon(args[len(args)-1]):
+		force, daemon := len(args) == 6, args[len(args)-1]
+		s, arg = func(ctx context.Context, k keys, volume string, _ io.Writer) (any, error) {
+			return a.workspaceRm(ctx, k, volume, force, daemon)
+		}, args[2]
+	case command == "target" && len(args) == 1:
+		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
+			return a.target(ctx, k)
+		}
 	case command == "check-clients" && len(args) == 1:
 		s = func(ctx context.Context, k keys, _ string, progress io.Writer) (any, error) {
 			return a.checkClients(ctx, k, progress)
@@ -337,10 +357,13 @@ type buildArgs struct {
 	maxAge time.Duration
 }
 
-// buildOptions parses build's [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
+// buildOptions parses build's [--daemon ID] [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
 // [--image-plugin NAME]... [--max-age SECONDS], else nil.
 func buildOptions(args []string) *buildArgs {
 	o := &buildArgs{maxAge: -1}
+	if len(args) >= 2 && args[0] == "--daemon" && launcher.ValidDaemon(args[1]) {
+		o.spec.Daemon, args = args[1], args[2:]
+	}
 	if len(args) >= 2 && args[0] == "--base-image" && launcher.ValidBaseImage(args[1]) {
 		o.spec.BaseImage, args = args[1], args[2:]
 	}
@@ -358,6 +381,20 @@ func buildOptions(args []string) *buildArgs {
 		return nil
 	}
 	return o
+}
+
+// daemons are d's configured daemons, the default first: its target, then, beside a remote target, the local Docker
+// Desktop.
+func daemons(d *docker.CLI) []launcher.Daemon {
+	name := launcher.DaemonLocal
+	if d.Target().Remote() {
+		name = launcher.DaemonRemote
+	}
+	list := []launcher.Daemon{{Name: name, Endpoint: d.Endpoint(), Remote: d.Target().Remote(), Path: d.Path(), Runner: d}}
+	if local := d.Local(); local != nil {
+		list = append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: local.Endpoint(), Path: local.Path(), Runner: local})
+	}
+	return list
 }
 
 func emit(stdout io.Writer, v any) int {
@@ -393,7 +430,8 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 		}
 		defer clean()
 		d.Progress = progress
-		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		h := launcher.NewHost(home, daemons(d), broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		h.LocalOnly = d.Target().LocalSecrets
 		h.Codex = broker.NewCodex(home, k, nil)
 		h.Opencode = broker.OpencodeKeys{Keychain: k}
 		h.Env = broker.EnvKeys{Keychain: k}
@@ -437,6 +475,17 @@ func system() app {
 		checkClients: func(ctx context.Context, k keys, progress io.Writer) (any, error) {
 			return withHost("check-clients", "", k, progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
 		},
+		target: func(ctx context.Context, k keys) (any, error) {
+			d, clean, err := docker.New(k.Home)
+			if err != nil {
+				return nil, err
+			}
+			defer clean()
+			if u, ok := errors.AsType[*docker.Unreachable](d.TargetErr()); ok {
+				return nil, protocol.New(protocol.DockerUnreachable, u.Error())
+			}
+			return launcher.Host{Home: k.Home, Daemons: daemons(d)}.Target(ctx), nil
+		},
 		start: func(ctx context.Context, k keys, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", k, progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
 		},
@@ -455,11 +504,26 @@ func system() app {
 				return h.Maintain(ctx, container, manifest, renew)
 			})
 		},
-		close: func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
-			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })
+		close: func(ctx context.Context, k keys, container, daemon string) (any, error) {
+			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) {
+				d, err := h.Find(ctx, daemon, protocol.CloseFailed)
+				if err != nil {
+					return nil, err
+				}
+				return h.Close(ctx, d, container)
+			})
 		},
-		workspaceRm: func(ctx context.Context, k keys, volume string, force bool) (any, error) {
-			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
+		workspaceRm: func(ctx context.Context, k keys, volume string, force bool, daemon string) (any, error) {
+			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) {
+				d, err := h.Find(ctx, daemon, protocol.WorkspaceFailed)
+				if err != nil {
+					return nil, err
+				}
+				if force {
+					return h.WorkspaceRmForce(ctx, d, volume)
+				}
+				return h.WorkspaceRm(ctx, d, volume)
+			})
 		},
 		login: func(k keys, account string, out io.Writer) error {
 			return loginClaude(k, account, out)

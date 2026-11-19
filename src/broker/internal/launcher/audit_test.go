@@ -232,8 +232,8 @@ func TestMaintainRefreshLineCodex(t *testing.T) {
 }
 
 func TestCloseLine(t *testing.T) {
-	claudeEnv := `["PATH=/usr/bin","CLAUDE_CONFIG_DIR=/Users/example/.ensemble/docker-state/worker_1/claude"]`
-	codexEnv := `["CODEX_HOME=/Users/example/.ensemble/docker-state/worker_1/codex"]`
+	claudeEnv := `["PATH=/usr/bin","CLAUDE_CONFIG_DIR=/home/agent/.ensemble-state/claude"]`
+	codexEnv := `["CODEX_HOME=/home/agent/.ensemble-state/codex"]`
 	config := func(env, labels string) string { return `{"env":` + env + `,"labels":` + labels + `}` }
 	for name, tc := range map[string]struct {
 		config  string
@@ -270,9 +270,9 @@ func TestCloseLine(t *testing.T) {
 				}
 				return []byte(tc.rm + "\n"), nil
 			}}
-			h := Host{Docker: d, GitHub: &fakeTokens{}, Linear: &fakeLinear{}}
+			h := Host{Daemons: one(d), GitHub: &fakeTokens{}, Linear: &fakeLinear{}}
 			rec, path := audited(t, &h, "close", container)
-			got, err := h.Close(context.Background(), container)
+			got, err := closeOn(h, container)
 			rec.Flush(err)
 			if err != nil || got.Removed != (tc.rm != "") {
 				t.Fatalf("%+v %v", got, err)
@@ -301,7 +301,7 @@ func TestNoSecretsInLog(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.Audit = &audit.Recorder{Command: "close", Container: container, Log: audit.Log{Path: path}}
-		_, err = h.Close(context.Background(), container)
+		_, err = closeOn(h, container)
 		h.Audit.Flush(err)
 	}
 	data, err := os.ReadFile(path)

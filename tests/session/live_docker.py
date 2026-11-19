@@ -6,7 +6,7 @@ a PASS line per check and a timing line per generation, and exits 1 at the first
       from a manager session: build once, start a worker on the default Host, check its
       container's security baseline and isolation, restart, close and resume, `docker rm -f` and
       resume, each generation answering a prompt and its close reclaiming its credentials; for
-      opencode its opencode.db in the Docker home, Ollama on 127.0.0.1 only, only GitHub secrets
+      opencode its opencode.db in its state volume, Ollama on 127.0.0.1 only, only GitHub secrets
       and the listed providers' keys in the container, each resume continuing one OpenCode session
   python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]
       a headless engineer run on OWNER/NAME, an authorized test repo: one forced token refresh,
@@ -30,13 +30,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from ensemble.session.engine import client_state
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.daemon import client_home
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.docker.broker import BROKER, Broker, plugin_root
 from ensemble.session.hosts.docker.host import LABEL
 from ensemble.session.hosts.docker.mounts import state_dir
-from ensemble.utils import docker_home
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(REPO, "bin")
@@ -153,16 +154,6 @@ def removed_tokens(lines: list[dict], generation: str) -> str:
     )
 
 
-def _related(a: str, b: str) -> bool:
-    a, b = os.path.normpath(a), os.path.normpath(b)
-    return os.path.commonpath([a, b]) in (a, b)
-
-
-def _host_path(source: str) -> str:
-    prefix = "/host_mnt/"
-    return source[len(prefix) - 1 :] if source.startswith(prefix) else source
-
-
 def egress_proxy(docker: str) -> tuple[dict, str]:
     """By its label contract (src/broker/internal/launcher/egress.go)."""
     ids = call(
@@ -199,20 +190,19 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network
         problems.append(f"HostConfig.ExtraHosts is set: {host['ExtraHosts']}")
     problems += [f"HostConfig.{k} is host" for k in ("PidMode", "IpcMode") if host.get(k) == "host"]
     mounts = inspect.get("Mounts") or []
-    volumes = [m for m in mounts if m.get("Type") == "volume"]
-    if [(v.get("Name"), v.get("Destination")) for v in volumes] != [(f"ensemble-ws-{name}", cwd)]:
-        problems.append(f"want one volume, ensemble-ws-{name} at {cwd}")
-    binds = [m for m in mounts if m.get("Type") == "bind"]
-    risky = []
-    for m in binds:
-        source, target = _host_path(m.get("Source", "")), m.get("Destination", "")
-        if _related(source, cwd):
-            risky.append(f"bind {source} overlaps the cwd {cwd}")
-        elif "docker.sock" in source or "docker.sock" in target:
-            risky.append(f"bind {source} mounts docker.sock")
-    if not risky and sorted(_host_path(m.get("Source", "")) for m in binds) != sorted(plan_mounts):
-        problems.append("bind mounts differ from the plan's mounts")
-    return problems + risky
+    volumes = sorted(
+        (m.get("Name"), m.get("Destination")) for m in mounts if m.get("Type") == "volume"
+    )
+    want = sorted(
+        [(f"ensemble-ws-{name}", cwd), *((f"ensemble-state-{name}", p) for p in plan_mounts)]
+    )
+    if volumes != want:
+        problems.append(f"want volumes {want}, have {volumes}")
+    return problems + [
+        f"bind mount {m.get('Source', '')} at {m.get('Destination', '')}"
+        for m in mounts
+        if m.get("Type") == "bind"
+    ]
 
 
 def proxy_baseline(egress: dict, network: dict, worker: dict) -> list[str]:
@@ -718,10 +708,12 @@ class OpenCodeChecks(Checks):
 
     def after_start(self, start: Start) -> None:
         w = self.worker
-        db = os.path.join(docker_home(w.name, "opencode"), "opencode", "opencode.db")
-        if not os.path.isfile(db):
-            raise SystemExit(f"FAIL no opencode.db at {db}")
-        print(f"PASS opencode.db at {db}", flush=True)
+        root = client_home("opencode")
+        db = os.path.join(root, "opencode", "opencode.db")
+        store = client_state.VolumeHome(w.name, "opencode")
+        if store.stat(client_state.home_path(root, db)) is None:
+            raise SystemExit(f"FAIL no opencode.db at {db} in ensemble-state-{w.name}")
+        print(f"PASS opencode.db at {db} in ensemble-state-{w.name}", flush=True)
         argv = ["lsof", "-nP", f"-iTCP:{OLLAMA_PORT}", "-sTCP:LISTEN"]
         try:
             listeners = subprocess.run(

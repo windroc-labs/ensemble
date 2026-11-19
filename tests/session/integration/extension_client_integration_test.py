@@ -35,15 +35,19 @@ print(json.dumps({"sid": handle.sid, "events": events,
                             sys.modules["extension_client"].__file__]}))
 """
 INSTALLED_CHILD = """import json, sys
+from dataclasses import replace
 from unittest import mock
 from ensemble.session import Access, Spec
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.hosted_session import HostedSession
 HostedSession.configure_from(read_config())
 client = HostedSession._config().registry.client("codex")
 spec = Spec(workdir=sys.argv[1], sid="installed-layout", access=Access(cwd=sys.argv[1], project=True))
+run = client.tui()
+run._context = replace(run._context, home=LocalHome())
 with mock.patch("shutil.which", return_value="/protected/codex"):
-    launch = client.tui().launch(spec, (sys.executable, "-I", "/protected/hook.py"))
+    launch = run.launch(spec, (sys.executable, "-I", "/protected/hook.py"))
 print(json.dumps({"argv": launch.argv[1:-1], "pythonpath": launch.env.get("PYTHONPATH"),
                   "plan": json.loads(launch.argv[-1])}))
 """

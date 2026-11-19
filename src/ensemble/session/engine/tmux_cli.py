@@ -53,13 +53,15 @@ class TmuxCli:
     def __init__(self, runner=subprocess.run) -> None:
         self.runner = runner
 
-    def checked(self, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    def checked(
+        self, args: list[str], stdin: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
         res = self.run(args, stdin)
         if res.returncode:
             raise TuiError(f"tmux: {error(res)}")
         return res
 
-    def run(self, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    def run(self, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         try:
             if stdin is not None:
                 return self.runner(["tmux", *args], capture_output=True, text=True, input=stdin)

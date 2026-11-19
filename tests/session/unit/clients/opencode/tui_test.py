@@ -8,6 +8,7 @@ from unittest import mock
 
 from ensemble.session.clients.opencode import OpenCodeClient, tui
 from ensemble.session.clients.opencode.common import Bindings
+from ensemble.session.engine.client_state import LocalHome
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     Access,
@@ -57,7 +58,7 @@ class Base(Case):
     def run_tui(self, client=None, context: ClientContext = LOCAL_CONTEXT) -> tui.OpenCodeTui:
         run = (client or self.client).tui()
         assert isinstance(run, tui.OpenCodeTui)
-        run._context = context
+        run._context = replace(context, home=LocalHome())
         return run
 
     def launch(self, spec: Spec, client=None, context=LOCAL_CONTEXT) -> Launch:
@@ -195,13 +196,13 @@ class LaunchTest(Base):
             replace(home, files=ClientHome.files),
             ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
         )
-        self.assertEqual(self.run_tui()._home(), home)
+        self.assertEqual(self.run_tui().home(), home)
         headless = self.client.headless()
         assert headless is not None
-        self.assertEqual(headless._home(), home)
+        self.assertEqual(headless.home(), home)
         for adapter in (tui.OpenCodeTui, type(headless)):
             with self.subTest(adapter=adapter.__name__):
-                self.assertNotIn("_home", vars(adapter))
+                self.assertNotIn("home", vars(adapter))
 
 
 class RefusalTest(Base):

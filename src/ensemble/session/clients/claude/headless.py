@@ -11,6 +11,7 @@ from ensemble.session.engine.types import (
     Activity,
     Blocked,
     ClientBound,
+    ClientHome,
     LimitHit,
     Reply,
     Spec,
@@ -42,12 +43,12 @@ class ClaudeHeadless(JsonHeadless):
             output=("--output-format", "stream-json", "--verbose"),
             tail=("--", spec.prompt),
             env=common.ENV,
-            permission=self._context.permission,
+            context=self._context,
         )
         self._native = os.path.basename(launched.transcript).removesuffix(".jsonl") or self.sid
         return launched
 
-    def _home(self):
+    def home(self) -> ClientHome:
         return self.common.home()
 
     def commit(self):

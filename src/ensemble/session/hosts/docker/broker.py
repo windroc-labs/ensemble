@@ -1,4 +1,4 @@
-"""The root-owned broker at the PROTOCOL version (SCHEMA): version, build, start, maintain,
+"""The root-owned broker at the PROTOCOL version (SCHEMA): version, target, build, start, maintain,
 close, workspace-rm and probe-provider with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
@@ -11,16 +11,18 @@ import select
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
+from typing import Any, TypeAlias, TypeGuard
 
-from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.engine.daemon import DAEMON, TEXT, ssh_agent
+from ensemble.session.engine.types import ConfigError, Daemon, DaemonName, SessionError, Target
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "39"
+PROTOCOL = "43"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -29,16 +31,15 @@ INSTALL = (
 TIMEOUT = 1800
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 
-TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
 IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
-ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,31}")
 COMMANDS = frozenset(
     {
         "version",
+        "target",
         "build",
         "start",
         "maintain",
@@ -55,7 +56,7 @@ CODES = {  # code → (exit code, the commands that report it)
     "mount_rejected": (4, {"start", "maintain"}),
     "login_required": (5, {"start", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm"}),
+    "docker_unreachable": (7, {"target", "build", "start", "maintain", "close", "workspace-rm"}),
     "build_failed": (8, {"build"}),
     "start_failed": (9, {"start"}),
     "close_failed": (10, {"close"}),
@@ -103,8 +104,15 @@ class BrokerError(SessionError):
         super().__init__(f"broker: {message}" + (f" ({cause})" if cause else ""))
 
 
+class BrokerMissing(SessionError):
+    """No broker executable to run."""
+
+
 class _Bad(Exception):
     pass
+
+
+_Json: TypeAlias = "dict[str, _Json] | list[_Json] | str | int | float | bool | None"
 
 
 def _unique(pairs):
@@ -118,7 +126,7 @@ def _constant(name):
     raise _Bad(f"constant {name}")
 
 
-def _object(text: str) -> dict:
+def _object(text: str) -> dict[str, Any]:
     try:
         found = json.loads(text, object_pairs_hook=_unique, parse_constant=_constant)
     except (ValueError, RecursionError) as error:
@@ -278,18 +286,20 @@ class Broker:
         self.runner = runner
         self.warning = warning or LOG.warning
 
-    def _run(self, command: str, *args: str) -> dict:
+    def _run(self, command: str, *args: str) -> dict[str, Any]:
         try:
             res = self.runner(
                 [BROKER, command, *args],
                 stdin=subprocess.DEVNULL,
-                env={"PATH": os.defpath},
+                env={"PATH": os.defpath, **ssh_agent()},
                 timeout=TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             raise SessionError(f"broker: {command} timed out after {TIMEOUT} s") from None
         except UnicodeDecodeError:
             raise SessionError(f"broker: bad response to {command}: not UTF-8") from None
+        except FileNotFoundError as error:
+            raise BrokerMissing(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         except OSError as error:
             raise SessionError(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         try:
@@ -324,18 +334,40 @@ class Broker:
                 f" {INSTALL}"
             )
 
+    def target(self) -> Target:
+        """The configured daemons, each with its ID or why it could not be reached."""
+        self.version()
+        found = self._parsed("target", _target_ok)
+        return Target(
+            found["default"],
+            tuple(
+                Daemon(
+                    d["name"],
+                    d["endpoint"],
+                    d["remote"],
+                    d["path"],
+                    d.get("id"),
+                    d.get("unreachable"),
+                )
+                for d in found["daemons"]
+            ),
+        )
+
     def build(
         self,
         package: str,
         *,
+        daemon: str,
         plugins: Sequence[str] = (),
         base_image: str | None = None,
         image_plugins: Sequence[str] = (),
     ) -> tuple[str, str]:
-        """`package`'s image tag and digest on `base_image` (None: ~/.ensemble/docker/worker), with
-        `plugins` installed from repository sources and `image_plugins` from the base image.
+        """`package`'s image tag and digest on daemon ID `daemon`, on `base_image` (None:
+        ~/.ensemble/docker/worker), with `plugins` installed from repository sources and
+        `image_plugins` from the base image.
         """
         named = [
+            *("--daemon", daemon),
             *(("--base-image", base_image) if base_image else ()),
             *(arg for name in plugins for arg in ("--plugin", name)),
             *(arg for name in image_plugins for arg in ("--image-plugin", name)),
@@ -366,7 +398,8 @@ class Broker:
         started = Started(**found)
         if not (
             _matches(CONTAINER, started.container)
-            and _matches(ENDPOINT, started.endpoint)
+            and _text(started.endpoint)
+            and _matches(DAEMON, started.daemon)
             and _matches(DIGEST, started.image_digest)
             and isinstance(started.clients, dict)
             and started.clients.keys() == clients
@@ -404,8 +437,8 @@ class Broker:
         )
         return Maintained(found["results"], found["next_check"], found["deadline"])
 
-    def close(self, container: str) -> bool:
-        """Whether it removed `container`; False: it was already gone."""
+    def close(self, container: str, *, daemon: str) -> bool:
+        """Whether it removed `container` from daemon ID `daemon`; False: it was already gone."""
         found = self._parsed(
             "close",
             lambda d: (
@@ -415,12 +448,14 @@ class Broker:
             ),
             "--container",
             container,
+            "--daemon",
+            daemon,
         )
         return found["removed"]
 
-    def workspace_rm(self, volume: str, *, force: bool = False) -> bool:
-        """Whether it removed workspace `volume` after its check found no unsaved work (force: with
-        no check); False: none.
+    def workspace_rm(self, volume: str, *, force: bool = False, daemon: str) -> bool:
+        """Whether it removed workspace `volume` from daemon ID `daemon` after its check found no unsaved
+        work (force: with no check); False: none.
         """
         found = self._parsed(
             "workspace-rm",
@@ -432,14 +467,54 @@ class Broker:
             "--volume",
             volume,
             *(["--force"] if force else []),
+            "--daemon",
+            daemon,
         )
         return found["removed"]
 
-    def _parsed(self, command: str, valid, *args: str) -> dict:
+    def _parsed(
+        self, command: str, valid: Callable[[dict[str, Any]], bool], *args: str
+    ) -> dict[str, Any]:
         found = self._run(command, *args)
         if not valid(found):
             raise SessionError(f"broker: bad response to {command}: fields")
         return found
+
+
+def _target_ok(found: Mapping[str, _Json]) -> bool:
+    daemons = found.get("daemons")
+    if not (
+        set(found) == {"default", "daemons"}
+        and isinstance(daemons, list)
+        and 1 <= len(daemons) <= len(DaemonName)
+    ):
+        return False
+    names = [d["name"] for d in daemons if _daemon_ok(d)]
+    return (
+        len(names) == len(daemons)
+        and len(set(names)) == len(names)
+        and DaemonName.LOCAL in names
+        and found["default"] in names
+    )
+
+
+def _daemon_ok(found: _Json) -> TypeGuard[dict[str, _Json]]:
+    if not isinstance(found, dict):
+        return False
+    status = set(found) - {"name", "endpoint", "remote", "path"}
+    return (
+        found.keys() >= {"name", "endpoint", "remote", "path"}
+        and (
+            status == {"id"}
+            and _matches(DAEMON, found["id"])
+            or status == {"unreachable"}
+            and _text(found["unreachable"])
+        )
+        and found["name"] in tuple(DaemonName)
+        and found["remote"] is (found["name"] == DaemonName.REMOTE)
+        and _text(found["endpoint"])
+        and _text(found["path"])
+    )
 
 
 def hook_root(hook_path: str) -> str:
@@ -484,9 +559,11 @@ def write_manifest(
     *,
     name: str,
     generation: str,
+    daemon: str,
     image: str,
     cwd: str,
     workspace: str,
+    state: str,
     home: tuple[str, str],
     hook_path: str,
     providers: tuple[str, ...] = (),
@@ -503,9 +580,11 @@ def write_manifest(
     manifest = {
         "name": name,
         "generation": generation,
+        "daemon": daemon,
         "image": image,
         "cwd": cwd,
         "workspace": workspace,
+        "state": state,
         "client": client,
         field: home_path,
         "hook_path": hook_path,

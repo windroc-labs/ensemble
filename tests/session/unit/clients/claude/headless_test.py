@@ -7,6 +7,7 @@ from unittest import mock
 
 from ensemble.session import Spec
 from ensemble.session.clients.claude import ClaudeClient
+from ensemble.session.engine.client_state import LocalHome, VolumeHome
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -18,8 +19,8 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.utils import docker_home
 from tests.session.case import Case
+from tests.session.state_volumes import serve, stored
 from tests.session.unit.clients.claude.support import (
     CONFIG,
     INIT,
@@ -588,10 +589,16 @@ class LimitTest(Case):
 
 class SharedConversationTest(Base):
     def test_headless_and_tui_share_their_container_home_and_transcript(self):
+        self.enterContext(serve())
         client = ClaudeClient(CONFIG)
-        self.assertEqual(client.headless()._home(), client.tui()._home())
-        for env in ({}, {"CLAUDE_CONFIG_DIR": docker_home("w", "claude")}):
+        self.assertEqual(client.headless().home(), client.tui().home())
+        for env, home in (
+            ({}, LocalHome()),
+            ({"CLAUDE_CONFIG_DIR": stored("w", "claude")}, VolumeHome("w", "claude")),
+        ):
             with self.subTest(env=env):
-                headless = self.launch(env=env).transcript
-                self.assertEqual(headless, tui_launch(self.work, env=env).transcript)
+                headless = self.launch(env=env, home=home, resume=True).transcript
+                self.assertEqual(
+                    headless, tui_launch(self.work, env=env, home=home, resume=True).transcript
+                )
                 self.assertTrue(headless.startswith(env.get("CLAUDE_CONFIG_DIR", self.config_dir)))

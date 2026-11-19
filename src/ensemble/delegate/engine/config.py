@@ -11,7 +11,9 @@ from ensemble.delegate import config
 DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
 # an environment name follows the lock-name rule
 ENVIRONMENT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
-ENVIRONMENT_KEYS = frozenset({"image", "gateway", "plugins", "lock", "prefetch", "credentials"})
+ENVIRONMENT_KEYS = frozenset(
+    {"image", "gateway", "plugins", "lock", "prefetch", "credentials", "daemon"}
+)
 # what a named or role table, checked alone, may leave to its default
 PLACEHOLDERS = {"image": session.EnvironmentSpec.WORKER, "gateway": "workers"}
 

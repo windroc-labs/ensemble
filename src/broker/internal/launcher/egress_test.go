@@ -35,6 +35,15 @@ func credentialManifest(t *testing.T, name string) string {
 
 const withSecretsSuffix = "+secrets"
 
+const (
+	remoteTarget = "ssh://u@pc"
+	localHint    = " Start the egress proxy with ~/.egress/current/start.sh, wait until it is healthy, then retry."
+	remoteHint   = " Install it on the Docker target ssh://u@pc by running bash <ensemble plugin directory>/scripts/install-target-egress.sh on this Mac, wait until it is healthy, then retry."
+)
+
+// endpoints are the local Docker Desktop (startHost's endpoint) and a remote target, each with the hint its refusals end with.
+var endpoints = []struct{ name, endpoint, hint string }{{"local", "", localHint}, {"remote", remoteTarget, remoteHint}}
+
 func TestEgressRefusals(t *testing.T) {
 	two := proxyID + "\n" + strings.Repeat("c", 64) + "\n"
 	none, short := "", "abc123\n"
@@ -84,28 +93,36 @@ func TestEgressRefusals(t *testing.T) {
 		}}, 2, "Egress proxy my-proxy is unhealthy"},
 	} {
 		for _, manifest := range []string{"manifest-github-app", "manifest-codex", "manifest-opencode-providers", "manifest-github-app" + withSecretsSuffix} {
-			t.Run(tc.name+"/"+manifest, func(t *testing.T) {
-				w := tc.world
-				w.labels = goodLabels()
-				h, d, creds, tokens, codexCreds, keys, env := credentialHost(&w)
-				_, err := h.Start(context.Background(), credentialManifest(t, manifest))
-				e := protoErr(t, err)
-				if e.Code != protocol.EgressUnavailable || protocol.Exit(e.Code) != 17 || e.Cleanup != protocol.NotNeeded {
-					t.Fatalf("%+v", e)
-				}
-				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
-					!strings.Contains(e.Message, "workers") || // the caller network, by key or network name
-					!strings.Contains(e.Message, "Start the egress proxy with ~/.egress/current/start.sh") ||
-					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
-					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
-				}
-				if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
-					t.Fatalf("docker calls %q, want %q", got, proxyCalls[:tc.calls])
-				}
-				if len(creds.calls)+len(tokens.calls)+len(keys.calls)+len(env.calls)+codexCreds.ready+codexCreds.injected != 0 {
-					t.Fatalf("credential calls: %q %q %q %q codex=%d/%d", creds.calls, tokens.calls, keys.calls, env.calls, codexCreds.ready, codexCreds.injected)
-				}
-			})
+			for _, at := range endpoints {
+				t.Run(tc.name+"/"+manifest+"/"+at.name, func(t *testing.T) {
+					w := tc.world
+					w.labels = goodLabels()
+					h, d, creds, tokens, codexCreds, keys, env := credentialHost(&w)
+					if at.endpoint != "" {
+						h = atEndpoint(h, at.endpoint)
+					}
+					_, err := h.Start(context.Background(), credentialManifest(t, manifest))
+					e := protoErr(t, err)
+					if e.Code != protocol.EgressUnavailable || protocol.Exit(e.Code) != 17 || e.Cleanup != protocol.NotNeeded {
+						t.Fatalf("%+v", e)
+					}
+					if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, at.hint) ||
+						strings.Count(e.Message, at.hint) != 1 ||
+						!strings.Contains(e.Message, "workers") || // the caller network, by key or network name
+						(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
+						t.Fatalf("message %q lacks %q, the proxy or the hint %q once at its end", e.Message, tc.want, at.hint)
+					}
+					if at.endpoint != "" && strings.Contains(e.Message, "~/.egress/current/start.sh") {
+						t.Fatalf("remote message %q names the local start command", e.Message)
+					}
+					if got := d.afterInfo().verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
+						t.Fatalf("docker calls %q, want %q", got, proxyCalls[:tc.calls])
+					}
+					if len(creds.calls)+len(tokens.calls)+len(keys.calls)+len(env.calls)+codexCreds.ready+codexCreds.injected != 0 {
+						t.Fatalf("credential calls: %q %q %q %q codex=%d/%d", creds.calls, tokens.calls, keys.calls, env.calls, codexCreds.ready, codexCreds.injected)
+					}
+				})
+			}
 		}
 	}
 }
@@ -117,7 +134,7 @@ func TestEgressDockerFailures(t *testing.T) {
 		want protocol.Code
 	}{
 		{"unreachable", world{unreachable: true}, protocol.DockerUnreachable},
-		{"listing unreachable", world{egressErr: docker.ErrUnreachable}, protocol.DockerUnreachable},
+		{"listing unreachable", world{egressErr: unreachableErr}, protocol.DockerUnreachable},
 		{"listing fails", world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}}, protocol.EgressUnavailable},
 		{"inspect not json", world{proxy: func(g map[string]any) { g["State"] = "running" }}, protocol.EgressUnavailable},
 	} {
@@ -128,6 +145,25 @@ func TestEgressDockerFailures(t *testing.T) {
 			_, err := h.Start(context.Background(), validManifest(t))
 			if e := protoErr(t, err); e.Code != tc.want || len(creds.calls) != 0 || hasCall(d, "run") {
 				t.Fatalf("%+v %q %q", e, creds.calls, d.verbs())
+			}
+		})
+	}
+}
+
+// A docker command that fails while checking the proxy ends its refusal with the hint for the Docker target.
+func TestEgressCommandFailureHint(t *testing.T) {
+	for _, at := range endpoints {
+		t.Run(at.name, func(t *testing.T) {
+			w := world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}, labels: goodLabels()}
+			h, _, creds, _, _, _, _ := credentialHost(&w)
+			if at.endpoint != "" {
+				h = atEndpoint(h, at.endpoint)
+			}
+			_, err := h.Start(context.Background(), validManifest(t))
+			e := protoErr(t, err)
+			if e.Code != protocol.EgressUnavailable || !strings.HasSuffix(e.Message, at.hint) || strings.Count(e.Message, at.hint) != 1 ||
+				len(creds.calls) != 0 {
+				t.Fatalf("%+v %q", e, creds.calls)
 			}
 		})
 	}
@@ -173,6 +209,7 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 				if got := networkArgs(run); !slices.Equal(got, []string{workersNetwork}) {
 					t.Fatalf("--network values %q in %q", got, run)
 				}
+				d = d.afterInfo()
 				if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", workersNetwork}) {
 					t.Fatalf("proxy check first: %q", d.verbs())
 				}
@@ -262,7 +299,7 @@ func TestStartOnCallerNetwork(t *testing.T) {
 			t.Fatalf("%s=%q", key, env[key])
 		}
 	}
-	if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", miniOpNetwork}) {
+	if d := d.afterInfo(); !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", miniOpNetwork}) {
 		t.Fatalf("proxy check first: %q", d.calls[:3])
 	}
 }
@@ -305,7 +342,7 @@ func TestEgressRefusalsByKey(t *testing.T) {
 					t.Fatalf("message %q lacks %q", e.Message, want)
 				}
 			}
-			if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) || len(creds.calls) != 0 {
+			if got := d.afterInfo().verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) || len(creds.calls) != 0 {
 				t.Fatalf("docker calls %q, credential calls %q", got, creds.calls)
 			}
 		})
