@@ -2879,7 +2879,7 @@ class DaemonChoiceTest(StartBase):
             self.assertIn(notice, err.getvalue())
         self.assertIsNone(load_record("w"))
         self.broker.built_daemons.clear()
-        for environment in (None, carried(ENVIRONMENT)):
+        for environment in (None, carried(replace(ENVIRONMENT, lock=None))):
             with self.subTest(environment=environment):
                 with contextlib.redirect_stderr(io.StringIO()) as err:
                     self.start(environment=environment)
@@ -2889,6 +2889,31 @@ class DaemonChoiceTest(StartBase):
                 self.assertEqual(self.remote_work(), [])
                 os.unlink(os.path.join(self.state, RECORD_FILE))
         self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+
+    def test_a_locked_start_never_falls_back_from_an_unreachable_remote(self):
+        why = "Docker daemon not running"
+        self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        want = f"^broker: Cannot reach Docker target {REMOTE}: {re.escape(why)}\\.$"
+        with self.assertRaisesRegex(BrokerError, want):
+            self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertIsNone(load_record("w"))
+
+    def test_an_environment_naming_local_ignores_the_remote_s_state(self):
+        local_env = carried(replace(ENVIRONMENT, daemon="local", lock=None))
+        self.targets("remote", self.pc._replace(id=None, unreachable="down"), self.local)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.start(environment=local_env)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertNotIn("starting on", err.getvalue())
+        os.unlink(os.path.join(self.state, RECORD_FILE))
+        why = "Docker daemon not running"
+        self.targets("remote", self.pc, self.local._replace(id=None, unreachable=why))
+        want = f"^broker: Cannot reach Docker target {re.escape(self.ep)}: {re.escape(why)}\\.$"
+        with self.assertRaisesRegex(BrokerError, want):
+            self.start(environment=local_env)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertIsNone(load_record("w"))
 
     def test_with_both_daemons_unreachable_a_new_start_fails_on_the_remote_s_reason(self):
         why = "host key unknown: not in ~/.ssh/known_hosts"

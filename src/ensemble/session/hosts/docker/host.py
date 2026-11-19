@@ -891,14 +891,16 @@ class DockerHost(Host):
     def _choose(self, environment: EnvironmentSpec | None) -> Daemon:
         """A new session's daemon: its environment's, else the target's default; down, local."""
         target = self._target()
-        name = environment.daemon if environment and environment.daemon else target.default
-        daemon = daemon_named(target, name)
+        named = environment.daemon if environment else None
+        daemon = daemon_named(target, named or target.default)
         if daemon is None:
-            raise SessionError(f"host {self.name}: no {name} Docker daemon is configured")
+            raise SessionError(
+                f"host {self.name}: no {named or target.default} Docker daemon is configured"
+            )
         if daemon.id is not None:
             return daemon
         local = daemon_named(target, DaemonName.LOCAL)
-        if local is None or local.id is None:
+        if named or (environment and environment.lock) or local is None or local.id is None:
             raise _unreachable(daemon)
         print(
             f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable});"

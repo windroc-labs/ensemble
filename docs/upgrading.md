@@ -29,7 +29,8 @@ every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT`
 - The remote login shell must find `docker` on its PATH. The Docker Engine must be version 26 or newer.
 - Before any build or credential write, each broker command checks the target once. Start fails `docker_unreachable`
   with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
-  running, or an Engine older than 26.
+  running, or an Engine older than 26. A new session that names no daemon and holds no lock starts on the local
+  Docker Desktop instead, naming the target and the reason on stderr.
 
 Where a worker runs:
 
