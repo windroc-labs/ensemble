@@ -16,6 +16,7 @@ options, the check before each start) are in [Upgrading › Broker protocol 43](
 `ensemble-broker target` shows how the broker reads it. A session stays on the daemon its first start chose:
 switching the target to another machine leaves earlier sessions there, to resume or reclaim after switching back.
 While the target cannot be reached, a new worker that would run there starts on the Mac's Docker Desktop instead.
+A target that gives no answer within 15 s, such as a host whose network drops the connection, counts as unreachable.
 The session's harness decides once, when it creates the container, and logs `ensemble-session: docker: <target>
 unreachable (<reason>); starting on the local Docker Desktop …`; image, workspace, container and `daemon.json` all
 follow that decision, even if the target answers again during the start. The check before it (`ensemble-session
