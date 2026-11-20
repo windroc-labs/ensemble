@@ -888,8 +888,11 @@ class DockerHost(Host):
             )
         return hook, root, built
 
-    def _choose(self, environment: EnvironmentSpec | None) -> Daemon:
-        """A new session's daemon: its environment's, else the target's default; down, local."""
+    def _choose(self, environment: EnvironmentSpec | None, *, starting: bool = False) -> Daemon:
+        """A new session's daemon: its environment's, else the target's default; down, local.
+        Only `starting`, the start that creates the container, says it starts there: a check
+        may run in another process, whose target may differ from the start's.
+        """
         target = self._target()
         named = environment.daemon if environment else None
         name = named or target.default
@@ -901,9 +904,9 @@ class DockerHost(Host):
         local = daemon_named(target, DaemonName.LOCAL)
         if named or (environment and environment.lock) or local is None or local.id is None:
             raise _unreachable(daemon)
+        then = f"; starting on {describe(local)}" if starting else ""
         print(
-            f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable});"
-            f" starting on {describe(local)}",
+            f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable}){then}",
             file=sys.stderr,
         )
         return local
@@ -998,7 +1001,7 @@ class DockerHost(Host):
                 )
         home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
-        daemon = self._resumed(name) if resume == "1" else self._choose(environment)
+        daemon = self._resumed(name) if resume == "1" else self._choose(environment, starting=True)
         if recorded is None:
             try:
                 save_record(name, DaemonRecord(daemon, self.docker))

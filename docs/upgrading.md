@@ -30,7 +30,8 @@ every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT`
 - Before any build or credential write, each broker command checks the target once. Start fails `docker_unreachable`
   with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
   running, or an Engine older than 26. A new session that names no daemon and holds no lock starts on the local
-  Docker Desktop instead, naming the target and the reason on stderr.
+  Docker Desktop instead: its harness decides once and logs the target and the reason; the check before the start
+  names them on stderr without promising a daemon.
 
 Where a worker runs:
 

@@ -2865,10 +2865,7 @@ class DaemonChoiceTest(StartBase):
     def test_an_unreachable_remote_default_falls_back_to_the_local_daemon(self):
         why = "Docker daemon not running"
         self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
-        notice = (
-            f"ensemble-session: docker: {REMOTE} unreachable ({why});"
-            f" starting on the local Docker Desktop ({self.ep})\n"
-        )
+        down = f"ensemble-session: docker: {REMOTE} unreachable ({why})"
         for check in (
             lambda: self.host.validate("w", self.launch),
             lambda: self.host._preflight("w", self.launch, self.METADATA),
@@ -2876,19 +2873,35 @@ class DaemonChoiceTest(StartBase):
         ):
             with contextlib.redirect_stderr(io.StringIO()) as err:
                 check()
-            self.assertIn(notice, err.getvalue())
+            self.assertEqual(
+                err.getvalue().splitlines().count(down), 1, "a check promises no daemon"
+            )
         self.assertIsNone(load_record("w"))
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON] * 3)
         self.broker.built_daemons.clear()
+        notice = f"{down}; starting on the local Docker Desktop ({self.ep})"
         for environment in (None, carried(replace(ENVIRONMENT, lock=None))):
             with self.subTest(environment=environment):
                 with contextlib.redirect_stderr(io.StringIO()) as err:
                     self.start(environment=environment)
-                self.assertIn(notice, err.getvalue())
+                self.assertEqual(err.getvalue().splitlines().count(notice), 1)
                 self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
                 self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
                 self.assertEqual(self.remote_work(), [])
                 os.unlink(os.path.join(self.state, RECORD_FILE))
         self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+
+    def test_a_start_keeps_the_local_daemon_when_the_remote_answers_again_midway(self):
+        self.targets("remote", self.pc._replace(id=None, unreachable="down"), self.local)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.host._validate("w", self.launch, self.METADATA)
+            self.broker.found = Target("remote", (self.pc, self.local))
+            self.start()
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
+        self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+        self.assertEqual(self.remote_work(), [])
+        self.assertEqual(self.broker.targets, 1, "one start asks the target once")
 
     def test_a_locked_start_never_falls_back_from_an_unreachable_remote(self):
         why = "Docker daemon not running"
