@@ -1599,6 +1599,13 @@ class EnvironmentTest(StartBase):
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
         )
 
+    def test_the_target_check_is_its_harness_start_phase_once(self):
+        reports = []
+        with phase_reporter(lambda phase, wait: reports.append((phase, wait, self.broker.targets))):
+            self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(reports[:2], [("checking the Docker target", TIMEOUT, 0), (None, 0, 1)])
+        self.assertEqual([r for r in reports if r[0] == "checking the Docker target"], reports[:1])
+
     def test_the_build_is_its_harness_start_phase(self):
         with phase_reporter(lambda phase, wait: self.order.append(("phase", phase, wait))):
             self.start(environment=carried(ENVIRONMENT))
