@@ -1599,6 +1599,13 @@ class EnvironmentTest(StartBase):
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
         )
 
+    def test_the_target_check_is_its_harness_start_phase_once(self):
+        reports = []
+        with phase_reporter(lambda phase, wait: reports.append((phase, wait, self.broker.targets))):
+            self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(reports[:2], [("checking the Docker target", TIMEOUT, 0), (None, 0, 1)])
+        self.assertEqual([r for r in reports if r[0] == "checking the Docker target"], reports[:1])
+
     def test_the_build_is_its_harness_start_phase(self):
         with phase_reporter(lambda phase, wait: self.order.append(("phase", phase, wait))):
             self.start(environment=carried(ENVIRONMENT))
@@ -2862,9 +2869,79 @@ class DaemonChoiceTest(StartBase):
         self.assertFalse([c for c in self.order if isinstance(c, list) and "info" in c])
         self.assertEqual(self.broker.targets, 1)
 
-    def test_an_unreachable_chosen_daemon_fails_a_new_start_before_any_build(self):
-        why = "host key unknown: not in ~/.ssh/known_hosts"
+    def test_an_unreachable_remote_default_falls_back_to_the_local_daemon(self):
+        why = "Docker daemon not running"
         self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        down = f"ensemble-session: docker: {REMOTE} unreachable ({why})"
+        for check in (
+            lambda: self.host.validate("w", self.launch),
+            lambda: self.host._preflight("w", self.launch, self.METADATA),
+            lambda: self.host._validate("w", self.launch, self.METADATA),
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                check()
+            self.assertEqual(
+                err.getvalue().splitlines().count(down), 1, "a check promises no daemon"
+            )
+        self.assertIsNone(load_record("w"))
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON] * 3)
+        self.broker.built_daemons.clear()
+        notice = f"{down}; starting on the local Docker Desktop ({self.ep})"
+        for environment in (None, carried(replace(ENVIRONMENT, lock=None))):
+            with self.subTest(environment=environment):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.start(environment=environment)
+                self.assertEqual(err.getvalue().splitlines().count(notice), 1)
+                self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+                self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
+                self.assertEqual(self.remote_work(), [])
+                os.unlink(os.path.join(self.state, RECORD_FILE))
+        self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+
+    def test_a_start_keeps_the_local_daemon_when_the_remote_answers_again_midway(self):
+        self.targets("remote", self.pc._replace(id=None, unreachable="down"), self.local)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.host._validate("w", self.launch, self.METADATA)
+            self.broker.found = Target("remote", (self.pc, self.local))
+            self.start()
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        self.assertEqual(self.manifest()["daemon"], LOCAL_DAEMON)
+        self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+        self.assertEqual(self.remote_work(), [])
+        self.assertEqual(self.broker.targets, 1, "one start asks the target once")
+
+    def test_a_locked_start_never_falls_back_from_an_unreachable_remote(self):
+        why = "Docker daemon not running"
+        self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
+        want = f"^broker: Cannot reach Docker target {REMOTE}: {re.escape(why)}\\.$"
+        with self.assertRaisesRegex(BrokerError, want):
+            self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertIsNone(load_record("w"))
+
+    def test_an_environment_naming_local_ignores_the_remote_s_state(self):
+        local_env = carried(replace(ENVIRONMENT, daemon="local", lock=None))
+        self.targets("remote", self.pc._replace(id=None, unreachable="down"), self.local)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.start(environment=local_env)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertNotIn("starting on", err.getvalue())
+        os.unlink(os.path.join(self.state, RECORD_FILE))
+        why = "Docker daemon not running"
+        self.targets("remote", self.pc, self.local._replace(id=None, unreachable=why))
+        want = f"^broker: Cannot reach Docker target {re.escape(self.ep)}: {re.escape(why)}\\.$"
+        with self.assertRaisesRegex(BrokerError, want):
+            self.start(environment=local_env)
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertIsNone(load_record("w"))
+
+    def test_with_both_daemons_unreachable_a_new_start_fails_on_the_remote_s_reason(self):
+        why = "host key unknown: not in ~/.ssh/known_hosts"
+        self.targets(
+            "remote",
+            self.pc._replace(id=None, unreachable=why),
+            self.local._replace(id=None, unreachable="Docker daemon not running"),
+        )
         want = f"^broker: Cannot reach Docker target {REMOTE}: {re.escape(why)}\\.$"
         for check in (
             lambda: self.host.validate("w", self.launch),
@@ -2878,8 +2955,6 @@ class DaemonChoiceTest(StartBase):
         self.assertEqual(self.broker.built_daemons, [])
         self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
         self.assertIsNone(load_record("w"))
-        self.start(environment=carried(replace(ENVIRONMENT, daemon="local")))
-        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
 
     def test_a_preflight_builds_on_the_default_and_records_nothing(self):
         self.host._preflight("w", self.launch, self.METADATA)

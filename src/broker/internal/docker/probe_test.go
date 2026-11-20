@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // probeFormat is the probe's argv after --host: $5 $6 $7 in a fake docker.
@@ -125,5 +126,25 @@ func TestFailedProbeRunsNoFurtherDocker(t *testing.T) {
 	}
 	if string(calls) != "info --format\n" {
 		t.Fatalf("docker ran after the failed probe: %q", calls)
+	}
+}
+
+func TestASilentTargetIsUnreachableAtTheProbeDeadline(t *testing.T) {
+	t.Chdir(t.TempDir())
+	saved := probeTimeout
+	probeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = saved })
+	// The sleep outlives the killed shell and holds its pipes, as an ssh left by a killed docker would: without a
+	// bounded wait for them, Run hangs past the test timeout.
+	c := remoteDocker(t, `echo "$5" >> calls; sleep 3600`)
+	for range 2 {
+		_, err := c.Run(context.Background(), []string{"ps"}, nil)
+		var u *Unreachable
+		if !errors.As(err, &u) || u.Reason != "connection failed (no answer within 200ms)" {
+			t.Fatalf("%v", err)
+		}
+	}
+	if calls, err := os.ReadFile("calls"); err != nil || string(calls) != "info\n" {
+		t.Fatalf("one probe, then no docker: %q %v", calls, err)
 	}
 }

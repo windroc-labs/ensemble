@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -37,6 +38,9 @@ const (
 var InfoID = []string{"info", "--format", "{{json .ID}}"}
 
 var probeArgs = []string{"info", "--format", `{"id":{{json .ID}},"version":{{json .ServerVersion}}}`}
+
+// probeTimeout: a remote that drops packets is unreachable then.
+var probeTimeout = 15 * time.Second
 
 type Runner interface {
 	Run(ctx context.Context, args []string, stdin []byte) ([]byte, error)
@@ -231,7 +235,13 @@ func (c *CLI) probe(ctx context.Context) error {
 		return c.probeErr
 	}
 	c.probed = true
-	out, stderr, err := c.exec(ctx, probeArgs, nil)
+	bounded, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	out, stderr, err := c.exec(bounded, probeArgs, nil)
+	if err != nil && ctx.Err() == nil && errors.Is(bounded.Err(), context.DeadlineExceeded) {
+		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (no answer within " + probeTimeout.String() + ")"}
+		return c.probeErr
+	}
 	if err != nil {
 		u := c.unreachable(stderr)
 		if u == nil {
@@ -275,6 +285,7 @@ func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, st
 	cmd := exec.CommandContext(ctx, path, argv...)
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.WaitDelay = time.Second
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if c.Progress != nil && len(args) > 0 && args[0] == "build" {

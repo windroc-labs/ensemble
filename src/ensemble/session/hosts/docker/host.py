@@ -508,7 +508,8 @@ class DockerHost(Host):
     def _target(self) -> Target:
         """The broker's target, asked once per Host."""
         if self._found is None:
-            self._found = self.broker.target()
+            with start_phase("checking the Docker target", TIMEOUT):
+                self._found = self.broker.target()
         return self._found
 
     def _beside(self, down: tuple[Daemon, ...]) -> tuple[Daemon, ...]:
@@ -888,16 +889,25 @@ class DockerHost(Host):
             )
         return hook, root, built
 
-    def _choose(self, environment: EnvironmentSpec | None) -> Daemon:
-        """A new session's daemon: its environment's, else the target's default."""
+    def _choose(self, environment: EnvironmentSpec | None, *, starting: bool = False) -> Daemon:
+        """A new session's daemon: its environment's, else the target's default; down, local."""
         target = self._target()
-        name = environment.daemon if environment and environment.daemon else target.default
+        named = environment.daemon if environment else None
+        name = named or target.default
         daemon = daemon_named(target, name)
         if daemon is None:
             raise SessionError(f"host {self.name}: no {name} Docker daemon is configured")
-        if daemon.id is None:
+        if daemon.id is not None:
+            return daemon
+        local = daemon_named(target, DaemonName.LOCAL)
+        if named or (environment and environment.lock) or local is None or local.id is None:
             raise _unreachable(daemon)
-        return daemon
+        then = f"; starting on {describe(local)}" if starting else ""
+        print(
+            f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable}){then}",
+            file=sys.stderr,
+        )
+        return local
 
     def _recorded(self, name: str) -> DaemonRecord | None:
         try:
@@ -989,7 +999,7 @@ class DockerHost(Host):
                 )
         home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
-        daemon = self._resumed(name) if resume == "1" else self._choose(environment)
+        daemon = self._resumed(name) if resume == "1" else self._choose(environment, starting=True)
         if recorded is None:
             try:
                 save_record(name, DaemonRecord(daemon, self.docker))
