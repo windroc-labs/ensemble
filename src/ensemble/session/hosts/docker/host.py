@@ -889,10 +889,7 @@ class DockerHost(Host):
         return hook, root, built
 
     def _choose(self, environment: EnvironmentSpec | None, *, starting: bool = False) -> Daemon:
-        """A new session's daemon: its environment's, else the target's default; down, local.
-        Only `starting`, the start that creates the container, says it starts there: a check
-        may run in another process, whose target may differ from the start's.
-        """
+        """A new session's daemon: its environment's, else the target's default; down, local."""
         target = self._target()
         named = environment.daemon if environment else None
         name = named or target.default
