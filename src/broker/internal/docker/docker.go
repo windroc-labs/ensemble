@@ -39,8 +39,7 @@ var InfoID = []string{"info", "--format", "{{json .ID}}"}
 
 var probeArgs = []string{"info", "--format", `{"id":{{json .ID}},"version":{{json .ServerVersion}}}`}
 
-// probeTimeout bounds a remote target's probe: a host that drops packets is unreachable then, not after ssh's
-// connect timeout for each connection docker opens.
+// probeTimeout: a remote that drops packets is unreachable then.
 var probeTimeout = 15 * time.Second
 
 type Runner interface {
@@ -286,7 +285,6 @@ func (c *CLI) exec(ctx context.Context, args []string, stdin []byte) ([]byte, st
 	cmd := exec.CommandContext(ctx, path, argv...)
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(stdin)
-	// A killed docker's children (its ssh) may keep its pipes open.
 	cmd.WaitDelay = time.Second
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

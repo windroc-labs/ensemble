@@ -506,7 +506,7 @@ class DockerHost(Host):
         self._found: Target | None = None
 
     def _target(self) -> Target:
-        """The broker's target, asked once per Host; a remote that never answers takes the broker's probe bound."""
+        """The broker's target, asked once per Host."""
         if self._found is None:
             with start_phase("checking the Docker target", TIMEOUT):
                 self._found = self.broker.target()
