@@ -60,7 +60,7 @@ jobs:
           fi
       - name: Set up Go
         if: ${{ steps.inputs.outputs.build != 'false' }}
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: src/broker/go.mod
           cache: false
