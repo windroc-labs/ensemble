@@ -23,7 +23,7 @@ from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 PROTOCOL = "44"
-MAX_DAEMONS = 9  # the target setting's 8 addresses and the local Docker Desktop
+MAX_DAEMONS = 9
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -483,7 +483,6 @@ class Broker:
 
 
 def _target_ok(found: Mapping[str, _Json]) -> bool:
-    """One remote daemon per address of the target setting, then the one local."""
     daemons = found.get("daemons")
     if not (
         set(found) == {"default", "daemons"}

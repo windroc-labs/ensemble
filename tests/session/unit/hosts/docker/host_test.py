@@ -2957,8 +2957,10 @@ class DaemonChoiceTest(StartBase):
             [line for line in err.getvalue().splitlines() if "unreachable" in line],
             [
                 "ensemble-session: docker: ssh://u@lan unreachable (down)",
-                f"ensemble-session: docker: {REMOTE} unreachable (authentication failed);"
-                f" starting on the local Docker Desktop ({self.ep})",
+                (
+                    f"ensemble-session: docker: {REMOTE} unreachable (authentication failed);"
+                    f" starting on the local Docker Desktop ({self.ep})"
+                ),
             ],
         )
         self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))

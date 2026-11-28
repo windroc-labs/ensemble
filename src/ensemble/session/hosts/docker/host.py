@@ -891,8 +891,8 @@ class DockerHost(Host):
         return hook, root, built
 
     def _choose(self, environment: EnvironmentSpec | None, *, starting: bool = False) -> Daemon:
-        """A new session's daemon: its environment's, else the first reached of the target's
-        default ones, in order; all down, local. A locked one tries only the first.
+        """A new session's daemon: its environment's, else the first reached default one (locked:
+        only the first); none, local.
         """
         target = self._target()
         named = environment.daemon if environment else None
@@ -1007,7 +1007,6 @@ class DockerHost(Host):
         home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
         daemon = self._resumed(name) if resume == "1" else self._choose(environment, starting=True)
-        # A resume may reach its daemon at another address; Mac-side state reads dial the recorded one.
         if recorded is None or recorded.daemon != daemon:
             try:
                 save_record(name, DaemonRecord(daemon, self.docker))

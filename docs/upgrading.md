@@ -52,9 +52,10 @@ host = "ssh://user@host"
 local_secrets = ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
 ```
 
-Any other key in the table, a table without both, or a file that is not valid TOML fails every Docker command
-`docker_unreachable` ("invalid target setting"). Only the broker reads the table: `ensemble-broker target` prints the configured daemons (`local`, and `remote` when
-`host` is set), the default one, and each daemon's ID or why it cannot be reached. The broker and the session send
+Any other key in the table (but `hosts`, from protocol 44), a table without `local_secrets` and one of `host` or
+`hosts`, or a file that is not valid TOML fails every Docker command `docker_unreachable` ("invalid target setting").
+Only the broker reads the table: `ensemble-broker target` prints the configured daemons (`local`, and a `remote` one
+per address when `host` or `hosts` is set), the default one, and each daemon's ID or why it cannot be reached. The broker and the session send
 every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say:
 
 - SSH ignores `~/.ssh/config`, so the address carries the user and port. Authentication is key-only: the default key
@@ -70,7 +71,8 @@ every docker call to a daemon it lists, whatever `DOCKER_HOST`, `DOCKER_CONTEXT`
 Where a worker runs:
 
 - A new session takes its environment's `daemon` key: `"local"` runs it on the Mac's Docker Desktop whatever the
-  target is; unset takes the target when `host` is set and the target answers, else the local Docker Desktop. The
+  target is; unset takes the target when `host` (or `hosts`: the first address that answers) is set and answers, else
+  the local Docker Desktop. The
   packaged mini-op environment (the verifier's) sets `daemon = "local"`. Only `config.toml` and `config.local.toml` set it.
 - The session records that daemon by its ID (`docker info`) in `~/.ensemble/docker-state/<name>/daemon.json`, once,
   and every later command of the session (maintain, close, resume, reclaim) uses it, whatever the settings say then:
