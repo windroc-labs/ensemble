@@ -227,17 +227,21 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
 }
 
-// probe's diagnostic comes from docker info, never a container.
+// probe's diagnostic comes from docker info, never a container. A probe its caller's ctx cut short says nothing
+// about the target: it is not kept, so the next Run probes again.
 func (c *CLI) probe(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.probed {
 		return c.probeErr
 	}
-	c.probed = true
 	bounded, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	out, stderr, err := c.exec(bounded, probeArgs, nil)
+	if ctx.Err() != nil {
+		return fmt.Errorf("docker: %w", ctx.Err())
+	}
+	c.probed = true
 	if err != nil && ctx.Err() == nil && errors.Is(bounded.Err(), context.DeadlineExceeded) {
 		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (no answer within " + probeTimeout.String() + ")"}
 		return c.probeErr

@@ -148,3 +148,21 @@ func TestASilentTargetIsUnreachableAtTheProbeDeadline(t *testing.T) {
 		t.Fatalf("one probe, then no docker: %q %v", calls, err)
 	}
 }
+
+func TestACancelledProbeIsNotCached(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// The first probe hangs until its caller gives up; the next one answers.
+	c := remoteDocker(t, `echo "$5" >> calls; if [ ! -e first ]; then : > first; sleep 3600; fi; if [ "$5 $6 $7" = '`+probeFormat+`' ]; then echo '{"id":"AB:CD","version":"27.5.1"}'; else echo listed; fi`)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := c.Run(ctx, []string{"ps"}, nil)
+	if errors.Is(err, ErrUnreachable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("a probe its caller cancelled is no verdict on the target: %v", err)
+	}
+	if out, err := c.Run(context.Background(), []string{"ps"}, nil); err != nil || string(out) != "listed\n" {
+		t.Fatalf("the next Run probes again: %q %v", out, err)
+	}
+	if calls, err := os.ReadFile("calls"); err != nil || string(calls) != "info\ninfo\nps\n" {
+		t.Fatalf("two probes, then ps: %q %v", calls, err)
+	}
+}
