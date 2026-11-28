@@ -2214,7 +2214,7 @@ class ReclaimTest(Base):
             ],
         }
         popen = FakePopen(
-            (b'{"protocol_version": "43"}\n', b"", 0), (json.dumps(down).encode(), b"", 0)
+            (b'{"protocol_version": "44"}\n', b"", 0), (json.dumps(down).encode(), b"", 0)
         )
         self.spawn_mock.side_effect = popen
         with mock.patch("sys.argv", [module.__file__, DOCKER]):

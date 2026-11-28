@@ -22,7 +22,8 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "43"
+PROTOCOL = "44"
+MAX_DAEMONS = 9  # the target setting's 8 addresses and the local Docker Desktop
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -482,18 +483,18 @@ class Broker:
 
 
 def _target_ok(found: Mapping[str, _Json]) -> bool:
+    """One remote daemon per address of the target setting, then the one local."""
     daemons = found.get("daemons")
     if not (
         set(found) == {"default", "daemons"}
         and isinstance(daemons, list)
-        and 1 <= len(daemons) <= len(DaemonName)
+        and 1 <= len(daemons) <= MAX_DAEMONS
     ):
         return False
     names = [d["name"] for d in daemons if _daemon_ok(d)]
     return (
         len(names) == len(daemons)
-        and len(set(names)) == len(names)
-        and DaemonName.LOCAL in names
+        and names.count(DaemonName.LOCAL) == 1
         and found["default"] in names
     )
 

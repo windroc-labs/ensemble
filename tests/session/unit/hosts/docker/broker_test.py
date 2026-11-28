@@ -114,14 +114,28 @@ class ResponseTest(Case):
                 "target-output-remote-unreachable",
                 Target("remote", (remote._replace(id=None, unreachable=why), local)),
             ),
+            (
+                "target-output-remote-list",
+                Target(
+                    "remote",
+                    (
+                        remote._replace(
+                            endpoint="ssh://u@192.168.1.20",
+                            id=None,
+                            unreachable="connection failed (no answer within 15s)",
+                        ),
+                        remote._replace(endpoint="ssh://u@pc.tail1234.ts.net"),
+                        local,
+                    ),
+                ),
+            ),
         ):
             with self.subTest(name=name):
                 fake = handshake(success(name))
                 found = Broker(fake).target()
                 self.assertEqual(found, want)
                 self.assertEqual(fake.calls, [argv("version"), argv("target")])
-        self.assertEqual(daemons.daemon_named(found, "remote").unreachable, why)
-        self.assertIsNone(daemons.daemon_with_id(found, "PC:DAEMON:1"))
+        self.assertEqual(daemons.daemon_with_id(found, "PC:DAEMON:1"), want.daemons[1])
         self.assertEqual(daemons.daemon_with_id(found, LOCAL_ID), local)
 
     def test_a_target_reply_breaking_its_rules_is_bad(self):
@@ -132,7 +146,9 @@ class ResponseTest(Case):
             {"daemons": []},
             {"daemons": [remote]},
             {"daemons": [local, local]},
-            {"daemons": [local, remote, remote]},
+            {"daemons": [remote, remote]},
+            {"daemons": [remote, local, local]},
+            {"daemons": [remote | {"endpoint": f"ssh://u@pc{i}"} for i in range(9)] + [local]},
             {"daemons": [local | {"remote": True}]},
             {"daemons": [local | {"endpoint": ""}]},
             {"daemons": [local | {"path": "/usr/bin\n"}]},
@@ -148,8 +164,8 @@ class ResponseTest(Case):
             self.assertNotIsInstance(raised.exception, BrokerError)
 
     def test_target_fails_at_the_handshake_of_an_older_broker(self):
-        fake = FakeBroker((0, '{"protocol_version": "42"}\n', ""))
-        with self.assertRaisesRegex(SessionError, "protocol '42', want '43'"):
+        fake = FakeBroker((0, '{"protocol_version": "43"}\n', ""))
+        with self.assertRaisesRegex(SessionError, "protocol '43', want '44'"):
             Broker(fake).target()
         self.assertEqual(fake.calls, [argv("version")])
 
