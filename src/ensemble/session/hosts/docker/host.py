@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import functools
+import itertools
 import json
 import logging
 import os
@@ -890,24 +891,30 @@ class DockerHost(Host):
         return hook, root, built
 
     def _choose(self, environment: EnvironmentSpec | None, *, starting: bool = False) -> Daemon:
-        """A new session's daemon: its environment's, else the target's default; down, local."""
+        """A new session's daemon: its environment's, else the first reached of the target's
+        default ones, in order; all down, local. A locked one tries only the first.
+        """
         target = self._target()
         named = environment.daemon if environment else None
+        locked = bool(environment and environment.lock)
         name = named or target.default
-        daemon = daemon_named(target, name)
-        if daemon is None:
+        daemons = [d for d in target.daemons if d.name == name]
+        if not daemons:
             raise SessionError(f"host {self.name}: no {name} Docker daemon is configured")
-        if daemon.id is not None:
-            return daemon
-        local = daemon_named(target, DaemonName.LOCAL)
-        if named or (environment and environment.lock) or local is None or local.id is None:
-            raise _unreachable(daemon)
-        then = f"; starting on {describe(local)}" if starting else ""
-        print(
-            f"ensemble-session: docker: {describe(daemon)} unreachable ({daemon.unreachable}){then}",
-            file=sys.stderr,
-        )
-        return local
+        tried = daemons[:1] if locked else daemons
+        skipped = list(itertools.takewhile(lambda d: d.id is None, tried))
+        chosen = tried[len(skipped)] if len(skipped) < len(tried) else None
+        if chosen is None:
+            chosen = daemon_named(target, DaemonName.LOCAL)
+            if named or locked or chosen is None or chosen.id is None:
+                raise _unreachable(daemons[0])
+        for i, down in enumerate(skipped, 1):
+            then = f"; starting on {describe(chosen)}" if starting and i == len(skipped) else ""
+            print(
+                f"ensemble-session: docker: {describe(down)} unreachable ({down.unreachable}){then}",
+                file=sys.stderr,
+            )
+        return chosen
 
     def _recorded(self, name: str) -> DaemonRecord | None:
         try:
