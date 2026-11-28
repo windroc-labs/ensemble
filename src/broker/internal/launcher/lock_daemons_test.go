@@ -33,6 +33,26 @@ func lockOnly(w *lockWorld) *fakeDocker {
 func TestLockIteratesDaemons(t *testing.T) {
 	t.Run("held on the other daemon", lockHeldOnOtherDaemon)
 	t.Run("other daemon unreachable", lockOtherDaemonUnreachable)
+	t.Run("held at another remote address", lockHeldAtAnotherRemoteAddress)
+}
+
+// Every remote address is named remote: the start's own daemon is told apart by its endpoint.
+func lockHeldAtAnotherRemoteAddress(t *testing.T) {
+	holding, starting := newLockWorld(), newLockWorld()
+	holding.add("ensemble-holder-1", "running", map[string]string{lockLabel: "dummy", ownerLabel: "holder"})
+	h, _, _ := starting.host(t, "worker_1")
+	h.Env = &fakeEnv{}
+	h.Daemons = []Daemon{
+		{Name: DaemonRemote, Endpoint: remoteEndpoint, Remote: true, Runner: h.Daemons[0].Runner},
+		{Name: DaemonRemote, Endpoint: "ssh://u@ts", Remote: true, Runner: lockOnly(holding)},
+		{Name: DaemonLocal, Endpoint: localEndpoint, Runner: lockOnly(newLockWorld())},
+	}
+	_, err := h.Start(context.Background(), lockedManifest(t, nil))
+	e := protoErr(t, err)
+	if e.Code != protocol.Busy || e.Holder == nil || e.Holder.Container != "ensemble-holder-1" || !strings.Contains(e.Message, "ssh://u@ts") {
+		t.Fatalf("%+v %+v", e, e.Holder)
+	}
+	starting.assertFinal(t, 0)
 }
 
 func lockHeldOnOtherDaemon(t *testing.T) {
