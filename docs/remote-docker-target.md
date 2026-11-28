@@ -12,13 +12,15 @@ flowchart LR
 ```
 
 Do the steps in this order. The rules for the `[docker]` table in `~/.ensemble/config.local.toml` (address form, `local_secrets`, SSH
-options, the check before each start) are in [Upgrading › Broker protocol 43](upgrading.md#broker-protocol-43-remote-docker-target);
+options, the check before each start) are in [Upgrading › Broker protocol 43](upgrading.md#broker-protocol-43-remote-docker-target),
+and `hosts`, a list of addresses tried in order, in [Upgrading › Broker protocol 44](upgrading.md#broker-protocol-44-ordered-remote-docker-targets);
 `ensemble-broker target` shows how the broker reads it. A session stays on the daemon its first start chose:
 switching the target to another machine leaves earlier sessions there, to resume or reclaim after switching back.
-While the target cannot be reached, a new worker that would run there starts on the Mac's Docker Desktop instead.
+A new worker starts on the first address that answers; while none can be reached, it starts on the Mac's Docker
+Desktop instead.
 A target that gives no answer within 15 s, such as a host whose network drops the connection, counts as unreachable.
 The session's harness decides once, when it creates the container, and logs `ensemble-session: docker: <target>
-unreachable (<reason>); starting on the local Docker Desktop …`; image, workspace, container and `daemon.json` all
+unreachable (<reason>); starting on the local Docker Desktop …` (one line per address it skipped); image, workspace, container and `daemon.json` all
 follow that decision, even if the target answers again during the start. The check before it (`ensemble-session
 start`, an issue run) prints only `… unreachable (<reason>)` and may build an image locally that the start then does
 not use. The session stays on the Docker Desktop, with a new workspace: the target's volumes stay on the target. A
@@ -130,6 +132,17 @@ write the target, install the egress proxy.
 
 Use the target's Tailscale address or MagicDNS name as `host`. Add its host key under that name too, by the
 [Linux target](#linux-target)'s Mac step 1 with that name: `known_hosts` entries are per name.
+
+To use the LAN at home and Tailscale elsewhere, list both, LAN first:
+
+```toml
+[docker]
+hosts = ["ssh://<user>@<lan-host>", "ssh://<user>@<tailscale-name>"]
+local_secrets = ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
+```
+
+The broker asks both at once and a new worker takes the first that answers; both reach one daemon, so sessions
+resume through either. A start with a lock needs every listed address to answer.
 
 ## Egress proxy on the target
 

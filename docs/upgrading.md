@@ -1,5 +1,39 @@
 # Upgrading
 
+## Broker protocol 44: ordered remote Docker targets
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`: a broker and a session of different
+protocols refuse each other. A `[docker]` table with one `host` works as before.
+
+To reach one PC on the LAN at home and over Tailscale elsewhere, or to list several machines, give `hosts` in place of
+`host`, in the order to try them (at most 8, each `ssh://[user@]host[:port]`, no repeats):
+
+```toml
+[docker]
+hosts = ["ssh://user@192.168.1.20", "ssh://user@pc.tail1234.ts.net"]
+local_secrets = ["ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"]
+```
+
+Setting both `host` and `hosts` fails every Docker command `docker_unreachable` ("invalid target setting (host and
+hosts both set)"). Add each address's host key to `~/.ssh/known_hosts` under that address.
+
+- `ensemble-broker target` asks every address at once and lists a `remote` daemon per address, in order, then
+  `local`. An address that answers an earlier one's daemon ID is that machine again and is left out; an address that
+  does not answer stays, with its reason, so one check waits at most 15 s however many addresses are down.
+- A new session that names no daemon and holds no lock starts on the first listed address that answered, else on the
+  local Docker Desktop. Its harness logs each address it skipped, `ensemble-session: docker: <address> unreachable
+  (<reason>)`, the last line ending `; starting on <daemon>`. A start with a lock uses only the first address and
+  fails `docker_unreachable` while it does not answer. An environment with `daemon = "local"` and `local_secrets` work
+  as before.
+- A resume, close or `workspace-rm` finds the session's daemon by ID through any listed address that answers it. A
+  resume through another address than the session's last start rewrites `daemon.json` with that address, which the
+  Mac-side state reads then dial.
+- A lock check asks every listed address. While any of them does not answer, a start with a lock fails
+  `docker_unreachable` naming it, even when another address reaches the same machine: the broker cannot tell which
+  machine a silent address is.
+- Every listed address is trusted alike: any of them may run a worker without `local_secrets` credentials, and the
+  broker takes the daemon ID each one reports.
+
 ## Broker protocol 43: remote Docker target
 
 Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer also creates
@@ -40,9 +74,8 @@ Where a worker runs:
   packaged mini-op environment (the verifier's) sets `daemon = "local"`. Only `config.toml` and `config.local.toml` set it.
 - The session records that daemon by its ID (`docker info`) in `~/.ensemble/docker-state/<name>/daemon.json`, once,
   and every later command of the session (maintain, close, resume, reclaim) uses it, whatever the settings say then:
-  a LAN address and a Tailscale address of one machine are one daemon. The record keeps the address of the first
-  start: after a resume through another address of that machine, `daemon.json` still names the first one. That is
-  harmless, as the session finds its daemon by ID. A session with no record belongs to the local
+  a LAN address and a Tailscale address of one machine are one daemon. A resume through another address of that
+  machine rewrites `daemon.json` with it (since protocol 44). A session with no record belongs to the local
   Docker Desktop. Resuming a session whose daemon no longer has a configured address fails before any volume is made,
   naming the session's target: set the target back to it first.
 - `local_secrets` only refuses: the broker rejects a start on the remote daemon whose environment secrets include a
