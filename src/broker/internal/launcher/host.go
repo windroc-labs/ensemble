@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -99,23 +100,42 @@ type TargetResult struct {
 	Daemons []TargetDaemon `json:"daemons"`
 }
 
+// Target asks every daemon at once, each into its own slot, then lists them in configured order; a remote address that
+// answers an earlier remote's daemon ID is that daemon again and is left out.
 func (h Host) Target(ctx context.Context) TargetResult {
+	listed := make([]TargetDaemon, len(h.Daemons))
+	var wg sync.WaitGroup
+	for i, d := range h.Daemons {
+		wg.Go(func() { listed[i] = targetDaemon(ctx, d) })
+	}
+	wg.Wait()
 	result := TargetResult{Default: h.Daemons[0].Name, Daemons: []TargetDaemon{}}
-	for _, d := range h.Daemons {
-		t := TargetDaemon{Name: d.Name, Endpoint: d.Endpoint, Remote: d.Remote, Path: d.Path}
-		id, err := daemonID(ctx, d)
-		var u *docker.Unreachable
-		switch {
-		case err == nil:
-			t.ID = id
-		case errors.As(err, &u):
-			t.Unreachable = u.Reason
-		default:
-			t.Unreachable = why(err)
+	var reached []string
+	for _, t := range listed {
+		if t.Remote && t.ID != "" && slices.Contains(reached, t.ID) {
+			continue
+		}
+		if t.Remote && t.ID != "" {
+			reached = append(reached, t.ID)
 		}
 		result.Daemons = append(result.Daemons, t)
 	}
 	return result
+}
+
+func targetDaemon(ctx context.Context, d Daemon) TargetDaemon {
+	t := TargetDaemon{Name: d.Name, Endpoint: d.Endpoint, Remote: d.Remote, Path: d.Path}
+	id, err := daemonID(ctx, d)
+	var u *docker.Unreachable
+	switch {
+	case err == nil:
+		t.ID = id
+	case errors.As(err, &u):
+		t.Unreachable = u.Reason
+	default:
+		t.Unreachable = why(err)
+	}
+	return t
 }
 
 type Host struct {
