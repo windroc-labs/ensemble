@@ -109,7 +109,6 @@ func TempDir(home, pattern string) (string, error) {
 	return os.MkdirTemp(base, pattern)
 }
 
-// CLI reaches one daemon: host, one of target's addresses, else ("") the local Docker Desktop.
 type CLI struct {
 	path, buildx, home, config string
 	Progress                   io.Writer // gets each docker build's stderr live
@@ -123,8 +122,7 @@ type CLI struct {
 	probedID                   string
 }
 
-// New's CLI, the local Docker Desktop's, has a config that ignores ~/.docker; Run checks executables, so local
-// validation fails first.
+// New's CLI config ignores ~/.docker; Run checks executables, so local validation fails first.
 func New(home string) (*CLI, func(), error) {
 	dir, err := TempDir(home, "ensemble-docker-")
 	if err != nil {
@@ -145,7 +143,7 @@ func (c *CLI) Target() Target { return c.target }
 
 func (c *CLI) TargetErr() error { return c.targetErr }
 
-// Remotes are a CLI per address of c's target, in its order, each probing on its own.
+// Remotes are one CLI per target address, in order.
 func (c *CLI) Remotes() []*CLI {
 	remotes := make([]*CLI, 0, len(c.target.Hosts))
 	for _, host := range c.target.Hosts {
@@ -234,8 +232,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
 }
 
-// probe's diagnostic comes from docker info, never a container. A probe its caller's ctx cut short says nothing
-// about the target: it is not kept, so the next Run probes again.
+// probe's diagnostic comes from docker info, never a container; a probe its caller cut short is not kept.
 func (c *CLI) probe(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

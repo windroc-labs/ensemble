@@ -100,8 +100,7 @@ type TargetResult struct {
 	Daemons []TargetDaemon `json:"daemons"`
 }
 
-// Target asks every daemon at once, each into its own slot, then lists them in configured order; a remote address that
-// answers an earlier remote's daemon ID is that daemon again and is left out.
+// Target asks every daemon at once; a remote answering an earlier remote's ID is left out.
 func (h Host) Target(ctx context.Context) TargetResult {
 	listed := make([]TargetDaemon, len(h.Daemons))
 	var wg sync.WaitGroup
@@ -162,8 +161,7 @@ type Host struct {
 
 func ValidDaemon(id string) bool { return daemonPattern.MatchString(id) }
 
-// find asks the local daemon first, so a local ID opens no ssh connection, then every remote at once, each into its own
-// slot: any address answering id is that daemon. With no match, the first failure in configured order wins.
+// find asks local daemons first, so a local ID opens no ssh connection, then every remote at once.
 func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, records, error) {
 	var local, remote []Daemon
 	for _, d := range h.Daemons {
@@ -214,7 +212,6 @@ func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, 
 		id, strings.Join(configured, ", "))
 }
 
-// answer is one daemon's identify result.
 type answer struct {
 	d   Daemon
 	r   records
