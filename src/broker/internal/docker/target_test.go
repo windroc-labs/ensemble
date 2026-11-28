@@ -30,12 +30,12 @@ func dockerTable(body string) string { return "[docker]\n" + body + "\n" }
 
 func TestLoadTarget(t *testing.T) {
 	home := t.TempDir()
-	if target, err := LoadTarget(home); err != nil || target.Remote() || target.Host != "" {
+	if target, err := LoadTarget(home); err != nil || target.Remote() || target.Hosts != nil {
 		t.Fatalf("no setting file: %+v %v", target, err)
 	}
 	for _, host := range []string{"ssh://pc", "ssh://u@pc", "ssh://first.last@pc.tail1234.ts.net:2222", "ssh://u@192.168.1.20:22", "ssh://pc:65535"} {
 		writeTarget(t, home, dockerTable(`host = "`+host+`"`+"\nlocal_secrets = []"))
-		if target, err := LoadTarget(home); err != nil || !target.Remote() || target.Host != host {
+		if target, err := LoadTarget(home); err != nil || !target.Remote() || !slices.Equal(target.Hosts, []string{host}) {
 			t.Fatalf("%s: %+v %v", host, target, err)
 		}
 	}
@@ -46,18 +46,27 @@ func TestLoadTarget(t *testing.T) {
 		"[[docker]]\nhost = \"ssh://pc\"": "invalid target setting ([docker] is not a table)",
 		dockerTable(""):                   "invalid target setting (no host)",
 		dockerTable("host = 1"):           "invalid target setting (host is not a string)",
-		dockerTable(`host = "ssh://pc"` + "\nuser = \"u\"\nlocal_secrets = []"):        `invalid target setting (unknown key "user")`,
-		dockerTable(`HOST = "ssh://pc"` + "\nhost = \"ssh://pc\"\nlocal_secrets = []"): `invalid target setting (unknown key "HOST")`,
-		dockerTable(`host = "ssh://pc"` + "\nhost = \"ssh://u@pc\""):                   "invalid target setting (",
-		dockerTable(`host = "ssh://pc\n"`):                                             `invalid target setting (host "ssh://pc\n"`,
-		dockerTable(`host = "ssh://-oProxyCommand=x"`):                                 "invalid target setting (host",
-		dockerTable(`host = "tcp://pc:2375"`):                                          "invalid target setting (host",
-		dockerTable(`host = "ssh://pc/var/run/x"`):                                     "invalid target setting (host",
-		dockerTable(`host = "ssh://pc?x=1"`):                                           "invalid target setting (host",
-		dockerTable(`host = "ssh://pc:0"`):                                             "invalid target setting (host",
-		dockerTable(`host = "ssh://pc:65536"`):                                         "invalid target setting (host",
-		dockerTable(`host = "ssh://u:pw@pc"`):                                          "invalid target setting (host",
-		dockerTable(`host = ""`):                                                       "invalid target setting (host",
+		dockerTable(`host = "ssh://pc"` + "\nuser = \"u\"\nlocal_secrets = []"):                `invalid target setting (unknown key "user")`,
+		dockerTable(`HOST = "ssh://pc"` + "\nhost = \"ssh://pc\"\nlocal_secrets = []"):         `invalid target setting (unknown key "HOST")`,
+		dockerTable(`host = "ssh://pc"` + "\nhost = \"ssh://u@pc\""):                           "invalid target setting (",
+		dockerTable(`host = "ssh://pc\n"`):                                                     `invalid target setting (host "ssh://pc\n"`,
+		dockerTable(`host = "ssh://-oProxyCommand=x"`):                                         "invalid target setting (host",
+		dockerTable(`host = "tcp://pc:2375"`):                                                  "invalid target setting (host",
+		dockerTable(`host = "ssh://pc/var/run/x"`):                                             "invalid target setting (host",
+		dockerTable(`host = "ssh://pc?x=1"`):                                                   "invalid target setting (host",
+		dockerTable(`host = "ssh://pc:0"`):                                                     "invalid target setting (host",
+		dockerTable(`host = "ssh://pc:65536"`):                                                 "invalid target setting (host",
+		dockerTable(`host = "ssh://u:pw@pc"`):                                                  "invalid target setting (host",
+		dockerTable(`host = ""`):                                                               "invalid target setting (host",
+		dockerTable(`host = "ssh://pc"` + "\nhosts = [\"ssh://ts\"]\nlocal_secrets = []"):      "invalid target setting (host and hosts both set)",
+		dockerTable(`hosts = "ssh://pc"` + "\nlocal_secrets = []"):                             "invalid target setting (hosts is not an array)",
+		dockerTable(`hosts = []` + "\nlocal_secrets = []"):                                     "invalid target setting (hosts is empty)",
+		dockerTable(`hosts = [1]` + "\nlocal_secrets = []"):                                    `invalid target setting (hosts item "1" is not ssh://[user@]host[:port])`,
+		dockerTable(`hosts = ["ssh://pc:0"]` + "\nlocal_secrets = []"):                         `invalid target setting (hosts item "ssh://pc:0" is not ssh://[user@]host[:port])`,
+		dockerTable(`hosts = ["ssh://pc", "ssh://-oProxyCommand=x"]` + "\nlocal_secrets = []"): `invalid target setting (hosts item "ssh://-oProxyCommand=x" is not`,
+		dockerTable(`hosts = ["ssh://pc", "ssh://pc"]` + "\nlocal_secrets = []"):               `invalid target setting (hosts item "ssh://pc" repeated)`,
+		dockerTable(`hosts = ["ssh://a", "ssh://b", "ssh://c", "ssh://d", "ssh://e", "ssh://f", "ssh://g", "ssh://h", "ssh://i"]` + "\nlocal_secrets = []"): "invalid target setting (more than 8 hosts)",
+		dockerTable(`hosts = ["ssh://pc"]`): "invalid target setting (no local_secrets)",
 	} {
 		writeTarget(t, home, content)
 		_, err := LoadTarget(home)
@@ -87,21 +96,23 @@ func TestTargetSettings(t *testing.T) {
 		"[[delegate.environments.mini-op.credentials.env]]\nname = \"x\"\nitem = { kind = \"env\" }\n"
 	for _, c := range []struct {
 		content      string
-		host         string
+		hosts        []string
 		localSecrets []string
 	}{
-		{others, "", nil},
-		{"", "", nil},
-		{dockerTable(`host = "ssh://u@pc"` + "\nlocal_secrets = [\"ensemble-broker-env/mini-op-password\", \"ensemble-broker-env/mini-op-ssh-key\"]"), "ssh://u@pc", []string{"ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"}},
-		{dockerTable("local_secrets = []\nhost = 'ssh://pc:2222'"), "ssh://pc:2222", []string{}},
-		{dockerTable(`host = "ssh://pc"` + "\nlocal_secrets = " + sixteen + "]"), "ssh://pc", []string{"ensemble-broker-env/a", "ensemble-broker-env/b", "ensemble-broker-env/c", "ensemble-broker-env/d", "ensemble-broker-env/e", "ensemble-broker-env/f", "ensemble-broker-env/g", "ensemble-broker-env/h", "ensemble-broker-env/i", "ensemble-broker-env/j", "ensemble-broker-env/k", "ensemble-broker-env/l", "ensemble-broker-env/m", "ensemble-broker-env/n", "ensemble-broker-env/o", "ensemble-broker-env/p"}},
-		{others + dockerTable(`host = "ssh://u@pc"`+"\nlocal_secrets = [\n  \"ensemble-broker-env/a\", # kept on the Mac\n]"), "ssh://u@pc", []string{"ensemble-broker-env/a"}},
-		{"docker.host = \"ssh://pc\"\ndocker.local_secrets = []\n", "ssh://pc", []string{}},
+		{others, nil, nil},
+		{"", nil, nil},
+		{dockerTable(`host = "ssh://u@pc"` + "\nlocal_secrets = [\"ensemble-broker-env/mini-op-password\", \"ensemble-broker-env/mini-op-ssh-key\"]"), []string{"ssh://u@pc"}, []string{"ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"}},
+		{dockerTable("local_secrets = []\nhost = 'ssh://pc:2222'"), []string{"ssh://pc:2222"}, []string{}},
+		{dockerTable(`hosts = ["ssh://u@192.168.1.20", "ssh://u@pc.tail1234.ts.net:2222"]` + "\nlocal_secrets = []"), []string{"ssh://u@192.168.1.20", "ssh://u@pc.tail1234.ts.net:2222"}, []string{}},
+		{dockerTable(`hosts = ["ssh://a", "ssh://b", "ssh://c", "ssh://d", "ssh://e", "ssh://f", "ssh://g", "ssh://h"]` + "\nlocal_secrets = []"), []string{"ssh://a", "ssh://b", "ssh://c", "ssh://d", "ssh://e", "ssh://f", "ssh://g", "ssh://h"}, []string{}},
+		{dockerTable(`host = "ssh://pc"` + "\nlocal_secrets = " + sixteen + "]"), []string{"ssh://pc"}, []string{"ensemble-broker-env/a", "ensemble-broker-env/b", "ensemble-broker-env/c", "ensemble-broker-env/d", "ensemble-broker-env/e", "ensemble-broker-env/f", "ensemble-broker-env/g", "ensemble-broker-env/h", "ensemble-broker-env/i", "ensemble-broker-env/j", "ensemble-broker-env/k", "ensemble-broker-env/l", "ensemble-broker-env/m", "ensemble-broker-env/n", "ensemble-broker-env/o", "ensemble-broker-env/p"}},
+		{others + dockerTable(`host = "ssh://u@pc"`+"\nlocal_secrets = [\n  \"ensemble-broker-env/a\", # kept on the Mac\n]"), []string{"ssh://u@pc"}, []string{"ensemble-broker-env/a"}},
+		{"docker.host = \"ssh://pc\"\ndocker.local_secrets = []\n", []string{"ssh://pc"}, []string{}},
 	} {
 		home := t.TempDir()
 		writeTarget(t, home, c.content)
 		target, err := LoadTarget(home)
-		if err != nil || target.Host != c.host || !slices.Equal(target.LocalSecrets, c.localSecrets) {
+		if err != nil || !slices.Equal(target.Hosts, c.hosts) || !slices.Equal(target.LocalSecrets, c.localSecrets) {
 			t.Errorf("%s: %+v %v", c.content, target, err)
 		}
 	}
@@ -163,7 +174,8 @@ func TestSSHArgsOverrideLaterOptions(t *testing.T) {
 func remoteDocker(t *testing.T, script string) *CLI {
 	t.Helper()
 	c := fakeDocker(t, script)
-	c.target = Target{Host: "ssh://u@pc"}
+	c.target = Target{Hosts: []string{"ssh://u@pc"}}
+	c.host = "ssh://u@pc"
 	c.sshDir = t.TempDir()
 	if err := os.WriteFile(filepath.Join(c.sshDir, "ssh"), []byte("#!/bin/sh\nexit 255\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -197,11 +209,12 @@ func TestRemoteTargetIgnoresHostileEnvironment(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", hostile)
 	t.Setenv("SSH_AUTH_SOCK", "")
 	writeTarget(t, home, dockerTable(`host = "ssh://u@pc"`+"\nlocal_secrets = []"))
-	c, clean, err := New(home)
+	local, clean, err := New(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer clean()
+	c := local.Remotes()[0]
 	_, args, env := c.Command([]string{"ps"})
 	if !slices.Equal(args, []string{"--config", c.config, "--host", "ssh://u@pc", "ps"}) || c.Endpoint() != "ssh://u@pc" {
 		t.Fatalf("%q %s", args, c.Endpoint())
@@ -213,7 +226,7 @@ func TestRemoteTargetIgnoresHostileEnvironment(t *testing.T) {
 }
 
 func TestRemoteEnvironmentAddsOnlySSHAuthSock(t *testing.T) {
-	c := &CLI{path: Path, home: "/Users/test", config: "/private/config", target: Target{Host: "ssh://u@pc"}, sshDir: SSHDir}
+	c := &CLI{path: Path, home: "/Users/test", config: "/private/config", host: "ssh://u@pc", sshDir: SSHDir}
 	t.Setenv("SSH_AUTH_SOCK", "/private/agent.sock")
 	t.Setenv("SSH_AGENT_PID", "1")
 	_, _, env := c.Command([]string{"ps"})
