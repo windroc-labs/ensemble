@@ -162,22 +162,49 @@ type Host struct {
 
 func ValidDaemon(id string) bool { return daemonPattern.MatchString(id) }
 
-// find asks the local daemon first, so a local ID opens no ssh connection.
+// find asks the local daemon first, so a local ID opens no ssh connection, then every remote at once, each into its own
+// slot: any address answering id is that daemon. With no match, the first failure in configured order wins.
 func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, records, error) {
-	isRemote := func(d Daemon) bool { return d.Remote }
-	isLocal := func(d Daemon) bool { return !d.Remote }
-	order := slices.Concat(slices.DeleteFunc(slices.Clone(h.Daemons), isRemote), slices.DeleteFunc(slices.Clone(h.Daemons), isLocal))
+	var local, remote []Daemon
+	for _, d := range h.Daemons {
+		if d.Remote {
+			remote = append(remote, d)
+		} else {
+			local = append(local, d)
+		}
+	}
+	answers := make([]answer, 0, len(h.Daemons))
+	for _, d := range local {
+		a := h.answer(ctx, d, code)
+		if a.err == nil && a.d.ID == id {
+			return a.d, a.r, nil
+		}
+		answers = append(answers, a)
+	}
+	asked, cancel := context.WithCancel(ctx)
+	defer cancel()
+	slots := make([]answer, len(remote))
+	done := make(chan int, len(remote))
+	for i, d := range remote {
+		go func() {
+			slots[i] = h.answer(asked, d, code)
+			done <- i
+		}()
+	}
+	for range remote {
+		if a := slots[<-done]; a.err == nil && a.d.ID == id {
+			return a.d, a.r, nil
+		}
+	}
 	var failed error
-	configured := make([]string, 0, len(order))
-	for _, d := range order {
-		found, r, err := h.identify(ctx, d, code)
+	var configured, ids []string
+	for _, a := range append(answers, slots...) {
 		switch {
-		case err == nil && found.ID == id:
-			return found, r, nil
-		case err == nil:
-			configured = append(configured, d.Name+" "+d.Endpoint+" ("+found.ID+")")
-		default:
-			failed = cmp.Or(failed, err)
+		case a.err != nil:
+			failed = cmp.Or(failed, a.err)
+		case !slices.Contains(ids, a.d.ID):
+			ids = append(ids, a.d.ID)
+			configured = append(configured, a.d.Name+" "+a.d.Endpoint+" ("+a.d.ID+")")
 		}
 	}
 	if failed != nil {
@@ -185,6 +212,18 @@ func (h Host) find(ctx context.Context, id string, code protocol.Code) (Daemon, 
 	}
 	return Daemon{}, records{}, protocol.Newf(protocol.DockerUnreachable, "Docker daemon %s is not configured; the configured daemons: %s.",
 		id, strings.Join(configured, ", "))
+}
+
+// answer is one daemon's identify result.
+type answer struct {
+	d   Daemon
+	r   records
+	err error
+}
+
+func (h Host) answer(ctx context.Context, d Daemon, code protocol.Code) answer {
+	found, r, err := h.identify(ctx, d, code)
+	return answer{found, r, err}
 }
 
 func (h Host) Find(ctx context.Context, id string, code protocol.Code) (Daemon, error) {
