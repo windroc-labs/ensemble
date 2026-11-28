@@ -62,7 +62,7 @@ func (h Host) lockBusy(ctx context.Context, d Daemon, lock, exclude string) erro
 		return busy(holder)
 	}
 	for _, other := range h.Daemons {
-		if other.Name == d.Name {
+		if other.Endpoint == d.Endpoint {
 			continue
 		}
 		if holder, err = h.lockHolder(ctx, other, lock, exclude); err != nil {

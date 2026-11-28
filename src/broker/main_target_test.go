@@ -141,8 +141,23 @@ func TestWithHostDaemons(t *testing.T) {
 	defer clean()
 	got := daemons(d)
 	remote := launcher.Daemon{Name: launcher.DaemonRemote, Endpoint: "ssh://u@pc", Remote: true, Path: docker.SSHDir + ":/usr/bin:/bin:/usr/sbin:/sbin"}
-	if len(got) != 2 || got[0].Runner != d || withoutRunner(got[0]) != remote || got[1].Runner == nil || withoutRunner(got[1]) != local {
+	if len(got) != 2 || got[0].Runner == nil || withoutRunner(got[0]) != remote || got[1].Runner != d || withoutRunner(got[1]) != local {
 		t.Fatalf("remote target: %+v", got)
+	}
+	if err := os.WriteFile(setting, []byte("[docker]\nhosts = [\"ssh://u@lan\", \"ssh://u@ts\"]\nlocal_secrets = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, clean, err = docker.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clean()
+	got = daemons(d)
+	lan, ts := remote, remote
+	lan.Endpoint, ts.Endpoint = "ssh://u@lan", "ssh://u@ts"
+	if len(got) != 3 || withoutRunner(got[0]) != lan || withoutRunner(got[1]) != ts || got[0].Runner == got[1].Runner ||
+		got[2].Runner != d || withoutRunner(got[2]) != local {
+		t.Fatalf("address list: %+v", got)
 	}
 }
 

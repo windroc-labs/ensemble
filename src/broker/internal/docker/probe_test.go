@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestLocalRunsTheIDQuery(t *testing.T) {
 
 func TestPath(t *testing.T) {
 	local := &CLI{sshDir: SSHDir}
-	remote := &CLI{sshDir: SSHDir, target: Target{Host: "ssh://u@pc"}}
+	remote := &CLI{sshDir: SSHDir, host: "ssh://u@pc"}
 	if local.Path() != "/usr/bin:/bin:/usr/sbin:/sbin" || remote.Path() != SSHDir+":/usr/bin:/bin:/usr/sbin:/sbin" {
 		t.Fatalf("%q %q", local.Path(), remote.Path())
 	}
@@ -49,13 +50,12 @@ func TestPath(t *testing.T) {
 
 func TestLocalBesideARemoteTargetNeverProbes(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if fakeDocker(t, "true").Local() != nil {
-		t.Fatal("a local target has a second local CLI")
+	if remotes := fakeDocker(t, "true").Remotes(); len(remotes) != 0 {
+		t.Fatalf("a local target has remote CLIs: %+v", remotes)
 	}
-	remote := remoteDocker(t, `echo "$*" >> calls; echo ok`)
-	remote.target.LocalSecrets = []string{"ensemble-broker-env/mini-op-password"}
-	local := remote.Local()
-	if local == nil || local.Endpoint() != "unix://"+filepath.Join(remote.home, ".docker/run/docker.sock") || local.Target().Remote() {
+	local := fakeDocker(t, `echo "$*" >> calls; echo ok`)
+	local.target = Target{Hosts: []string{"ssh://u@pc"}, LocalSecrets: []string{"ensemble-broker-env/mini-op-password"}}
+	if local.Endpoint() != "unix://"+filepath.Join(local.home, ".docker/run/docker.sock") || local.Remote() {
 		t.Fatalf("local CLI %+v", local)
 	}
 	if _, err := local.Run(context.Background(), []string{"ps"}, nil); err != nil {
@@ -146,5 +146,47 @@ func TestASilentTargetIsUnreachableAtTheProbeDeadline(t *testing.T) {
 	}
 	if calls, err := os.ReadFile("calls"); err != nil || string(calls) != "info\n" {
 		t.Fatalf("one probe, then no docker: %q %v", calls, err)
+	}
+}
+
+func TestACancelledProbeIsNotCached(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// The first probe hangs until its caller gives up; the next one answers.
+	c := remoteDocker(t, `echo "$5" >> calls; if [ ! -e first ]; then : > first; sleep 3600; fi; if [ "$5 $6 $7" = '`+probeFormat+`' ]; then echo '{"id":"AB:CD","version":"27.5.1"}'; else echo listed; fi`)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := c.Run(ctx, []string{"ps"}, nil)
+	if errors.Is(err, ErrUnreachable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("a probe its caller cancelled is no verdict on the target: %v", err)
+	}
+	if out, err := c.Run(context.Background(), []string{"ps"}, nil); err != nil || string(out) != "listed\n" {
+		t.Fatalf("the next Run probes again: %q %v", out, err)
+	}
+	if calls, err := os.ReadFile("calls"); err != nil || string(calls) != "info\ninfo\nps\n" {
+		t.Fatalf("two probes, then ps: %q %v", calls, err)
+	}
+}
+
+// One remote CLI per address, in the setting's order, each with its own probe.
+func TestRemotesFollowTheAddressList(t *testing.T) {
+	t.Chdir(t.TempDir())
+	local := fakeDocker(t, `echo "$4" >> calls; echo '{"id":"A","version":"27.5.1"}'`)
+	local.sshDir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(local.sshDir, "ssh"), []byte("#!/bin/sh\nexit 255\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	local.target = Target{Hosts: []string{"ssh://u@lan", "ssh://u@ts"}, LocalSecrets: []string{"ensemble-broker-env/a"}}
+	remotes := local.Remotes()
+	if len(remotes) != 2 || remotes[0].Endpoint() != "ssh://u@lan" || remotes[1].Endpoint() != "ssh://u@ts" ||
+		!remotes[0].Remote() || !slices.Equal(remotes[1].Target().LocalSecrets, []string{"ensemble-broker-env/a"}) {
+		t.Fatalf("%+v", remotes)
+	}
+	for _, c := range remotes {
+		if _, err := c.Run(context.Background(), InfoID, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls, err := os.ReadFile("calls"); err != nil || string(calls) != "ssh://u@lan\nssh://u@ts\n" {
+		t.Fatalf("each address probed once: %q %v", calls, err)
 	}
 }

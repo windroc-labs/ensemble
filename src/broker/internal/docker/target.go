@@ -28,6 +28,7 @@ const (
 	minEngine       = 26
 	EnvItemPrefix   = "ensemble-broker-env/"
 	maxLocalSecrets = 16
+	maxHosts        = 8
 )
 
 var (
@@ -67,13 +68,14 @@ var sshOptions = []string{
 	"-o", "ControlPath=none",
 }
 
-// Target's Host is "" for the local Docker Desktop; a worker given any of LocalSecrets runs there whatever Host is.
+// Target's Hosts are the remote addresses in the setting's order, none for the local Docker Desktop alone; a worker
+// given any of LocalSecrets runs on the local Docker Desktop whatever Hosts are.
 type Target struct {
-	Host         string
+	Hosts        []string
 	LocalSecrets []string
 }
 
-func (t Target) Remote() bool { return t.Host != "" }
+func (t Target) Remote() bool { return len(t.Hosts) > 0 }
 
 // readSetting reads one byte past maxSetting at most.
 func readSetting(path string) ([]byte, error) {
@@ -100,7 +102,7 @@ func validHost(host string) bool {
 	return err == nil && port >= 1 && port <= 65535
 }
 
-// LoadTarget reads SettingFile's SettingTable, admitting only the keys host and local_secrets; no file or no table is
+// LoadTarget reads SettingFile's SettingTable, admitting only the keys host, hosts and local_secrets; no file or no table is
 // the local target. Keys are compared exactly: TOML keys are case-sensitive.
 func LoadTarget(home string) (Target, error) {
 	path := filepath.Join(home, SettingFile)
@@ -144,26 +146,65 @@ func settingTable(path string) (map[string]any, error) {
 
 func parseTarget(table map[string]any) (Target, error) {
 	for _, key := range slices.Sorted(maps.Keys(table)) {
-		if key != "host" && key != "local_secrets" {
+		if key != "host" && key != "hosts" && key != "local_secrets" {
 			return Target{}, fmt.Errorf("unknown key %q", key)
 		}
 	}
-	value, ok := table["host"]
-	if !ok {
-		return Target{}, errors.New("no host")
-	}
-	host, ok := value.(string)
-	if !ok {
-		return Target{}, errors.New("host is not a string")
-	}
-	if !validHost(host) {
-		return Target{}, fmt.Errorf("host %q is not ssh://[user@]host[:port]", host)
+	hosts, err := targetHosts(table)
+	if err != nil {
+		return Target{}, err
 	}
 	secrets, err := localSecrets(table)
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{Host: host, LocalSecrets: secrets}, nil
+	return Target{Hosts: hosts, LocalSecrets: secrets}, nil
+}
+
+// targetHosts is host as a list of one, else hosts in order.
+func targetHosts(table map[string]any) ([]string, error) {
+	value, single := table["host"]
+	list, many := table["hosts"]
+	switch {
+	case single && many:
+		return nil, errors.New("host and hosts both set")
+	case many:
+		return hostList(list)
+	case !single:
+		return nil, errors.New("no host")
+	}
+	host, ok := value.(string)
+	if !ok {
+		return nil, errors.New("host is not a string")
+	}
+	if !validHost(host) {
+		return nil, fmt.Errorf("host %q is not ssh://[user@]host[:port]", host)
+	}
+	return []string{host}, nil
+}
+
+func hostList(value any) ([]string, error) {
+	items, ok := value.([]any)
+	switch {
+	case !ok:
+		return nil, errors.New("hosts is not an array")
+	case len(items) == 0:
+		return nil, errors.New("hosts is empty")
+	case len(items) > maxHosts:
+		return nil, fmt.Errorf("more than %d hosts", maxHosts)
+	}
+	hosts := make([]string, 0, len(items))
+	for _, value := range items {
+		host, ok := value.(string)
+		if !ok || !validHost(host) {
+			return nil, fmt.Errorf("hosts item %q is not ssh://[user@]host[:port]", fmt.Sprint(value))
+		}
+		if slices.Contains(hosts, host) {
+			return nil, fmt.Errorf("hosts item %q repeated", host)
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts, nil
 }
 
 func localSecrets(table map[string]any) ([]string, error) {

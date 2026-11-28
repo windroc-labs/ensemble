@@ -77,6 +77,41 @@
     }
   },
   {
+    "name": "target-output-remote-list",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "default": "remote",
+      "daemons": [
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@192.168.1.20",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "unreachable": "connection failed (no answer within 15s)"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc.tail1234.ts.net",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:DAEMON:1"
+        },
+        {
+          "name": "local",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  },
+  {
     "name": "target-output-id-and-unreachable",
     "valid": false,
     "expected": {
@@ -131,6 +166,90 @@
       "daemons": [
         {
           "name": "pc",
+          "endpoint": "unix:///Users/u/.docker/run/docker.sock",
+          "remote": false,
+          "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+        }
+      ]
+    }
+  },
+  {
+    "name": "target-output-too-many",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "default": "remote",
+      "daemons": [
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc0",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:0"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc1",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:1"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc2",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:2"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc3",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:3"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc4",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:4"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc5",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:5"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc6",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:6"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc7",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:7"
+        },
+        {
+          "name": "remote",
+          "endpoint": "ssh://u@pc8",
+          "remote": true,
+          "path": "/usr/local/libexec/ensemble/ssh:/usr/bin:/bin:/usr/sbin:/sbin",
+          "id": "PC:8"
+        },
+        {
+          "name": "local",
           "endpoint": "unix:///Users/u/.docker/run/docker.sock",
           "remote": false,
           "path": "/usr/bin:/bin:/usr/sbin:/sbin",

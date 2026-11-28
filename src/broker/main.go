@@ -383,18 +383,14 @@ func buildOptions(args []string) *buildArgs {
 	return o
 }
 
-// daemons are d's configured daemons, the default first: its target, then, beside a remote target, the local Docker
-// Desktop.
+// daemons are d's configured daemons, the default first: a remote one per address of its target, in order, then the
+// local Docker Desktop, d itself.
 func daemons(d *docker.CLI) []launcher.Daemon {
-	name := launcher.DaemonLocal
-	if d.Target().Remote() {
-		name = launcher.DaemonRemote
+	var list []launcher.Daemon
+	for _, remote := range d.Remotes() {
+		list = append(list, launcher.Daemon{Name: launcher.DaemonRemote, Endpoint: remote.Endpoint(), Remote: true, Path: remote.Path(), Runner: remote})
 	}
-	list := []launcher.Daemon{{Name: name, Endpoint: d.Endpoint(), Remote: d.Target().Remote(), Path: d.Path(), Runner: d}}
-	if local := d.Local(); local != nil {
-		list = append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: local.Endpoint(), Path: local.Path(), Runner: local})
-	}
-	return list
+	return append(list, launcher.Daemon{Name: launcher.DaemonLocal, Endpoint: d.Endpoint(), Path: d.Path(), Runner: d})
 }
 
 func emit(stdout io.Writer, v any) int {

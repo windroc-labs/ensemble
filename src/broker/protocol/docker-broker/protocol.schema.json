@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 43",
+  "title": "Docker broker protocol 44",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -462,7 +462,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "43"
+          "const": "44"
         }
       },
       "required": [
@@ -1813,7 +1813,7 @@
       "additionalProperties": false
     },
     "target_output": {
-      "$comment": "The configured Docker daemons, the default first: local, the Mac's Docker Desktop, always; remote, the target setting's host, when set. A daemon the broker reached has its id; one it could not reach has why instead.",
+      "$comment": "The configured Docker daemons, the default first: remote, one per address of the target setting, in its order, an address answering an earlier one's daemon ID left out; then local, the Mac's Docker Desktop, always. A daemon the broker reached has its id; one it could not reach has why instead.",
       "type": "object",
       "properties": {
         "default": {
@@ -1825,7 +1825,7 @@
         "daemons": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 9,
           "items": {
             "type": "object",
             "properties": {

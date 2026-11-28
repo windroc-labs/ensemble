@@ -113,6 +113,7 @@ type CLI struct {
 	path, buildx, home, config string
 	Progress                   io.Writer // gets each docker build's stderr live
 	target                     Target
+	host                       string
 	targetErr                  error // an invalid target setting: every Run's error
 	sshDir                     string
 	mu                         sync.Mutex
@@ -142,17 +143,21 @@ func (c *CLI) Target() Target { return c.target }
 
 func (c *CLI) TargetErr() error { return c.targetErr }
 
-// Local is nil when c's target is already local.
-func (c *CLI) Local() *CLI {
-	if !c.target.Remote() {
-		return nil
+// Remotes are one CLI per target address, in order.
+func (c *CLI) Remotes() []*CLI {
+	remotes := make([]*CLI, 0, len(c.target.Hosts))
+	for _, host := range c.target.Hosts {
+		remotes = append(remotes, &CLI{path: c.path, buildx: c.buildx, home: c.home, config: c.config, Progress: c.Progress,
+			target: c.target, targetErr: c.targetErr, host: host, sshDir: c.sshDir})
 	}
-	return &CLI{path: c.path, buildx: c.buildx, home: c.home, config: c.config, Progress: c.Progress, sshDir: c.sshDir}
+	return remotes
 }
 
+func (c *CLI) Remote() bool { return c.host != "" }
+
 func (c *CLI) Endpoint() string {
-	if c.target.Remote() {
-		return c.target.Host
+	if c.Remote() {
+		return c.host
 	}
 	return "unix://" + filepath.Join(c.home, ".docker/run/docker.sock")
 }
@@ -161,14 +166,14 @@ func (c *CLI) Endpoint() string {
 func (c *CLI) Command(args []string) (string, []string, []string) {
 	argv := append([]string{"--config", c.config, "--host", c.Endpoint()}, args...)
 	env := []string{"PATH=" + c.Path(), "HOME=" + c.home, "DOCKER_CONFIG=" + c.config, "DOCKER_BUILDKIT=1"}
-	if sock := os.Getenv("SSH_AUTH_SOCK"); c.target.Remote() && sock != "" {
+	if sock := os.Getenv("SSH_AUTH_SOCK"); c.Remote() && sock != "" {
 		env = append(env, "SSH_AUTH_SOCK="+sock)
 	}
 	return c.path, argv, env
 }
 
 func (c *CLI) Path() string {
-	if c.target.Remote() {
+	if c.Remote() {
 		return c.sshDir + ":" + systemPath
 	}
 	return systemPath
@@ -200,7 +205,7 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 			return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker Desktop executable unavailable: " + path + startDesktop}
 		}
 	}
-	if c.target.Remote() {
+	if c.Remote() {
 		if wrapper := filepath.Join(c.sshDir, "ssh"); !executable(wrapper) {
 			return nil, &Unreachable{Endpoint: c.Endpoint(), Reason: "ssh wrapper unavailable: " + wrapper + "; reinstall the broker"}
 		}
@@ -227,17 +232,20 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	return nil, fmt.Errorf("docker: %w", errors.Join(err, ctx.Err()))
 }
 
-// probe's diagnostic comes from docker info, never a container.
+// probe's diagnostic comes from docker info, never a container; a probe its caller cut short is not kept.
 func (c *CLI) probe(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.probed {
 		return c.probeErr
 	}
-	c.probed = true
 	bounded, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	out, stderr, err := c.exec(bounded, probeArgs, nil)
+	if ctx.Err() != nil {
+		return fmt.Errorf("docker: %w", ctx.Err())
+	}
+	c.probed = true
 	if err != nil && ctx.Err() == nil && errors.Is(bounded.Err(), context.DeadlineExceeded) {
 		c.probeErr = &Unreachable{Endpoint: c.Endpoint(), Reason: "connection failed (no answer within " + probeTimeout.String() + ")"}
 		return c.probeErr
@@ -268,7 +276,7 @@ func (c *CLI) probe(ctx context.Context) error {
 }
 
 func (c *CLI) unreachable(stderr string) *Unreachable {
-	if !c.target.Remote() {
+	if !c.Remote() {
 		if strings.Contains(stderr, "Cannot connect to the Docker daemon") || strings.Contains(stderr, "docker.sock: connect:") {
 			return &Unreachable{Endpoint: c.Endpoint(), Reason: "Docker daemon not running" + startDesktop}
 		}

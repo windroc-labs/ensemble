@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "43"
+const Version = "44"
 
 const AuditWriteFailed = "audit_write_failed"
 

@@ -1813,6 +1813,13 @@ class ResumeDaemonTest(StartBase):
         self.targets("remote", self.pc._replace(id=None, unreachable=why), self.local)
         self.refused(BrokerError, f"^broker: Cannot reach Docker target {REMOTE}: {why}\\.$")
 
+    def test_a_refused_resume_names_the_first_reached_address_as_the_current_target(self):
+        self.recorded("w", self.OLD)
+        lan = self.pc._replace(endpoint="ssh://u@lan", id="LAN-ID")
+        self.docker.others["ssh://u@lan"] = FakeDocker("ssh://u@lan", self.order)
+        self.targets("remote", lan, self.pc, self.local)
+        self.refused(ConfigError, re.escape("the current target is ssh://u@lan (daemon LAN-ID)"))
+
     def test_resume_at_another_address_of_the_same_daemon_starts_there(self):
         self.closed(self.pc._replace(endpoint="ssh://u@pc.old"))
         self.assertEqual(self.broker.built_daemons, [])
@@ -1821,7 +1828,23 @@ class ResumeDaemonTest(StartBase):
         self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON])
         [(argv, _, _), *_] = reversed(self.execs)
         self.assertEqual(argv[:3], [DOCKER, "--host", REMOTE])
-        self.assertEqual(load_record("w").daemon.endpoint, "ssh://u@pc.old")
+        self.assertEqual(
+            load_record("w"),
+            DaemonRecord(self.pc, DOCKER),
+            "the record follows the address the resume reached: Mac-side state reads dial it",
+        )
+
+    def test_resume_finds_its_daemon_through_a_later_address(self):
+        self.closed(self.pc)
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        ts = self.pc._replace(endpoint="ssh://u@ts")
+        self.docker.others["ssh://u@ts"] = self.remote
+        self.remote.ep = "ssh://u@ts"
+        self.targets("remote", lan, ts, self.local)
+        self.start(resume="1")
+        self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON])
+        [(argv, _, _), *_] = reversed(self.execs)
+        self.assertEqual(argv[:3], [DOCKER, "--host", "ssh://u@ts"])
 
     def test_a_session_with_no_record_resumes_on_the_local_daemon_and_records_it(self):
         self.assertFalse(os.path.exists(os.path.join(self.state, RECORD_FILE)))
@@ -2214,7 +2237,7 @@ class ReclaimTest(Base):
             ],
         }
         popen = FakePopen(
-            (b'{"protocol_version": "43"}\n', b"", 0), (json.dumps(down).encode(), b"", 0)
+            (b'{"protocol_version": "44"}\n', b"", 0), (json.dumps(down).encode(), b"", 0)
         )
         self.spawn_mock.side_effect = popen
         with mock.patch("sys.argv", [module.__file__, DOCKER]):
@@ -2897,6 +2920,81 @@ class DaemonChoiceTest(StartBase):
                 self.assertEqual(self.remote_work(), [])
                 os.unlink(os.path.join(self.state, RECORD_FILE))
         self.assertEqual(set(self.broker.built_daemons), {LOCAL_DAEMON})
+
+    def address(self, endpoint, daemon_id):
+        """A further remote address, answered by its own FakeDocker, reaching `daemon_id`."""
+        fake = FakeDocker(endpoint, self.order)
+        self.docker.others[endpoint] = fake
+        return self.pc._replace(endpoint=endpoint, id=daemon_id), fake
+
+    def test_a_new_worker_takes_the_first_reachable_remote_in_list_order(self):
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        other, _ = self.address("ssh://u@other", "OTHER-ID")
+        self.targets("remote", lan, self.pc, other, self.local)
+        down = "ensemble-session: docker: ssh://u@lan unreachable (down)"
+        for check in (
+            lambda: self.host.validate("w", self.launch),
+            lambda: self.host._preflight("w", self.launch, self.METADATA),
+            lambda: self.host._validate("w", self.launch, self.METADATA),
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                check()
+            self.assertEqual(err.getvalue().splitlines().count(down), 1)
+        self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON] * 3)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.start()
+        self.assertEqual(err.getvalue().splitlines().count(f"{down}; starting on {REMOTE}"), 1)
+        self.assertEqual(load_record("w"), DaemonRecord(self.pc, DOCKER))
+        self.assertEqual(self.manifest()["daemon"], REMOTE_DAEMON)
+
+    def test_all_remotes_down_falls_back_to_local_naming_each(self):
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        ts = self.pc._replace(id=None, unreachable="authentication failed")
+        self.targets("remote", lan, ts, self.local)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.start()
+        self.assertEqual(
+            [line for line in err.getvalue().splitlines() if "unreachable" in line],
+            [
+                "ensemble-session: docker: ssh://u@lan unreachable (down)",
+                (
+                    f"ensemble-session: docker: {REMOTE} unreachable (authentication failed);"
+                    f" starting on the local Docker Desktop ({self.ep})"
+                ),
+            ],
+        )
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+        self.assertEqual(self.remote_work(), [])
+
+    def test_all_remotes_and_local_down_names_the_first_remote(self):
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        ts = self.pc._replace(id=None, unreachable="authentication failed")
+        self.targets("remote", lan, ts, self.local._replace(id=None, unreachable="not running"))
+        with self.assertRaisesRegex(
+            BrokerError, "^broker: Cannot reach Docker target ssh://u@lan: down\\.$"
+        ):
+            self.start()
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertIsNone(load_record("w"))
+
+    def test_a_local_environment_ignores_the_remote_list(self):
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        self.targets("remote", lan, self.pc, self.local)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.start(environment=carried(replace(ENVIRONMENT, daemon="local", lock=None)))
+        self.assertEqual(self.broker.built_daemons, [LOCAL_DAEMON])
+        self.assertNotIn("unreachable", err.getvalue())
+        self.assertEqual(load_record("w"), DaemonRecord(self.local, DOCKER))
+
+    def test_a_locked_start_never_moves_down_the_remote_list(self):
+        lan = self.pc._replace(endpoint="ssh://u@lan", id=None, unreachable="down")
+        self.targets("remote", lan, self.pc, self.local)
+        with self.assertRaisesRegex(
+            BrokerError, "^broker: Cannot reach Docker target ssh://u@lan: down\\.$"
+        ):
+            self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.broker.built_daemons, [])
+        self.assertIsNone(load_record("w"))
 
     def test_a_start_keeps_the_local_daemon_when_the_remote_answers_again_midway(self):
         self.targets("remote", self.pc._replace(id=None, unreachable="down"), self.local)
