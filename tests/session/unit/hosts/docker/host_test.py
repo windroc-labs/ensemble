@@ -1828,7 +1828,11 @@ class ResumeDaemonTest(StartBase):
         self.assertEqual(self.broker.built_daemons, [REMOTE_DAEMON])
         [(argv, _, _), *_] = reversed(self.execs)
         self.assertEqual(argv[:3], [DOCKER, "--host", REMOTE])
-        self.assertEqual(load_record("w").daemon.endpoint, "ssh://u@pc.old")
+        self.assertEqual(
+            load_record("w"),
+            DaemonRecord(self.pc, DOCKER),
+            "the record follows the address the resume reached: Mac-side state reads dial it",
+        )
 
     def test_resume_finds_its_daemon_through_a_later_address(self):
         self.closed(self.pc)

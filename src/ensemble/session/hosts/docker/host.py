@@ -1007,7 +1007,8 @@ class DockerHost(Host):
         home = client_home(home_dir)
         recorded = None if resume == "0" else self._recorded(name)
         daemon = self._resumed(name) if resume == "1" else self._choose(environment, starting=True)
-        if recorded is None:
+        # A resume may reach its daemon at another address; Mac-side state reads dial the recorded one.
+        if recorded is None or recorded.daemon != daemon:
             try:
                 save_record(name, DaemonRecord(daemon, self.docker))
             except OSError as error:
